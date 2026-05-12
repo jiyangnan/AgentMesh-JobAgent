@@ -1,0 +1,73 @@
+name: License Request
+description: 申请 Job Agent license key（M1 阶段免费）
+title: "[license] "
+labels: ["license-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你想试用 Job Agent。下面 4 个字段都填上能让我们更快回复你（通常几小时内）。
+        如果对隐私敏感的字段不想公开，可以发邮件到 **hello@agentmesh360.com** 私下沟通。
+
+  - type: input
+    id: contact
+    attributes:
+      label: 怎么联系你拿到 key
+      description: 邮箱（推荐）或 GitHub @用户名。Key 发出时只会用这个渠道。
+      placeholder: "you@example.com 或 @your-github-handle"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: usage
+    attributes:
+      label: 你想干啥
+      options:
+        - 真实求职（自己用）
+        - 评估产品（看看好不好）
+        - 给我的 AI agent 接 Boss 自动化能力
+        - 别的（在下面 Notes 里说一下）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: 你的 host agent 是哪个
+      options:
+        - Claude Code
+        - OpenClaw
+        - Cursor
+        - Codex
+        - 自己写的 / 别的（在下面 Notes 里说）
+        - 暂时不用 agent，自己跑命令
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: source
+    attributes:
+      label: 怎么找到我们的
+      description: 公众号 / GitHub / 朋友推荐 / 微博 / 即刻 / 小红书 / 别的
+      placeholder: "例如：在 V2EX 看到帖子；朋友 @xxx 推荐；agent 自己搜到 ..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes（可选）
+      description: 任何额外想说的——使用场景、担心的点、希望的功能
+    validations:
+      required: false

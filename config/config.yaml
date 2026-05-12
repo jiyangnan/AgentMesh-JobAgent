@@ -1,0 +1,65 @@
+# Job Agent Configuration Template
+# Copy this to config/config.yaml and customize
+
+platform: zhipin
+
+crawler:
+  queries:
+    - "AI产品经理"
+  cities:
+    - name: 深圳
+      code: "101280600"
+  pages_per_query: 1
+
+filter:
+  exclude_keywords:
+    - 销售
+    - 客服
+    - 保险
+    - 中介
+    - 催收
+    - 地推
+    - 课程顾问
+    - 融资
+    - 理财
+  max_salary_k: 0
+  max_experience: null
+  require_degree_above: "大专"
+
+greeter:
+  enabled: true
+  dry_run: false
+  template: |
+    您好，看了您的招聘简章，我认为比较符合。
+    目前我在做 vibe Coding 和 agent 相关的工作，希望进一步沟通。
+  verify: true
+
+scheduler:
+  crawl_interval_hours: 24
+  notify_on_complete: true
+
+candidate:
+  years_experience: 5
+  target_roles:
+    - "AI产品经理"
+    - "产品经理"
+    - "Agent产品"
+  skills:
+    - "AI"
+    - "Agent"
+    - "LLM"
+    - "产品"
+    - "vibe coding"
+  preferred_cities:
+    - "深圳"
+    - "广州"
+    - "杭州"
+  salary_expectation:
+    min_k: 30
+    max_k: 60
+  industry_preferences:
+    - "AI"
+    - "人工智能"
+    - "互联网"
+    - "科技"
+  exclusions: []
