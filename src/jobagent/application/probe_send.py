@@ -8,7 +8,7 @@ from jobagent.infra.state import last_probe_path, save_json
 def run_probe_send(job_url: str, message: str) -> SendAttempt:
     """Send a single greeting probe, aligned with boss-radar's verified flow.
 
-    Handles risk-control redirects and auto-sent greetings.
+    Handles risk-control redirects and verifies any auto-sent claim.
     """
     driver = create_driver()
     attempt = SendAttempt(job_url=job_url, message=message, delivered=False)
@@ -35,7 +35,11 @@ def run_probe_send(job_url: str, message: str) -> SendAttempt:
         save_json(last_probe_path(), attempt.to_dict())
         return attempt
     if chat_click.get("autoSent"):
-        attempt.delivered = True
+        verify_result = driver.verify_delivery(message)
+        steps.append({"step": "verify_auto_sent", **verify_result})
+        attempt.delivered = bool(verify_result.get("delivered"))
+        if not attempt.delivered:
+            attempt.error = "auto_sent_not_verified"
         attempt.steps = steps
         save_json(last_probe_path(), attempt.to_dict())
         return attempt
@@ -49,7 +53,11 @@ def run_probe_send(job_url: str, message: str) -> SendAttempt:
         save_json(last_probe_path(), attempt.to_dict())
         return attempt
     if editor_result.get("autoSent"):
-        attempt.delivered = True
+        verify_result = driver.verify_delivery(message)
+        steps.append({"step": "verify_auto_sent", **verify_result})
+        attempt.delivered = bool(verify_result.get("delivered"))
+        if not attempt.delivered:
+            attempt.error = "auto_sent_not_verified"
         attempt.steps = steps
         save_json(last_probe_path(), attempt.to_dict())
         return attempt

@@ -51,7 +51,7 @@ class GreeterEngine:
         Aligns with boss-radar's verified 6-step DOM automation:
         1. Navigate to job_detail page (with risk-control check)
         2. Click 立即沟通 + handle 继续沟通 popup
-        3. Wait for sidebar chat panel (with autoSent detection)
+        3. Wait for sidebar chat panel
         4. Fill message via execCommand('insertText')
         5. Click send button (native .click())
         6. Verify delivery (optional)
@@ -80,9 +80,12 @@ class GreeterEngine:
             attempt.error = "risk_control" if err == "risk_control" else "chat_entry_failed"
             attempt.steps = steps
             return attempt
-        # If the greeting was auto-sent (no chat input needed), mark success
         if chat_click.get("autoSent"):
-            attempt.delivered = True
+            verify_result = self.driver.verify_delivery(message)
+            steps.append({"step": "verify_auto_sent", **verify_result})
+            attempt.delivered = bool(verify_result.get("delivered"))
+            if not attempt.delivered:
+                attempt.error = "auto_sent_not_verified"
             attempt.steps = steps
             return attempt
 
@@ -93,9 +96,12 @@ class GreeterEngine:
             attempt.error = "risk_control"
             attempt.steps = steps
             return attempt
-        # If no editor found after waiting, the greeting may have been auto-sent
         if editor_result.get("autoSent"):
-            attempt.delivered = True
+            verify_result = self.driver.verify_delivery(message)
+            steps.append({"step": "verify_auto_sent", **verify_result})
+            attempt.delivered = bool(verify_result.get("delivered"))
+            if not attempt.delivered:
+                attempt.error = "auto_sent_not_verified"
             attempt.steps = steps
             return attempt
         if not editor_result.get("editorFound"):

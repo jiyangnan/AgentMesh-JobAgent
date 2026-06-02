@@ -34,6 +34,41 @@ class CDPBossDriver(BossActionDriver):
         ws_url = self.manager.ensure_running()
         self.cdp.connect(ws_url)
 
+    def _exec_js(self, js_code: str, timeout: int = 30) -> dict[str, Any]:
+        """AppleScript-driver compatible JavaScript evaluator.
+
+        BossDataDriver historically called the AppleScript driver's private
+        _exec_js helper. Keep that path working for the CDP driver too.
+        """
+        self._ensure_connected()
+        try:
+            result = self.cdp.evaluate(js_code, timeout=timeout)
+            value = result.get("result", {}).get("value")
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"ok": True, "raw": value}
+            except Exception:
+                return {"ok": True, "raw": value}
+        return {"ok": True, "raw": "" if value is None else str(value)}
+
+    def _unwrap(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Unwrap _exec_js output into a JSON dict."""
+        if "raw" not in result:
+            return result
+        try:
+            parsed = json.loads(result["raw"])
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
     # ── BossActionDriver interface ──────────────────────────
 
     def chrome_running(self) -> bool:
@@ -109,7 +144,7 @@ class CDPBossDriver(BossActionDriver):
 
         After clicking 立即沟通, a popup "已向BOSS发送消息" may appear.
         We must click "继续沟通" in that popup to open the chat sidebar.
-        If no popup appears, the greeting may have been auto-sent.
+        If no popup appears, treat the state as ambiguous rather than sent.
 
         Matches boss-radar's verified 6-step flow (2026-05-07).
         """
@@ -186,9 +221,10 @@ class CDPBossDriver(BossActionDriver):
                 if popup_data.get("step") == "risk_control":
                     return popup_data
 
-            # No popup found after 5s — likely auto-sent
-            click_data["autoSent"] = True
-            click_data["step"] = "auto_sent_no_popup"
+            # No popup found after 5s. Opening a chat page is not evidence that
+            # Boss sent the greeting, so leave delivery to the explicit flow.
+            click_data["autoSent"] = False
+            click_data["step"] = "no_popup_after_click"
             return click_data
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -196,8 +232,8 @@ class CDPBossDriver(BossActionDriver):
     def inspect_chat_editor(self) -> dict[str, Any]:
         """Inspect the chat editor and send button.
 
-        Waits for the sidebar chat panel to load. If no editor is found,
-        returns autoSent=True (the greeting may have been sent automatically).
+        Waits for the sidebar chat panel to load. If no editor is found, return
+        an ambiguous non-delivered state; opening chat alone is not delivery.
         """
         self._ensure_connected()
         # Poll for editor appearance (up to 15 attempts, ~0.8s each = ~12s)
@@ -252,9 +288,10 @@ class CDPBossDriver(BossActionDriver):
             except Exception:
                 pass
             time.sleep(0.8)
-        # Editor not found after waiting — greeting may have been auto-sent
-        return {"ok": True, "autoSent": True, "editorFound": False,
-                "step": "auto_sent_no_editor"}
+        # Editor not found after waiting. This can mean the page opened without a
+        # writable chat editor, but it does not prove the greeting was sent.
+        return {"ok": True, "autoSent": False, "editorFound": False,
+                "step": "editor_not_found"}
 
     def fill_chat_message(self, message: str) -> dict[str, Any]:
         """Fill the chat input with the given message.
