@@ -25,7 +25,7 @@ Help the user run AgentMesh Job Agent, a local CLI workflow for Boss直聘 job s
 
 - Never send greetings until the user has reviewed the generated previews and explicitly approved sending.
 - Never invent a license key. If the user lacks one, stop and point them to the application form, GitHub issue, or email below.
-- Do not run `jobs collect` in parallel, set page delay to zero, or wrap it with faster retry loops.
+- Do not run `jobagent boss collect` in parallel, set page delay to zero, or wrap it with faster retry loops.
 - Treat Boss login, resume originals, browser cookies, and sending actions as local user-controlled steps.
 - If Boss shows a verification challenge or the CLI reports an upstream verify redirect, pause and ask the user how they want to proceed.
 
@@ -79,13 +79,13 @@ jobagent login
 3. Collect jobs:
 
 ```bash
-jobagent jobs collect --city <city> --query "<role keyword>" --pages 3 --output raw.json
+jobagent boss collect --city <city> --query "<role keyword>" --pages 3 --output raw.json
 ```
 
 4. Rank jobs:
 
 ```bash
-jobagent jobs rank --input raw.json --top 20 --output ranked.json
+jobagent boss rank --input raw.json --top 20 --output ranked.json
 ```
 
 Show the scores, match levels, reasons, and risk flags to the user.
@@ -93,7 +93,7 @@ Show the scores, match levels, reasons, and risk flags to the user.
 5. Generate greeting previews:
 
 ```bash
-jobagent greet preview --input ranked.json --limit 10 --output ready.json
+jobagent boss greet preview --input ranked.json --limit 10 --output ready.json
 ```
 
 Show every greeting preview and ask which ones to send.
@@ -101,13 +101,13 @@ Show every greeting preview and ask which ones to send.
 6. Send only after explicit approval:
 
 ```bash
-jobagent greet send --input ready.json --limit 10
+jobagent boss greet send --input ready.json --limit 10
 ```
 
 7. Audit:
 
 ```bash
-jobagent greet audit
+jobagent boss greet audit
 ```
 
 ## Common Handling

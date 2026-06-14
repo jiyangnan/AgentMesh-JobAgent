@@ -105,9 +105,9 @@ CLI 本体永远免费 —— 抓岗位、管简历文件、自动化登录这�
 | **云端算法持续迭代**（无需更新客户端） | ❌ | ✅ |
 | **未来产品免费试用**（AgentMesh 矩阵） | ❌ | ✅ |
 
-> 受 license 保护的命令：`jobagent resume analyze` · `jobs rank` · `greet preview` · `greet send` · `pipeline run`。运行前会自动检查 license，没有就会停下来给你引导申请。
+> 受 license 保护的命令：`jobagent resume analyze` · `jobagent boss rank` · `jobagent boss greet preview` · `jobagent boss greet send` · `jobagent pipeline run`。运行前会自动检查 license，没有就会停下来给你引导申请。
 >
-> Free 版可直接用：`resume extract`、`profile save/show/edit`、`jobs collect`、`login`、`doctor`、`init`、`greet audit`。
+> Free 版可直接用：`jobagent resume extract`、`jobagent profile save/show/edit`、`jobagent boss collect`、`jobagent login`、`jobagent doctor`、`jobagent init`、`jobagent boss greet audit`。
 
 ---
 
@@ -117,12 +117,14 @@ CLI 本体永远免费 —— 抓岗位、管简历文件、自动化登录这�
 
 This product is **built to be driven by an AI agent** (per [strategy §1](docs/product-strategy-20260509.md): users chat in IM, agents drive the CLI locally). But just handing your agent the GitHub link is risky — several steps need explicit handling:
 
+Boss commands intentionally use the platform namespace: `jobagent boss collect`, `jobagent boss rank`, and `jobagent boss greet ...`. The old top-level `jobagent jobs ...` and `jobagent greet ...` commands are removed and are not compatibility aliases.
+
 | Concern | Why agent will trip |
 |---|---|
 | Cross-platform install one-liner | Windows users may be on Git Bash, can't run PowerShell `irm` |
 | `jobagent login` | Requires user to scan QR code in Chrome — agent must wait, not skip |
-| `jobagent jobs collect` throttling | CLI sleeps ~5s between pages to be courteous to the upstream API. Agent must NOT bypass with `--page-delay 0` or parallel calls. |
-| `jobagent greet send` | Sends real messages on Boss直聘 — agent must ask for explicit confirmation before running |
+| `jobagent boss collect` throttling | CLI sleeps ~5s between pages to be courteous to the upstream API. Agent must NOT bypass with `--page-delay 0` or parallel calls. |
+| `jobagent boss greet send` | Sends real messages on Boss直聘 — agent must ask for explicit confirmation before running |
 | Quota / verification errors | Should stop and surface to user, not auto-retry with shorter delays |
 
 ### 🔑 The Boss-login step is the #1 thing agents fumble — here's what your agent MUST say
@@ -183,16 +185,16 @@ jobagent init --key jba_live_xxxxxx
 jobagent resume analyze --file resume.pdf --target-role "AI产品经理" --target-cities 深圳 杭州
 
 # 3. Crawl jobs locally (uses your real Chrome + Boss cookie — never leaves your machine)
-jobagent jobs collect --city 深圳 --query "AI产品经理" --output raw.json
+jobagent boss collect --city 深圳 --query "AI产品经理" --output raw.json
 
 # 4. Rank via cloud (sends profile + jobs to Cloud /v1/jobs/rank)
-jobagent jobs rank --input raw.json --top 20 --output ranked.json
+jobagent boss rank --input raw.json --top 20 --output ranked.json
 
 # 5. Preview personalized greetings (one Cloud /v1/greet/generate call per job)
-jobagent greet preview --input ranked.json --limit 10 --output ready.json
+jobagent boss greet preview --input ranked.json --limit 10 --output ready.json
 
 # 6. Send (browser action stays local; the cloud_greeting from previous step is used)
-jobagent greet send --input ready.json --limit 10
+jobagent boss greet send --input ready.json --limit 10
 ```
 
 The Cloud API endpoint is `https://api.jobagent.agentmesh360.com` (override with
@@ -216,16 +218,16 @@ jobagent profile show
 jobagent profile edit
 
 # Crawl jobs from Boss直聘 — landing in raw.json for inspection
-jobagent jobs collect --city 深圳 --query "AI产品经理" --output raw.json
+jobagent boss collect --city 深圳 --query "AI产品经理" --output raw.json
 
 # Sanity-check the local environment
 jobagent doctor env
 
 # Read past send history (still works after license expiry)
-jobagent greet audit
+jobagent boss greet audit
 ```
 
-**`jobs rank`, `greet preview`, `greet send`, `resume analyze`, `pipeline run` all require a license** — they call the Cloud API and will exit with a friendly prompt if no license is configured. [Apply for one here](https://jobagent.agentmesh360.com/#apply); M1 stage is free.
+**`jobagent boss rank`, `jobagent boss greet preview`, `jobagent boss greet send`, `jobagent resume analyze`, `jobagent pipeline run` all require a license** — they call the Cloud API and will exit with a friendly prompt if no license is configured. [Apply for one here](https://jobagent.agentmesh360.com/#apply); M1 stage is free.
 
 ---
 
@@ -242,13 +244,13 @@ jobagent profile save --data '{...}'            # Save candidate profile JSON
 jobagent profile show                           # Display current profile
 
 # ── Job Discovery (Step 2) ──
-jobagent jobs collect --city 深圳 --query "AI产品经理" [--output jobs.json]
-jobagent jobs rank --input jobs.json --config config.yaml [--top 20] [--ai]
+jobagent boss collect --city 深圳 --query "AI产品经理" [--output jobs.json]
+jobagent boss rank --input jobs.json --config config.yaml [--top 20]
 
 # ── Greeting (Step 3) ──
-jobagent greet preview --input ranked.json [--limit 10]
-jobagent greet send --input ranked.json [--limit 10]
-jobagent greet audit [--recent 20]
+jobagent boss greet preview --input ranked.json [--limit 10]
+jobagent boss greet send --input ranked.json [--limit 10]
+jobagent boss greet audit [--recent 20]
 
 # ── Diagnostics ──
 jobagent doctor boss                            # Check Chrome / login / chat readiness

@@ -21,7 +21,7 @@ Closes the loop: **Resume → Cloud-analyzed candidate profile → Boss job craw
    - **GitHub Issue**: `https://github.com/jiyangnan/AgentMesh-JobAgent/issues/new?template=license-request.yml` — public, replies on the issue thread
    - **Email**: `hello@agentmesh360.com` — private
 
-   **As of 2026-05-11 the license is hard-enforced** — `jobs rank` / `greet preview` / `greet send` / `pipeline run` / `resume analyze` exit with code 2 if no license. There is no "local fallback" to silently degrade to. Make sure the user has run `jobagent init --key …` before reaching any of these commands.
+   **As of 2026-05-11 the license is hard-enforced** — `jobagent boss rank` / `jobagent boss greet preview` / `jobagent boss greet send` / `jobagent pipeline run` / `jobagent resume analyze` exit with code 2 if no license. There is no "local fallback" to silently degrade to. Make sure the user has run `jobagent init --key …` before reaching any of these commands.
 2. **Google Chrome** installed (Boss automation requires real Chrome).
 3. **Resume file** (PDF / DOCX / TXT / MD).
 4. **Never invent or fabricate a license key.** If `init` fails with `invalid_license`, surface that error verbatim to the user.
@@ -83,7 +83,7 @@ The command will block (up to 5 min) polling the login status. **Do not backgrou
 ### 4. Crawl jobs (local Chrome → Boss API)
 
 ```bash
-jobagent jobs collect \
+jobagent boss collect \
     --city <city> --query "<role keyword>" \
     --pages 3 \
     --output raw.json
@@ -94,14 +94,14 @@ jobagent jobs collect \
 **⚠️ Throttling constraint** — the CLI auto-sleeps **5–7 seconds between pages** (5.0 base + 2.0 jitter) to be courteous to the upstream API. This is mandatory:
 
 - ❌ Do NOT pass `--page-delay 0` to "speed up" (unless `--pages 1`).
-- ❌ Do NOT run `jobs collect` in parallel processes.
+- ❌ Do NOT run `jobagent boss collect` in parallel processes.
 - ❌ Do NOT bypass with your own retry/sleep wrapper.
 - The CLI prints `⏳ sleeping X.Xs before next page` to stderr — this is **not** the process hanging. Relay the message to the user so they know it's intentional.
 
 ### 5. Cloud rank
 
 ```bash
-jobagent jobs rank --input raw.json --top 20 --output ranked.json
+jobagent boss rank --input raw.json --top 20 --output ranked.json
 ```
 
 Returns each job with `score` (0-100), `match_level` (strong_match/match/partial_match/weak_match/no_match), `reasons`, `risk_flags`. Sorted descending.
@@ -109,7 +109,7 @@ Returns each job with `score` (0-100), `match_level` (strong_match/match/partial
 ### 6. Cloud-generated personalized greetings
 
 ```bash
-jobagent greet preview --input ranked.json --limit 10 --output ready.json
+jobagent boss greet preview --input ranked.json --limit 10 --output ready.json
 ```
 
 Each greeting is ≤150 chars, cites quantified achievements, no "您好我对贵公司XX岗位很感兴趣" boilerplate.
@@ -119,7 +119,7 @@ Each greeting is ≤150 chars, cites quantified achievements, no "您好我对�
 ### 7. Send (with rate limiting)
 
 ```bash
-jobagent greet send --input ready.json --limit 10
+jobagent boss greet send --input ready.json --limit 10
 ```
 
 This drives the user's local Chrome to send actual greetings on Boss直聘. The CLI auto-uses the cloud greetings stored in `ready.json` (will fall back to local template if the field is missing).
@@ -127,7 +127,7 @@ This drives the user's local Chrome to send actual greetings on Boss直聘. The 
 ### 8. Audit results
 
 ```bash
-jobagent greet audit
+jobagent boss greet audit
 ```
 
 ## Common errors & how to handle them

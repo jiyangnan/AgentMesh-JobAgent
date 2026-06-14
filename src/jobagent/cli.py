@@ -135,56 +135,51 @@ def build_parser() -> argparse.ArgumentParser:
     verify = boss_sub.add_parser("verify-last-send", help="Verify the last sent message using stored state or explicit message")
     verify.add_argument("--message", help="Explicit message to verify; defaults to last probe-send message")
 
-    # ── jobs ──
-    jobs = sub.add_parser("jobs", help="Job search and filter commands")
-    jobs_sub = jobs.add_subparsers(dest="jobs_command", required=True)
-
-    collect = jobs_sub.add_parser("collect", help="Fetch jobs from Boss直聘")
-    collect.add_argument("--city", required=True, help="City name (e.g. 深圳)")
-    collect.add_argument("--query", required=True, help="Search query (e.g. AI产品经理)")
-    collect.add_argument("--page", type=int, default=1, help="Starting page (default: 1)")
-    collect.add_argument("--pages", type=int, default=1, help="How many pages to fetch starting from --page (default: 1; tip: use 3-5 to get 45-75 jobs)")
-    collect.add_argument("--page-size", type=int, default=15, help="Results per page (default: 15)")
-    collect.add_argument(
+    boss_collect = boss_sub.add_parser("collect", help="Collect Boss直聘 jobs")
+    boss_collect.add_argument("--city", required=True, help="City name (e.g. 深圳)")
+    boss_collect.add_argument("--query", required=True, help="Search query (e.g. AI产品经理)")
+    boss_collect.add_argument("--page", type=int, default=1, help="Starting page (default: 1)")
+    boss_collect.add_argument("--pages", type=int, default=1, help="How many pages to fetch starting from --page (default: 1; tip: use 3-5 to get 45-75 jobs)")
+    boss_collect.add_argument("--page-size", type=int, default=15, help="Results per page (default: 15)")
+    boss_collect.add_argument(
         "--page-delay", type=float, default=5.0,
         help="Seconds to sleep between pages (default: 5.0). Recommended ≥ 4 to be courteous to the upstream API. 0 disables (only safe for --pages 1).",
     )
-    collect.add_argument(
+    boss_collect.add_argument(
         "--page-delay-jitter", type=float, default=2.0,
         help="Random extra delay added per page (default: 2.0). Actual sleep = page-delay + uniform(0, jitter).",
     )
-    collect.add_argument("--output", "-o", help="Output JSON file path (default: stdout)")
+    boss_collect.add_argument("--output", "-o", help="Output JSON file path (default: stdout)")
 
-    rank = jobs_sub.add_parser(
+    boss_rank = boss_sub.add_parser(
         "rank",
-        help="Cloud-AI ranking of crawled jobs (license required). Outputs match score + reasoning per job.",
+        help="Cloud-AI ranking of crawled Boss jobs (license required). Outputs match score + reasoning per job.",
     )
-    rank.add_argument("--input", "-i", required=True, help="Input JSON file with job list (from `jobs collect`)")
-    rank.add_argument("--top", "-n", type=int, default=20, help="Keep only top N results (default: 20)")
-    rank.add_argument("--output", "-o", help="Output JSON file path (default: stdout)")
+    boss_rank.add_argument("--input", "-i", required=True, help="Input JSON file with job list (from `jobagent boss collect`)")
+    boss_rank.add_argument("--top", "-n", type=int, default=20, help="Keep only top N results (default: 20)")
+    boss_rank.add_argument("--output", "-o", help="Output JSON file path (default: stdout)")
 
-    # ── greet ──
-    greet = sub.add_parser("greet", help="Greeting commands")
-    greet_sub = greet.add_subparsers(dest="greet_command", required=True)
+    boss_greet = boss_sub.add_parser("greet", help="Boss greeting commands")
+    boss_greet_sub = boss_greet.add_subparsers(dest="boss_greet_command", required=True)
 
-    preview = greet_sub.add_parser(
+    boss_preview = boss_greet_sub.add_parser(
         "preview",
-        help="Cloud-AI personalised greetings per job (license required). Run before `greet send`.",
+        help="Cloud-AI personalised Boss greetings per job (license required). Run before `jobagent boss greet send`.",
     )
-    preview.add_argument("--input", "-i", required=True, help="Ranked JSON from `jobs rank`")
-    preview.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to preview")
-    preview.add_argument(
+    boss_preview.add_argument("--input", "-i", required=True, help="Ranked JSON from `jobagent boss rank`")
+    boss_preview.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to preview")
+    boss_preview.add_argument(
         "--output", "-o",
-        help="Save ranked jobs with cloud greetings injected; defaults to <input>.with_greetings.json. `greet send --input <output>` will then use those.",
+        help="Save ranked jobs with cloud greetings injected; defaults to <input>.with_greetings.json. `jobagent boss greet send --input <output>` will then use those.",
     )
 
-    send = greet_sub.add_parser("send", help="Send batch greetings to ranked jobs")
-    send.add_argument("--input", "-i", required=True, help="Input JSON file with ranked jobs")
-    send.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to greet")
-    send.add_argument("--config", "-c", default="config/config.yaml", help="Config YAML for greeter settings")
+    boss_send = boss_greet_sub.add_parser("send", help="Send Boss greetings after user approval")
+    boss_send.add_argument("--input", "-i", required=True, help="Input JSON file with ranked jobs")
+    boss_send.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to greet")
+    boss_send.add_argument("--config", "-c", default="config/config.yaml", help="Config YAML for greeter settings")
 
-    audit = greet_sub.add_parser("audit", help="View greeting audit log and statistics")
-    audit.add_argument("--recent", "-n", type=int, default=20, help="Show N most recent records")
+    boss_audit = boss_greet_sub.add_parser("audit", help="View Boss greeting audit log and statistics")
+    boss_audit.add_argument("--recent", "-n", type=int, default=20, help="Show N most recent records")
 
     # ── login ──
     login = sub.add_parser("login", help="Boss login state management")
@@ -596,7 +591,7 @@ def _cmd_jobs_rank_cloud(args: argparse.Namespace, raw_jobs: list[dict]) -> None
     if args.top:
         all_ranked = all_ranked[: args.top]
 
-    # Map cloud fields → local Job shape so downstream `greet preview/send`
+    # Map cloud fields → local Job shape so downstream `jobagent boss greet preview/send`
     # work without re-parsing. Preserve cloud-specific fields (score,
     # recommendation, matches, risks) as decoration.
     mapped_jobs = []
@@ -635,7 +630,7 @@ def _cmd_jobs_rank_cloud(args: argparse.Namespace, raw_jobs: list[dict]) -> None
 
 def _cmd_jobs_rank(args: argparse.Namespace) -> None:
     """Rank crawled jobs via Cloud AI. License required."""
-    _require_license_or_exit("jobs rank")
+    _require_license_or_exit("boss rank")
 
     # Load input jobs
     with open(args.input, encoding="utf-8") as f:
@@ -655,7 +650,7 @@ def _cmd_greet_preview_cloud(args: argparse.Namespace) -> None:
     """Generate greeting per job via Cloud /v1/greet/generate (sequential).
 
     Saves the input ranked.json with a per-job `cloud_greeting` field injected
-    so that `greet send --input <output>` will use these greetings instead of
+    so that `jobagent boss greet send --input <output>` will use these greetings instead of
     the local template (closes GAP-15: preview/send data flow disconnect).
     """
     from jobagent.infra import cloud_client
@@ -701,7 +696,7 @@ def _cmd_greet_preview_cloud(args: argparse.Namespace) -> None:
             if hint:
                 print(f"    HINT:  {hint}", file=sys.stderr)
 
-    # Write the enriched ranked file back to disk so `greet send` can read it.
+    # Write the enriched ranked file back to disk so `jobagent boss greet send` can read it.
     output_path = Path(args.output) if args.output else Path(args.input).with_suffix(".with_greetings.json")
     payload = data if is_wrapped else {"jobs": raw_jobs}
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -709,18 +704,18 @@ def _cmd_greet_preview_cloud(args: argparse.Namespace) -> None:
     print(f"\n{'=' * 50}")
     print(f"Preview complete (cloud): {succeeded}/{len(selected)} succeeded")
     print(f"Saved with greetings → {output_path}")
-    print(f"Next: jobagent greet send --input {output_path} --limit {args.limit}")
+    print(f"Next: jobagent boss greet send --input {output_path} --limit {args.limit}")
     print(f"{'=' * 50}")
 
 
 def _cmd_greet_preview(args: argparse.Namespace) -> None:
     """Generate AI greetings via cloud. License required."""
-    _require_license_or_exit("greet preview")
+    _require_license_or_exit("boss greet preview")
     _cmd_greet_preview_cloud(args)
 
 
 def _cmd_greet_send(args: argparse.Namespace) -> None:
-    _require_license_or_exit("greet send")
+    _require_license_or_exit("boss greet send")
     from datetime import datetime
     from jobagent.domain.greeter import GreeterEngine
     from jobagent.infra.config import Config
@@ -728,7 +723,7 @@ def _cmd_greet_send(args: argparse.Namespace) -> None:
     ranked = _load_ranked_jobs(args.input)
 
     # Build cloud-greeting overrides keyed by RankedJob.job.url (GAP-15).
-    # `greet preview --cloud` injects `cloud_greeting` per item in the same
+    # `jobagent boss greet preview` injects `cloud_greeting` per item in the same
     # file; we iterate raw items in lockstep (same order, same length) instead
     # of url-keyed lookup, which fails if a job lacks a stable url.
     with open(args.input, encoding="utf-8") as _f:
@@ -741,7 +736,7 @@ def _cmd_greet_send(args: argparse.Namespace) -> None:
             if msg and rj.job.url:
                 message_overrides[rj.job.url] = msg
     if message_overrides:
-        print(f"Using {len(message_overrides)} cloud-generated greetings (run via `greet preview --cloud`)")
+        print(f"Using {len(message_overrides)} cloud-generated greetings (run via `jobagent boss greet preview`)")
     elif any(it.get("cloud_greeting") for it in _items):
         # cloud_greeting present but couldn't be mapped (e.g., jobs without url)
         print(
@@ -981,7 +976,7 @@ def _cmd_pipeline_run(args: argparse.Namespace) -> None:
     print(
         "ℹ️  `pipeline run` is the legacy local flow. Prefer the agent-driven\n"
         "   flow described in docs/agent-onboarding.md (init → resume analyze\n"
-        "   → jobs collect → jobs rank → greet preview → greet send).\n",
+        "   → boss collect → boss rank → boss greet preview → boss greet send).\n",
         file=sys.stderr,
     )
     from jobagent.application.pipeline import Pipeline
@@ -1053,25 +1048,25 @@ def main() -> None:
         _print_json(attempt.to_dict())
         sys.exit(0 if attempt.delivered else 2)
 
-    if args.command == "jobs" and args.jobs_command == "collect":
+    if args.command == "boss" and args.boss_command == "collect":
         _cmd_jobs_collect(args)
         return
 
-    if args.command == "jobs" and args.jobs_command == "rank":
+    if args.command == "boss" and args.boss_command == "rank":
         _cmd_jobs_rank(args)
         return
 
-    if args.command == "greet" and args.greet_command == "preview":
+    if args.command == "boss" and args.boss_command == "greet" and args.boss_greet_command == "preview":
         _cmd_greet_preview(args)
         return
 
-    if args.command == "greet" and args.greet_command == "send":
-        _require_license_or_exit("greet send")  # gate before Boss login (need license first)
+    if args.command == "boss" and args.boss_command == "greet" and args.boss_greet_command == "send":
+        _require_license_or_exit("boss greet send")  # gate before Boss login (need license first)
         _ensure_boss_login()
         _cmd_greet_send(args)
         return
 
-    if args.command == "greet" and args.greet_command == "audit":
+    if args.command == "boss" and args.boss_command == "greet" and args.boss_greet_command == "audit":
         _cmd_greet_audit(args)
         return
 
