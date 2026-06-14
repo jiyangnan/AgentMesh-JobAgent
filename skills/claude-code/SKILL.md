@@ -130,6 +130,44 @@ This drives the user's local Chrome to send actual greetings on Boss直聘. The 
 jobagent boss greet audit
 ```
 
+## Additional platform workflows
+
+Run these after the Boss flow when the user wants broader coverage. Keep one local Chrome session in order; do not run platform workflows in parallel.
+
+### Liepin beta
+
+```bash
+jobagent liepin login --check
+jobagent liepin collect --query "<role keyword>" --city <city> --pages 1 --output liepin.raw.json
+jobagent liepin rank --input liepin.raw.json --top 20 --output liepin.ranked.json
+jobagent liepin greet preview --input liepin.ranked.json --limit 10 --output liepin.ready.json
+jobagent liepin apply open --input liepin.ready.json --limit 5
+```
+
+Use `apply open` for manual review first. Only run real apply/send after the user explicitly approves:
+
+```bash
+jobagent liepin apply send --input liepin.ready.json --limit 5 --confirm-submit
+jobagent liepin audit
+```
+
+### Zhilian beta
+
+```bash
+jobagent zhilian login --check
+jobagent zhilian collect --query "<role keyword>" --city <city> --pages 1 --detail-limit 2 --output zhilian.raw.json
+jobagent zhilian rank --input zhilian.raw.json --top 20 --output zhilian.ranked.json
+jobagent zhilian greet preview --input zhilian.ranked.json --limit 10 --output zhilian.ready.json
+jobagent zhilian apply open --input zhilian.ready.json --limit 5
+```
+
+Zhilian apply send submits the user's attachment resume. It does not send the greeting/review note into the page. Only run real submit after explicit approval:
+
+```bash
+jobagent zhilian apply send --input zhilian.ready.json --limit 5 --confirm-submit
+jobagent zhilian audit
+```
+
 ## Common errors & how to handle them
 
 | Error | What happened | Tell the user |

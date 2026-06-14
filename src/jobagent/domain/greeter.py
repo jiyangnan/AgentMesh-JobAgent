@@ -11,6 +11,8 @@ from jobagent.drivers.boss.base import BossActionDriver
 from jobagent.drivers.boss import create_driver
 from jobagent.infra.config import GreeterConfig
 from jobagent.infra.state import audit_log_path, save_json
+from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
+from jobagent.platforms import normalize_platform_key
 
 
 class GreeterEngine:
@@ -48,95 +50,17 @@ class GreeterEngine:
     def _send_one(self, job: Job, message: str) -> SendAttempt:
         """Execute the greeting flow for a single job.
 
-        Aligns with boss-radar's verified 6-step DOM automation:
-        1. Navigate to job_detail page (with risk-control check)
-        2. Click 立即沟通 + handle 继续沟通 popup
-        3. Wait for sidebar chat panel
-        4. Fill message via execCommand('insertText')
-        5. Click send button (native .click())
-        6. Verify delivery (optional)
+        The current implementation routes to the Boss platform send flow.
+        Multi-platform support should move selection above this method instead
+        of mixing selector/state-machine details here.
         """
-        attempt = SendAttempt(
-            job_url=job.url,
-            message=message,
-            delivered=False,
+        return execute_boss_greeting_flow(
+            self.driver,
+            job.url,
+            message,
+            verify=self.config.verify,
+            retry_on_unverified=True,
         )
-        steps: list[dict[str, Any]] = []
-
-        # Step 1: Open job URL
-        open_result = self.driver.open_url_in_new_tab(job.url, wait_seconds=6)
-        steps.append({"step": "open_job_url", **open_result})
-        if not open_result.get("ok"):
-            err = open_result.get("error", "")
-            attempt.error = "risk_control" if err == "risk_control" else "open_job_url_failed"
-            attempt.steps = steps
-            return attempt
-
-        # Step 2: Click chat entry (includes 继续沟通 popup handling)
-        chat_click = self.driver.click_chat_entry()
-        steps.append({"step": "click_chat_entry", **chat_click})
-        if not chat_click.get("ok"):
-            err = chat_click.get("error", "")
-            attempt.error = "risk_control" if err == "risk_control" else "chat_entry_failed"
-            attempt.steps = steps
-            return attempt
-        if chat_click.get("autoSent"):
-            verify_result = self.driver.verify_delivery(message)
-            steps.append({"step": "verify_auto_sent", **verify_result})
-            attempt.delivered = bool(verify_result.get("delivered"))
-            if not attempt.delivered:
-                attempt.error = "auto_sent_not_verified"
-            attempt.steps = steps
-            return attempt
-
-        # Step 3: Wait for sidebar chat panel
-        editor_result = self.driver.inspect_chat_editor()
-        steps.append({"step": "inspect_chat_editor", **editor_result})
-        if editor_result.get("error") == "risk_control":
-            attempt.error = "risk_control"
-            attempt.steps = steps
-            return attempt
-        if editor_result.get("autoSent"):
-            verify_result = self.driver.verify_delivery(message)
-            steps.append({"step": "verify_auto_sent", **verify_result})
-            attempt.delivered = bool(verify_result.get("delivered"))
-            if not attempt.delivered:
-                attempt.error = "auto_sent_not_verified"
-            attempt.steps = steps
-            return attempt
-        if not editor_result.get("editorFound"):
-            attempt.error = "chat_editor_not_found"
-            attempt.steps = steps
-            return attempt
-
-        # Step 4: Fill message
-        fill_result = self.driver.fill_chat_message(message)
-        steps.append({"step": "fill_chat_message", **fill_result})
-        if not fill_result.get("ok"):
-            attempt.error = "fill_message_failed"
-            attempt.steps = steps
-            return attempt
-
-        # Step 5: Click send (native .click() per boss-radar findings)
-        send_result = self.driver.click_send()
-        steps.append({"step": "click_send", **send_result})
-        if not send_result.get("ok"):
-            attempt.error = "click_send_failed"
-            attempt.steps = steps
-            return attempt
-
-        # Step 6: Verify delivery (if enabled)
-        if self.config.verify:
-            verify_result = self.driver.verify_delivery(message)
-            steps.append({"step": "verify_delivery", **verify_result})
-            attempt.delivered = bool(verify_result.get("delivered"))
-            if not attempt.delivered:
-                attempt.error = "delivery_not_verified"
-        else:
-            attempt.delivered = True  # Trust send without verification
-
-        attempt.steps = steps
-        return attempt
 
     # ── Batch send ────────────────────────────────────────────
 
@@ -171,7 +95,7 @@ class GreeterEngine:
             job = rj.job
             override = overrides.get(job.url)
             message = override or self.config.get_template(job)
-            source = "cloud" if override else "template"
+            source = "preview" if override else "template"
             print(f"[{i}/{total}] {job.name} @ {job.company}  (msg source: {source})")
             print(f"        URL: {job.url}")
             print(f"        Msg: {message[:60]}{'...' if len(message) > 60 else ''}")
@@ -227,5 +151,6 @@ class GreeterEngine:
         record["job_name"] = job.name
         record["company"] = job.company
         record["boss"] = job.boss
+        record["platform"] = normalize_platform_key(job.platform)
         records.append(record)
         save_json(path, records)

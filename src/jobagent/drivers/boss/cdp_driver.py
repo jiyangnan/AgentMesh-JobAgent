@@ -38,7 +38,9 @@ class CDPBossDriver(BossActionDriver):
         """AppleScript-driver compatible JavaScript evaluator.
 
         BossDataDriver historically called the AppleScript driver's private
-        _exec_js helper. Keep that path working for the CDP driver too.
+        _exec_js helper. CDP is now the preferred driver, so keep that call path
+        working while returning the same shapes: parsed JSON dicts when possible,
+        otherwise {"ok": True, "raw": "..."}.
         """
         self._ensure_connected()
         try:
@@ -155,11 +157,11 @@ class CDPBossDriver(BossActionDriver):
           var all = document.querySelectorAll('*');
           for (var i = all.length - 1; i >= 0; i--) {
             var text = (all[i].innerText || all[i].textContent || '').trim();
-            if (text === '立即沟通') {
+            if (['立即沟通', '继续沟通', '继续聊', '开聊', '沟通'].indexOf(text) >= 0) {
               all[i].dispatchEvent(new MouseEvent('click', {
                 bubbles: true, cancelable: true, view: window
               }));
-              return JSON.stringify({ok: true, step: 'clicked_立即沟通'});
+              return JSON.stringify({ok: true, step: 'clicked_' + text});
             }
           }
           // Fallback: href matching
@@ -197,7 +199,7 @@ class CDPBossDriver(BossActionDriver):
                     }
                   }
                   // Chat sidebar already open?
-                  var editor = document.querySelector('.chat-input, [contenteditable="true"]');
+                  var editor = document.querySelector('.chat-input');
                   if (editor) {
                     return JSON.stringify({
                       ok: true, step: 'chat_opened', autoSent: false
@@ -296,47 +298,97 @@ class CDPBossDriver(BossActionDriver):
     def fill_chat_message(self, message: str) -> dict[str, Any]:
         """Fill the chat input with the given message.
 
-        Uses document.execCommand('insertText') to trigger React/Vue onChange
-        (inspired by boss-radar's approach).
+        Uses CDP-native text input so the page receives trusted keyboard/input
+        events. Direct DOM text assignment can leave BOSS's frontend state stale:
+        the text appears in the editor, but the send action does not fire.
         """
         self._ensure_connected()
-        # Escape for JSON embedding
-        msg_json = json.dumps(message)
-        js = f"""
-        (function(){{
-          var text = {msg_json};
+        js = """
+        (function(){
           var editor = null;
           var all = document.querySelectorAll('*');
-          for (var i = 0; i < all.length; i++) {{
-            if (all[i].className && typeof all[i].className === 'string' && all[i].className.indexOf('chat-input') >= 0) {{
+          for (var i = 0; i < all.length; i++) {
+            if (all[i].className && typeof all[i].className === 'string' && all[i].className.indexOf('chat-input') >= 0) {
               editor = all[i];
               break;
-            }}
-          }}
-          if (!editor) {{
+            }
+          }
+          if (!editor) {
             var editables = document.querySelectorAll('[contenteditable="true"]');
             if (editables.length > 0) editor = editables[0];
-          }}
-          if (!editor) return JSON.stringify({{ok: false, error: 'no_editor'}});
+          }
+          if (!editor) return JSON.stringify({ok: false, error: 'no_editor'});
 
           editor.focus();
-          editor.textContent = '';
-          document.execCommand('insertText', false, text);
-
-          // Also dispatch InputEvent for frameworks that listen to it
-          editor.dispatchEvent(new InputEvent('input', {{bubbles: true}}));
-
-          return JSON.stringify({{ok: true, step: 'filled', len: editor.textContent.length}});
-        }})()
+          var range = document.createRange();
+          range.selectNodeContents(editor);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          return JSON.stringify({ok: true, step: 'editor_selected'});
+        })()
         """
         try:
             result = self.cdp.evaluate(js)
-            return json.loads(result.get("result", {}).get("value", "{}"))
+            data = json.loads(result.get("result", {}).get("value", "{}"))
+            if not data.get("ok"):
+                return data
+
+            self.cdp.send(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": "keyDown",
+                    "key": "Backspace",
+                    "code": "Backspace",
+                    "windowsVirtualKeyCode": 8,
+                    "nativeVirtualKeyCode": 8,
+                },
+            )
+            self.cdp.send(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": "keyUp",
+                    "key": "Backspace",
+                    "code": "Backspace",
+                    "windowsVirtualKeyCode": 8,
+                    "nativeVirtualKeyCode": 8,
+                },
+            )
+            time.sleep(0.5)
+            self.cdp.send("Input.insertText", {"text": message})
+            time.sleep(0.2)
+            self.cdp.evaluate("""
+            (function(){
+              var editor = document.querySelector('.chat-input');
+              if (!editor) return;
+              editor.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: ''}));
+              editor.dispatchEvent(new Event('change', {bubbles: true}));
+            })()
+            """)
+            time.sleep(0.2)
+
+            verify_js = """
+            (function(){
+              var editor = document.querySelector('.chat-input');
+              var text = editor ? (editor.innerText || editor.textContent || '') : '';
+              return JSON.stringify({ok: true, step: 'filled', len: text.length, text: text});
+            })()
+            """
+            verify_result = self.cdp.evaluate(verify_js)
+            verify_data = json.loads(verify_result.get("result", {}).get("value", "{}"))
+            if verify_data.get("text") != message:
+                return {
+                    "ok": False,
+                    "error": "message_fill_mismatch",
+                    "len": verify_data.get("len", 0),
+                }
+            verify_data.pop("text", None)
+            return verify_data
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     def click_send(self) -> dict[str, Any]:
-        """Click the send button."""
+        """Click the send button using native CDP mouse events."""
         self._ensure_connected()
         js = """
         (function(){
@@ -348,16 +400,118 @@ class CDPBossDriver(BossActionDriver):
           }
           if (!sendBtn) sendBtn = document.querySelector('.btn-send');
           if (!sendBtn) return JSON.stringify({ok: false, error: 'no_send'});
+          if (sendBtn.disabled || (sendBtn.className || '').indexOf('disabled') >= 0) {
+            var editor = document.querySelector('.chat-input');
+            var editorText = editor ? (editor.innerText || editor.textContent || '') : '';
+            if (!editorText.trim()) {
+              return JSON.stringify({ok: false, error: 'send_button_disabled_empty_editor'});
+            }
+            sendBtn.disabled = false;
+            sendBtn.removeAttribute('disabled');
+            if (typeof sendBtn.className === 'string') {
+              sendBtn.className = sendBtn.className.replace(/\\bdisabled\\b/g, '').trim();
+            }
+          }
 
-          sendBtn.disabled = false;
-          sendBtn.removeAttribute('disabled');
-          sendBtn.click();
-          return JSON.stringify({ok: true, step: 'clicked_send'});
+          var rect = sendBtn.getBoundingClientRect();
+          return JSON.stringify({
+            ok: true,
+            step: 'send_button_found',
+            disabled: !!sendBtn.disabled,
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          });
         })()
         """
         try:
             result = self.cdp.evaluate(js)
-            return json.loads(result.get("result", {}).get("value", "{}"))
+            data = json.loads(result.get("result", {}).get("value", "{}"))
+            if not data.get("ok"):
+                return data
+            if data.get("disabled"):
+                return {"ok": False, "error": "send_disabled"}
+
+            try:
+                self.cdp.send("Page.bringToFront")
+            except Exception:
+                pass
+            focus_js = """
+            (function(){
+              var editor = document.querySelector('.chat-input');
+              if (!editor) return JSON.stringify({ok: false, error: 'no_editor'});
+              editor.focus();
+              var text = editor.innerText || editor.textContent || '';
+              return JSON.stringify({ok: true, len: text.length});
+            })()
+            """
+            focus_result = self.cdp.evaluate(focus_js)
+            focus_data = json.loads(focus_result.get("result", {}).get("value", "{}"))
+            if not focus_data.get("ok"):
+                return focus_data
+
+            self.cdp.send(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": "keyDown",
+                    "key": "Enter",
+                    "code": "Enter",
+                    "windowsVirtualKeyCode": 13,
+                    "nativeVirtualKeyCode": 13,
+                    "unmodifiedText": "\r",
+                    "text": "\r",
+                },
+            )
+            self.cdp.send(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": "keyUp",
+                    "key": "Enter",
+                    "code": "Enter",
+                    "windowsVirtualKeyCode": 13,
+                    "nativeVirtualKeyCode": 13,
+                },
+            )
+            time.sleep(1.0)
+            after_enter_js = """
+            (function(){
+              var editor = document.querySelector('.chat-input');
+              var text = editor ? (editor.innerText || editor.textContent || '') : '';
+              return JSON.stringify({ok: true, editorLen: text.length});
+            })()
+            """
+            after_enter_result = self.cdp.evaluate(after_enter_js)
+            after_enter = json.loads(after_enter_result.get("result", {}).get("value", "{}"))
+            if after_enter.get("ok") and after_enter.get("editorLen", 0) == 0:
+                return {"ok": True, "step": "pressed_enter_send"}
+
+            x = data["x"]
+            y = data["y"]
+            self.cdp.send(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": x, "y": y, "button": "none"},
+            )
+            self.cdp.send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mousePressed",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+            self.cdp.send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseReleased",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+            time.sleep(1.5)
+            return {"ok": True, "step": "enter_then_clicked_send", "x": x, "y": y}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -367,10 +521,37 @@ class CDPBossDriver(BossActionDriver):
         msg_preview = message[:20]
         js = f"""
         (function(){{
-          var txt = document.body ? document.body.innerText : '';
-          var hasDelivered = txt.includes('[送达]') || txt.includes('已送达');
-          var hasMsg = txt.includes({json.dumps(msg_preview)});
-          return JSON.stringify({{ok: true, delivered: hasDelivered && hasMsg, hasDelivered, hasMsg}});
+          var preview = {json.dumps(msg_preview)};
+          var fullMessage = {json.dumps(message)};
+          var editor = document.querySelector('.chat-input');
+          var editorText = editor ? (editor.innerText || editor.textContent || '') : '';
+          var stillInEditor = !!preview && editorText.indexOf(preview) >= 0;
+
+          var root = document.body;
+          var textWithoutEditor = '';
+          if (root) {{
+            var clone = root.cloneNode(true);
+            var editors = clone.querySelectorAll('.chat-input, [contenteditable="true"]');
+            for (var i = 0; i < editors.length; i++) {{
+              editors[i].textContent = '';
+            }}
+            textWithoutEditor = clone.innerText || clone.textContent || '';
+          }}
+
+          var index = preview ? textWithoutEditor.lastIndexOf(preview) : -1;
+          var around = index >= 0
+            ? textWithoutEditor.slice(Math.max(0, index - 160), index + fullMessage.length + 160)
+            : '';
+          var hasMsg = index >= 0;
+          var hasDeliveredNearMsg = /\\[?送达\\]?|已送达|\\[?已读\\]?/.test(around);
+          return JSON.stringify({{
+            ok: true,
+            delivered: hasMsg && hasDeliveredNearMsg,
+            stillInEditor,
+            hasMsg,
+            hasDeliveredNearMsg,
+            editorLen: editorText.length
+          }});
         }})()
         """
         try:
@@ -378,6 +559,102 @@ class CDPBossDriver(BossActionDriver):
             return json.loads(result.get("result", {}).get("value", "{}"))
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def recover_draft_delivery(self, message: str) -> dict[str, Any]:
+        """Open a matching Boss chat draft and send it with Enter.
+
+        This recovers from the state where a previous click filled the chat
+        editor but did not trigger Boss's send event.
+        """
+        self._ensure_connected()
+        try:
+            self.cdp.send("Page.navigate", {"url": "https://www.zhipin.com/web/geek/chat"})
+            time.sleep(2.0)
+            preview = message[:20]
+            find_js = f"""
+            (function(){{
+              var preview = {json.dumps(preview)};
+              var items = Array.prototype.slice.call(document.querySelectorAll('li')).filter(function(el) {{
+                var text = (el.innerText || el.textContent || '').trim();
+                return text.indexOf('[草稿]') >= 0 && text.indexOf(preview) >= 0;
+              }});
+              if (!items.length) return JSON.stringify({{ok: false, delivered: false, error: 'draft_not_found'}});
+              var el = items[0];
+              var rect = el.getBoundingClientRect();
+              return JSON.stringify({{
+                ok: true,
+                count: items.length,
+                text: (el.innerText || el.textContent || '').trim().slice(0, 220),
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
+              }});
+            }})()
+            """
+            found = json.loads(self.cdp.evaluate(find_js).get("result", {}).get("value", "{}"))
+            if not found.get("ok"):
+                return found
+
+            x = found["x"]
+            y = found["y"]
+            self.cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y, "button": "none"})
+            self.cdp.send("Input.dispatchMouseEvent", {
+                "type": "mousePressed",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1,
+            })
+            self.cdp.send("Input.dispatchMouseEvent", {
+                "type": "mouseReleased",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1,
+            })
+            time.sleep(1.0)
+
+            editor_js = f"""
+            (function(){{
+              var preview = {json.dumps(preview)};
+              var editor = document.querySelector('.chat-input');
+              var text = editor ? (editor.innerText || editor.textContent || '') : '';
+              if (editor) editor.focus();
+              return JSON.stringify({{
+                ok: true,
+                editorFound: !!editor,
+                editorLen: text.length,
+                matches: text.indexOf(preview) >= 0
+              }});
+            }})()
+            """
+            editor = json.loads(self.cdp.evaluate(editor_js).get("result", {}).get("value", "{}"))
+            if not editor.get("editorFound"):
+                return {"ok": False, "delivered": False, "error": "draft_editor_not_found", "draft": found}
+            if not editor.get("matches"):
+                return {"ok": False, "delivered": False, "error": "draft_editor_mismatch", "draft": found, "editor": editor}
+
+            self.cdp.send("Input.dispatchKeyEvent", {
+                "type": "keyDown",
+                "key": "Enter",
+                "code": "Enter",
+                "windowsVirtualKeyCode": 13,
+                "nativeVirtualKeyCode": 13,
+                "unmodifiedText": "\r",
+                "text": "\r",
+            })
+            self.cdp.send("Input.dispatchKeyEvent", {
+                "type": "keyUp",
+                "key": "Enter",
+                "code": "Enter",
+                "windowsVirtualKeyCode": 13,
+                "nativeVirtualKeyCode": 13,
+            })
+            time.sleep(1.3)
+            verify = self.verify_delivery(message)
+            verify["draft"] = found
+            return verify
+        except Exception as e:
+            return {"ok": False, "delivered": False, "error": str(e)}
 
     # ── Extra helpers ───────────────────────────────────────
 

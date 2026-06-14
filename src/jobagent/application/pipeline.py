@@ -11,9 +11,9 @@ from jobagent.domain.models import Job, GreetResult, CandidateProfile, RankedJob
 from jobagent.domain.filter import FilterEngine
 from jobagent.domain.ranking import RankingEngine
 from jobagent.domain.greeter import GreeterEngine
-from jobagent.drivers.boss.data_driver import BossDataDriver
 from jobagent.infra.config import Config
 from jobagent.infra.exceptions import LoginRequiredError
+from jobagent.platforms.boss import BossDataDriver
 
 
 class Pipeline:

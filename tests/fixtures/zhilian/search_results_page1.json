@@ -1,0 +1,20 @@
+{
+  "data": {
+    "results": [
+      {
+        "positionId": "CC123456780J00123456789",
+        "jobName": "AI产品经理",
+        "companyName": "智联样例科技",
+        "salary": "35-55K",
+        "cityDisplay": "深圳",
+        "district": "南山区",
+        "workingExp": "5-10年",
+        "eduLevel": "本科",
+        "skillLabels": ["AI产品", "数据分析", "用户增长"],
+        "recruiterName": "王女士",
+        "positionURL": "https://www.zhaopin.com/jobdetail/CC123456780J00123456789.htm",
+        "rawText": "AI产品经理 35-55K 深圳 南山区 5-10年 本科 智联样例科技"
+      }
+    ]
+  }
+}

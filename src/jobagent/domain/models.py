@@ -53,13 +53,13 @@ class Job:
     name: str
     salary: str
     company: str
-    area: str
-    experience: str
-    degree: str
-    skills: str
-    boss: str
     city: str
     url: str
+    area: str = ""
+    experience: str = ""
+    degree: str = ""
+    skills: str = ""
+    boss: str = ""
     platform: str = "zhipin"
     raw_data: dict = field(default_factory=dict)
 

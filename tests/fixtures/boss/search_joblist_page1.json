@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "zpData": {
+    "jobList": [
+      {
+        "encryptJobId": "abc123",
+        "jobName": "AI产品经理",
+        "salaryDesc": "30-50K",
+        "brandName": "Example AI",
+        "areaDistrict": "南山区",
+        "businessDistrict": "科技园",
+        "jobExperience": "3-5年",
+        "jobDegree": "本科",
+        "skills": ["AI", "LLM", "产品设计"],
+        "bossName": "张经理",
+        "bossTitle": "HR"
+      }
+    ]
+  }
+}

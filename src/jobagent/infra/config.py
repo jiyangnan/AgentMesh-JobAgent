@@ -94,6 +94,19 @@ class Config:
             profile = load_json(profile_path())
             if profile:
                 candidate_data = profile
+        if candidate_data and ("basic" in candidate_data or "hardSkills" in candidate_data or "preferences" in candidate_data):
+            from jobagent.domain.profile_builder import ProfileBuilder
+
+            profile = ProfileBuilder.build(candidate_data)
+            candidate_data = {
+                "years_experience": profile.years_experience,
+                "target_roles": profile.target_roles,
+                "skills": profile.skills,
+                "preferred_cities": profile.preferred_cities,
+                "salary_expectation": profile.salary_expectation,
+                "industry_preferences": profile.industry_preferences,
+                "exclusions": profile.exclusions,
+            }
 
         return cls(
             platform=data.get("platform", "zhipin"),

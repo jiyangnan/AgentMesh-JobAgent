@@ -1,0 +1,32 @@
+{
+  "ok": true,
+  "platform": "zhilian",
+  "selectorVersion": "2026-06-13.0",
+  "url": "https://www.zhaopin.com/sou/jl%E6%B7%B1%E5%9C%B3/kw010G0IAEKTAC2VMFEG30/p1",
+  "title": "「AI产品经理招聘 2026年AI产品经理招聘信息」-智联招聘",
+  "loginRequired": false,
+  "candidateCount": 3,
+  "cards": [
+    {
+      "jobTitle": "AI产品经理",
+      "jobUrl": "http://www.zhaopin.com/jobdetail/CC192921310J40860244209.htm",
+      "salary": "",
+      "cityName": "北京",
+      "rawText": "AI产品经理 2-4万·16薪 北京·通州·台湖 3-5年 本科 京东集团 世界500强 合资 10000人以上 综合商贸 崔女士·招聘经理 12小时内回复可能性大 立即沟通 立即投递"
+    },
+    {
+      "jobTitle": "AI产品经理",
+      "jobUrl": "http://www.zhaopin.com/jobdetail/CCL1487801620J001.htm",
+      "salary": "",
+      "cityName": "",
+      "rawText": "AI产品经理 1.3-2.5万 AGENT商业化 AI平台 B2B SAAS 泉州·丰泽区·东海街道 3-5年 本科 企福云寰球(福建)智慧科技有限公司 天使轮 民营 100-299人 人工智能 彭京川·人事经理 高回复率 立即沟通 立即投递"
+    },
+    {
+      "jobTitle": "产品经理",
+      "jobUrl": "http://www.zhaopin.com/jobdetail/CCL1524690370J001.htm",
+      "salary": "",
+      "cityName": "北京",
+      "rawText": "产品经理 1.5-2万 推荐 大模型 AIGC 智能问答 北京·通州·新华 3-5年 本科 泰合同创(北京)科技有限公司 20-99人 人工智能 张先生·人事经理 3小时内回复可能性大 立即沟通 立即投递"
+    }
+  ]
+}

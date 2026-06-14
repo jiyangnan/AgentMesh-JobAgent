@@ -1,0 +1,21 @@
+{
+  "data": {
+    "jobList": [
+      {
+        "jobId": "liepin-1001",
+        "jobTitle": "AI产品负责人",
+        "salary": "40-70k·15薪",
+        "companyName": "Example Robotics",
+        "cityName": "深圳",
+        "districtName": "南山区",
+        "businessArea": "粤海街道",
+        "workYear": "5-10年",
+        "education": "本科及以上",
+        "skills": ["AI产品", "机器人", "商业化"],
+        "recruiterName": "李顾问",
+        "recruiterTitle": "猎头顾问",
+        "jobUrl": "https://www.liepin.com/job/liepin-1001.shtml"
+      }
+    ]
+  }
+}

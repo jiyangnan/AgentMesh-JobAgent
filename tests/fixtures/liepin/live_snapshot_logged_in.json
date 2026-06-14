@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "url": "https://www.liepin.com/zhaopin/?key=AI%E4%BA%A7%E5%93%81&dq=%E6%B7%B1%E5%9C%B3",
+  "title": "【AI产品招聘信息】-猎聘",
+  "selectorVersion": "2026-06-11.1",
+  "loginRequired": false,
+  "loginPromptPresent": false,
+  "bodySnippet": "AI产品负责人 40-70k·15薪 Example Robotics 深圳 5-10年 本科及以上",
+  "candidateCount": 3,
+  "cardCount": 1,
+  "rejected": {
+    "emptyText": 0,
+    "weakSignal": 1,
+    "duplicate": 1,
+    "missingIdentity": 0
+  },
+  "cards": [
+    {
+      "jobId": "liepin-live-1001",
+      "jobTitle": "AI产品负责人",
+      "salary": "40-70k·15薪",
+      "companyName": "Example Robotics",
+      "cityName": "深圳",
+      "workYear": "5-10年",
+      "education": "本科及以上",
+      "jobUrl": "https://www.liepin.com/job/liepin-live-1001.shtml",
+      "rawText": "AI产品负责人\n40-70k·15薪\nExample Robotics\n深圳\n5-10年\n本科及以上"
+    }
+  ]
+}

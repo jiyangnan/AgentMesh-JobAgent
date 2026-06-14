@@ -1,3 +1,11 @@
-CHAT_ENTRY_TEXTS = ["立即沟通", "继续沟通"]
-CHAT_EDITOR_SELECTOR = "[contenteditable='true'].chat-input, [contenteditable='true']"
-SEND_BUTTON_SELECTOR = "button.btn-send, .btn-send"
+"""Compatibility imports for Boss DOM selectors."""
+
+from __future__ import annotations
+
+from jobagent.platforms.boss.selectors import (
+    CHAT_EDITOR_SELECTOR,
+    CHAT_ENTRY_TEXTS,
+    SEND_BUTTON_SELECTOR,
+)
+
+__all__ = ["CHAT_EDITOR_SELECTOR", "CHAT_ENTRY_TEXTS", "SEND_BUTTON_SELECTOR"]

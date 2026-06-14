@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from jobagent.domain.greeter import GreeterEngine
-from jobagent.domain.models import Job
+from jobagent.domain.models import Job, RankedJob
 from jobagent.infra.config import GreeterConfig
 
 
@@ -45,11 +45,6 @@ def make_job() -> Job:
         name="Product Manager",
         salary="30-50K",
         company="Example Co",
-        area="南山",
-        experience="3-5年",
-        degree="本科",
-        skills="AI",
-        boss="张经理",
         city="深圳",
         url="https://example.test/job/1",
     )
@@ -84,3 +79,41 @@ def test_editor_auto_sent_requires_delivery_verification():
         "inspect_chat_editor",
         "verify_delivery",
     ]
+
+
+def test_audit_records_job_platform(monkeypatch, tmp_path):
+    audit_path = tmp_path / "audit.json"
+    monkeypatch.setattr("jobagent.domain.greeter.audit_log_path", lambda: audit_path)
+    driver = AutoSentDriver(auto_sent_at="", delivered=True)
+    engine = GreeterEngine(GreeterConfig(dry_run=True), driver=driver)
+    job = make_job()
+    job.platform = "boss"
+
+    engine.send_batch(
+        [RankedJob(job=job, score=90, match_level="high", reasons=[], risk_flags=[])],
+        limit=1,
+    )
+
+    import json
+
+    records = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert records[0]["platform"] == "boss"
+
+
+def test_audit_normalizes_legacy_zhipin_platform(monkeypatch, tmp_path):
+    audit_path = tmp_path / "audit.json"
+    monkeypatch.setattr("jobagent.domain.greeter.audit_log_path", lambda: audit_path)
+    driver = AutoSentDriver(auto_sent_at="", delivered=True)
+    engine = GreeterEngine(GreeterConfig(dry_run=True), driver=driver)
+    job = make_job()
+    job.platform = "zhipin"
+
+    engine.send_batch(
+        [RankedJob(job=job, score=90, match_level="high", reasons=[], risk_flags=[])],
+        limit=1,
+    )
+
+    import json
+
+    records = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert records[0]["platform"] == "boss"

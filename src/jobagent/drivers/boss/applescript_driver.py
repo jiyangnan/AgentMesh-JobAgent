@@ -4,10 +4,14 @@ import json
 import subprocess
 import time
 from typing import Any
-from urllib.parse import quote
+
+from jobagent.platforms.boss.selectors import (
+    CHAT_EDITOR_SELECTOR,
+    CHAT_ENTRY_TEXTS,
+    SEND_BUTTON_SELECTOR,
+)
 
 from .base import BossActionDriver
-from .selectors import CHAT_EDITOR_SELECTOR, CHAT_ENTRY_TEXTS, SEND_BUTTON_SELECTOR
 
 
 class AppleScriptBossDriver(BossActionDriver):

@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "url": "https://www.liepin.com/zhaopin/?key=%E4%BA%A7%E5%93%81",
+  "title": "【招聘信息_人才网招聘信息】-猎聘",
+  "selectorVersion": "2026-06-12.2",
+  "loginRequired": false,
+  "loginPromptPresent": false,
+  "bodySnippet": "产品·全国\nAgent产品经理\n【\n上海-徐汇区\n】\n40-60k·14薪\n5-10年\n本科\nExample AI Platform\n计算机软件1000-2000人\n陈先生·招聘主管\n4小时前在线",
+  "candidateCount": 12,
+  "cardCount": 2,
+  "rejected": {
+    "emptyText": 3,
+    "weakSignal": 1,
+    "duplicate": 0,
+    "missingIdentity": 2
+  },
+  "cards": [
+    {
+      "jobId": "",
+      "jobTitle": "Agent产品经理",
+      "salary": "40-60k·14薪",
+      "companyName": "Example AI Platform",
+      "cityName": "上海-徐汇区",
+      "workYear": "5-10年",
+      "education": "本科",
+      "jobUrl": "https://www.liepin.com/job/example-agent-product.shtml",
+      "rawText": "Agent产品经理\n【\n上海-徐汇区\n】\n40-60k·14薪\n5-10年\n本科\nExample AI Platform\n计算机软件1000-2000人\n陈先生·招聘主管\n4小时前在线"
+    },
+    {
+      "jobId": "",
+      "jobTitle": "C端AI产品经理",
+      "salary": "40-70k·16薪",
+      "companyName": "Example Retail",
+      "cityName": "北京-通州区",
+      "workYear": "5-10年",
+      "education": "本科",
+      "jobUrl": "https://www.liepin.com/job/example-consumer-ai-product.shtml",
+      "rawText": "C端AI产品经理\n【\n北京-通州区\n】\n40-70k·16薪\n5-10年\n本科\nExample Retail\n互联网已上市10000人以上\n杨女士\n9小时前在线"
+    }
+  ]
+}

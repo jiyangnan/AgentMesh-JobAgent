@@ -3,33 +3,26 @@
 
 > 🟣 Part of **[AgentMesh](https://github.com/jiyangnan/agentmesh-core)** — see the [ecosystem index](https://github.com/jiyangnan/agentmesh-core/blob/main/docs/ECOSYSTEM.md) ([中文](https://github.com/jiyangnan/agentmesh-core/blob/main/docs/ECOSYSTEM.zh.md)) for all related repos, the [roadmap](https://github.com/jiyangnan/agentmesh-core/blob/main/docs/ROADMAP.md), and [architecture](https://github.com/jiyangnan/agentmesh-core/blob/main/docs/ARCHITECTURE.md).
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-early%20access-orange.svg)](docs/progress.md)
-[![Brand](https://img.shields.io/badge/brand-AgentMesh-6E4AFF.svg)](docs/brand-architecture-20260509.md)
+[![Status](https://img.shields.io/badge/status-early%20access-orange.svg)](#status)
+[![Brand](https://img.shields.io/badge/brand-AgentMesh-6E4AFF.svg)](https://github.com/jiyangnan/agentmesh-core)
 
-> AI-driven job hunting automation for Boss直聘 (Zhipin) — built to be controlled by your AI agent (Claude Code, OpenClaw, etc.) from chat.
+> AI-driven job hunting automation for Boss直聘 (Zhipin), 猎聘 (Liepin), and 智联招聘 (Zhilian) — built to be controlled by your AI agent (Claude Code, OpenClaw, etc.) from chat.
 
 **Core loop**: Resume → 36-field candidate profile (cloud) → Job crawl (local Chrome) → Match scoring (cloud) → Personalized greetings (cloud) → Batch send with delivery verification (local Chrome).
 
-**Architecture in one breath**: Browser automation, your Boss cookie, and your resume original file always stay on your machine. Only stripped text and structured profile travel to our cloud API for matching/greeting generation.
+**Architecture in one breath**: Browser automation, platform cookies, and your resume original file always stay on your machine. Only stripped text and structured profile travel to our cloud API for matching/greeting generation.
 
-This is the first product under the [**AgentMesh**](docs/brand-architecture-20260509.md) umbrella brand — a series of vertical AI agents for specific industries.
+This is part of the [**AgentMesh**](https://github.com/jiyangnan/agentmesh-core) ecosystem — a series of vertical AI agents for specific industries.
 
-> **⚠️ Early access**. Cloud features require a license key (request from the maintainer). M1 stage; the public release is intentionally low-key while we collect early feedback. See [docs/progress.md](docs/progress.md) for current status.
+> **⚠️ Early access**. Cloud features require a license key (request from the maintainer). The public release is intentionally low-key while we collect early feedback.
 
 ---
 
-## Architecture — two repos
+## Architecture — client plus Cloud API
 
-Job Agent is split into two projects. **You're looking at the client** right now:
+You're looking at the public client repo. It contains local browser automation, PDF/DOCX parsing, platform-specific CLI commands, audit files, and agent-friendly onboarding. Cloud AI features call `api.jobagent.agentmesh360.com` with your configured license key.
 
-| Repo | Visibility | What it holds |
-|------|-----------|---------------|
-| **Job Agent CLI** (this repo) | Public · Apache 2.0 | Local browser automation, PDF/DOCX parsing, Boss API calls, IO, agent-friendly CLI surface. Calls the Cloud API for AI features. |
-| **Cloud API server** | **Private** | Closed-source server holding our 36-field analysis prompt, match-scoring prompt, greeting-generation prompt, LLM provider keys, license/admin systems, the marketing landing site at `jobagent.agentmesh360.com`. **This is our IP moat.** |
-
-**If you're a new team member joining the project**: ask the owner for access to the private server repo. It contains the operations runbook (`docs/admin-runbook.md` — how to issue licenses, deploy, debug), W1 external-resource checklist, and all server-side code. Don't try to find it by searching GitHub — the discoverable, public-facing surface is exactly this client repo plus `jobagent.agentmesh360.com`.
-
-**If you're an external user**: you don't need access to the server repo. The Cloud API endpoint (`api.jobagent.agentmesh360.com`) and a license key are all you need; this client repo tells you everything else.
+You do not need access to any private server code. The Cloud API endpoint and a license key are enough to use the public CLI.
 
 ---
 
@@ -37,10 +30,10 @@ Job Agent is split into two projects. **You're looking at the client** right now
 
 - **Resume Text Extraction** — PDF / DOCX / TXT / Markdown → plain text
 - **Profile Management** — Structured candidate profile (JSON), auto-merged into config
-- **Job Crawling** — Fetch job listings from Boss Web API via real Chrome
+- **Platform Workflows** — Boss直聘 stable; Liepin and Zhilian beta platform chains are exposed as separate commands
 - **Smart Filtering** — Exclude keywords, salary range, experience, degree
 - **AI Ranking** — Rule-based scoring + optional LLM reranking
-- **Batch Greeting** — Navigate job pages, click chat, fill message, send, verify delivery
+- **Controlled Apply / Greeting** — Boss sends greetings after approval; Liepin and Zhilian keep platform-specific apply flows and audit trails
 - **Audit Log** — Full send history with success/failure tracking
 - **CDP Cross-Platform Driver** — Real Chrome on macOS / Windows / Linux (not AppleScript-only)
 - **Passive Login Guide** — Chrome auto-opens for login; agent notifies user; continues automatically
@@ -115,16 +108,18 @@ CLI 本体永远免费 —— 抓岗位、管简历文件、自动化登录这�
 
 **TL;DR**: Don't paste this URL alone — paste [docs/agent-onboarding.md](docs/agent-onboarding.md) instead.
 
-This product is **built to be driven by an AI agent** (per [strategy §1](docs/product-strategy-20260509.md): users chat in IM, agents drive the CLI locally). But just handing your agent the GitHub link is risky — several steps need explicit handling:
+This product is **built to be driven by an AI agent**: users chat with a host agent, and the agent drives the CLI locally. But just handing your agent the GitHub link is risky — several steps need explicit handling:
 
-Boss commands intentionally use the platform namespace: `jobagent boss collect`, `jobagent boss rank`, and `jobagent boss greet ...`. The old top-level `jobagent jobs ...` and `jobagent greet ...` commands are removed and are not compatibility aliases.
+Platform commands intentionally use explicit platform namespaces: `jobagent boss ...`, `jobagent liepin ...`, and `jobagent zhilian ...`. The old top-level `jobagent jobs ...` and `jobagent greet ...` commands are removed and are not compatibility aliases.
+
+Current platform order is Boss直聘 → 猎聘 → 智联招聘. They share one local Chrome session, so agents should run platform workflows serially.
 
 | Concern | Why agent will trip |
 |---|---|
 | Cross-platform install one-liner | Windows users may be on Git Bash, can't run PowerShell `irm` |
 | `jobagent login` | Requires user to scan QR code in Chrome — agent must wait, not skip |
-| `jobagent boss collect` throttling | CLI sleeps ~5s between pages to be courteous to the upstream API. Agent must NOT bypass with `--page-delay 0` or parallel calls. |
-| `jobagent boss greet send` | Sends real messages on Boss直聘 — agent must ask for explicit confirmation before running |
+| Platform collection throttling | Collect commands use deliberate pacing. Agent must NOT bypass with zero delay or parallel platform calls. |
+| `greet send` / `apply send` | Can send real messages or submit resumes depending on platform — agent must ask for explicit confirmation before running real actions. |
 | Quota / verification errors | Should stop and surface to user, not auto-retry with shorter delays |
 
 ### 🔑 The Boss-login step is the #1 thing agents fumble — here's what your agent MUST say
@@ -184,24 +179,35 @@ jobagent init --key jba_live_xxxxxx
 # 2. Analyze resume (local extract → Cloud /v1/resume/analyze → save 36-field profile)
 jobagent resume analyze --file resume.pdf --target-role "AI产品经理" --target-cities 深圳 杭州
 
-# 3. Crawl jobs locally (uses your real Chrome + Boss cookie — never leaves your machine)
-jobagent boss collect --city 深圳 --query "AI产品经理" --output raw.json
+# 3. Boss直聘 stable flow
+jobagent boss collect --city 深圳 --query "AI产品经理" --output boss.raw.json
+jobagent boss rank --input boss.raw.json --top 20 --output boss.ranked.json
+jobagent boss greet preview --input boss.ranked.json --limit 10 --output boss.ready.json
+jobagent boss greet send --input boss.ready.json --limit 10
 
-# 4. Rank via cloud (sends profile + jobs to Cloud /v1/jobs/rank)
-jobagent boss rank --input raw.json --top 20 --output ranked.json
+# 4. 猎聘 beta flow
+jobagent liepin login --check
+jobagent liepin collect --query "AI产品经理" --city 深圳 --pages 1 --output liepin.raw.json
+jobagent liepin rank --input liepin.raw.json --top 20 --output liepin.ranked.json
+jobagent liepin greet preview --input liepin.ranked.json --limit 10 --output liepin.ready.json
+jobagent liepin apply open --input liepin.ready.json --limit 5
+# Real apply/send requires explicit confirmation:
+# jobagent liepin apply send --input liepin.ready.json --limit 5 --confirm-submit
 
-# 5. Preview personalized greetings (one Cloud /v1/greet/generate call per job)
-jobagent boss greet preview --input ranked.json --limit 10 --output ready.json
-
-# 6. Send (browser action stays local; the cloud_greeting from previous step is used)
-jobagent boss greet send --input ready.json --limit 10
+# 5. 智联招聘 beta flow
+jobagent zhilian login --check
+jobagent zhilian collect --query "AI产品经理" --city 深圳 --pages 1 --detail-limit 2 --output zhilian.raw.json
+jobagent zhilian rank --input zhilian.raw.json --top 20 --output zhilian.ranked.json
+jobagent zhilian greet preview --input zhilian.ranked.json --limit 10 --output zhilian.ready.json
+jobagent zhilian apply open --input zhilian.ready.json --limit 5
+# Zhilian's real action is attachment resume submit, not in-page greeting text:
+# jobagent zhilian apply send --input zhilian.ready.json --limit 5 --confirm-submit
 ```
 
 The Cloud API endpoint is `https://api.jobagent.agentmesh360.com` (override with
-`JOBAGENT_API_BASE` env var). Browser automation, your Boss cookie, and your
+`JOBAGENT_API_BASE` env var). Browser automation, platform cookies, and your
 resume original file always stay on your machine — only stripped text /
-structured profile is sent to the cloud. See `docs/product-strategy-20260509.md`
-for the full data flow.
+structured profile is sent to the cloud. See the Privacy & Data section below for the data boundary.
 
 ### Path B: Free-tier commands (no license)
 
@@ -243,19 +249,34 @@ jobagent resume extract --file resume.pdf       # Extract text from resume
 jobagent profile save --data '{...}'            # Save candidate profile JSON
 jobagent profile show                           # Display current profile
 
-# ── Job Discovery (Step 2) ──
-jobagent boss collect --city 深圳 --query "AI产品经理" [--output jobs.json]
-jobagent boss rank --input jobs.json --config config.yaml [--top 20]
-
-# ── Greeting (Step 3) ──
-jobagent boss greet preview --input ranked.json [--limit 10]
-jobagent boss greet send --input ranked.json [--limit 10]
+# ── Boss直聘 stable workflow ──
+jobagent boss collect --city 深圳 --query "AI产品经理" [--output boss.raw.json]
+jobagent boss rank --input boss.raw.json --config config.yaml [--top 20]
+jobagent boss greet preview --input boss.ranked.json [--limit 10]
+jobagent boss greet send --input boss.ready.json [--limit 10]
 jobagent boss greet audit [--recent 20]
-
-# ── Diagnostics ──
-jobagent doctor boss                            # Check Chrome / login / chat readiness
+jobagent doctor boss
 jobagent boss probe-send --job-url <url> --message "..."
 jobagent boss verify-last-send
+
+# ── 猎聘 beta workflow ──
+jobagent doctor liepin
+jobagent liepin login --check
+jobagent liepin collect --query "AI产品经理" --city 深圳 [--pages 1] [--output liepin.raw.json]
+jobagent liepin rank --input liepin.raw.json [--top 20]
+jobagent liepin greet preview --input liepin.ranked.json [--limit 10]
+jobagent liepin apply open --input liepin.ready.json [--limit 5]
+jobagent liepin apply send --input liepin.ready.json --confirm-submit [--limit 5]
+jobagent liepin audit [--recent 20]
+
+# ── 智联招聘 beta workflow ──
+jobagent zhilian login --check
+jobagent zhilian collect --query "AI产品经理" --city 深圳 [--pages 1] [--detail-limit 2] [--output zhilian.raw.json]
+jobagent zhilian rank --input zhilian.raw.json [--top 20]
+jobagent zhilian greet preview --input zhilian.ranked.json [--limit 10]
+jobagent zhilian apply open --input zhilian.ready.json [--limit 5]
+jobagent zhilian apply send --input zhilian.ready.json --confirm-submit [--limit 5]
+jobagent zhilian audit [--recent 20]
 
 # ── Full Pipeline ──
 jobagent pipeline run --config config.yaml
@@ -425,12 +446,11 @@ Nothing of the above is required to receive a key. M1 is free; we just want sign
 
 Job Agent 是独立第三方工具，与 Boss 直聘无合作关系。
 
-- **服务边界**：当前仅支持 macOS + Chrome + Boss 直聘，处于 Early Access 阶段，功能仍在迭代
+- **服务边界**：当前公开 CLI 支持 Boss 直聘稳定链路，并提供猎聘、智联招聘 beta 链路；处于 Early Access 阶段，功能仍在迭代
 - **平台风险**：我们不承诺规避平台规则，账号被限制或封禁的风险由用户自行承担
 - **用户责任**：发送前请自行审核每条消息内容；禁止用于骚扰式海投
 - **免责声明**：不保证获得回复、面试或录用；对账号损失、数据丢失等不承担责任；产品按"现状"提供
 
-完整服务条款：[docs/marketing/reports/tos-disclaimer-minimum.md](docs/marketing/reports/tos-disclaimer-minimum.md)
 
 ## License
 

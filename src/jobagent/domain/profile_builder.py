@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from jobagent.domain.models import CandidateProfile
+from jobagent.domain.local_profile import simplify_profile
 
 
 class ProfileBuilder:
@@ -33,6 +34,9 @@ class ProfileBuilder:
         Returns:
             A validated CandidateProfile with sensible defaults.
         """
+        if isinstance(raw, dict) and ("basic" in raw or "hardSkills" in raw or "preferences" in raw):
+            raw = simplify_profile(raw)
+
         # Salary expectation with validation
         salary_raw = raw.get("salary_expectation") or {}
         min_k = _to_int(salary_raw.get("min_k"), 0)
