@@ -39,7 +39,7 @@ def _require_license_or_exit(command_label: str) -> None:
         "   匹配评估 / 招呼语生成). M1 阶段免费申请，几小时回。\n\n"
         "   三选一申请：\n"
         "   1) 申请表单（推荐）→ https://jobagent.agentmesh360.com/#apply\n"
-        "   2) GitHub Issue   → https://github.com/jiyangnan/AgentMesh-JobAgent/issues/new?template=license-request.yml\n"
+        "   2) GitHub Issue   → https://github.com/jiyangnan/job-agent/issues/new?template=license-request.yml\n"
         "   3) 邮件           → hello@agentmesh360.com\n\n"
         "   拿到 key 后跑：\n"
         "      jobagent init --key jba_live_xxx\n"
@@ -87,7 +87,7 @@ def _print_cloud_upgrade_hint(command_name: str) -> None:
         "\n"
         "   申请 license（M1 阶段免费）三选一：\n"
         "   • 申请表单（推荐）: https://jobagent.agentmesh360.com/#apply\n"
-        "   • GitHub Issue:    https://github.com/jiyangnan/AgentMesh-JobAgent/issues/new?template=license-request.yml\n"
+        "   • GitHub Issue:    https://github.com/jiyangnan/job-agent/issues/new?template=license-request.yml\n"
         "   • 邮件:            hello@agentmesh360.com\n"
         + "─" * 60 + "\n"
     )
@@ -417,6 +417,11 @@ def build_parser() -> argparse.ArgumentParser:
     platforms_health = platforms_sub.add_parser("health", help="Run lightweight platform health checks")
     platforms_health.add_argument("--platform", "-p", help="Platform key to check (default: all)")
     platforms_health.add_argument("--config", "-c", default=DEFAULT_CONFIG_PATH, help="Optional YAML config with platforms.<name>.enabled overrides")
+
+    # ── support ──
+    support = sub.add_parser("support", help="Voluntary project support commands")
+    support_sub = support.add_subparsers(dest="support_command", required=True)
+    support_sub.add_parser("star", help="Show the public GitHub repo for optional starring")
 
     # ── login ──
     login = sub.add_parser("login", help="Boss login state management")
@@ -1828,6 +1833,14 @@ def _cmd_liepin_apply_send(args: argparse.Namespace) -> None:
         payload["warning"] = "selected_jobs_missing_greeting"
         payload["missing_greeting_indexes"] = missing_greetings
     _print_json(payload)
+    from jobagent.infra.support import print_first_delivery_star_prompt_once
+
+    print_first_delivery_star_prompt_once(
+        platform="liepin",
+        command="jobagent liepin apply send",
+        delivered=delivered,
+        dry_run=bool(args.dry_run),
+    )
     sys.exit(0 if failed == 0 else 2)
 
 
@@ -2033,6 +2046,14 @@ def _cmd_zhilian_apply_send(args: argparse.Namespace) -> None:
         payload["warning"] = "selected_jobs_missing_greeting"
         payload["missing_greeting_indexes"] = missing_greetings
     _print_json(payload)
+    from jobagent.infra.support import print_first_delivery_star_prompt_once
+
+    print_first_delivery_star_prompt_once(
+        platform="zhilian",
+        command="jobagent zhilian apply send",
+        delivered=delivered,
+        dry_run=bool(args.dry_run),
+    )
     sys.exit(0 if failed == 0 else 2)
 
 
@@ -2176,6 +2197,13 @@ def _cmd_greet_send(args: argparse.Namespace) -> None:
     output_path = results_dir / f"greet_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Detailed results saved → {output_path}")
+    from jobagent.infra.support import print_first_delivery_star_prompt_once
+
+    print_first_delivery_star_prompt_once(
+        platform="boss",
+        command="jobagent boss greet send",
+        delivered=payload["delivered"],
+    )
 
 
 def _cmd_greet_audit(args: argparse.Namespace) -> None:
@@ -2461,6 +2489,19 @@ def _cmd_pipeline_run(args: argparse.Namespace) -> None:
     pipeline = Pipeline(config)
     summary = pipeline.run()
     _print_json(summary)
+    from jobagent.infra.support import print_first_delivery_star_prompt_once
+
+    print_first_delivery_star_prompt_once(
+        platform=str(summary.get("platform") or "boss"),
+        command="jobagent pipeline run",
+        delivered=int(summary.get("delivered") or 0),
+    )
+
+
+def _cmd_support_star(args: argparse.Namespace) -> None:
+    from jobagent.infra.support import support_star_payload
+
+    _print_json(support_star_payload())
 
 
 def main() -> None:
@@ -2654,6 +2695,10 @@ def main() -> None:
 
     if args.command == "platforms" and args.platforms_command == "health":
         _cmd_platforms_health(args)
+        return
+
+    if args.command == "support" and args.support_command == "star":
+        _cmd_support_star(args)
         return
 
     if args.command == "resume" and args.resume_command == "extract":

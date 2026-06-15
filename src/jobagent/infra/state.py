@@ -43,3 +43,8 @@ def audit_log_path() -> Path:
 def profile_path() -> Path:
     ensure_dirs()
     return STATE_DIR / "profile.json"
+
+
+def support_state_path() -> Path:
+    ensure_dirs()
+    return STATE_DIR / "support_state.json"

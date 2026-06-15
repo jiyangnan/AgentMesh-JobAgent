@@ -392,6 +392,13 @@ def test_platforms_health_accepts_platform_and_config():
     assert args.config == "/tmp/jobagent-platforms.yaml"
 
 
+def test_support_star_command_uses_support_shape():
+    args = parse_args("support", "star")
+
+    assert args.command == "support"
+    assert args.support_command == "star"
+
+
 def test_disabled_platform_exits_before_command_runs(tmp_path, capsys):
     config = tmp_path / "platforms.yaml"
     config.write_text("platforms:\n  boss:\n    enabled: false\n", encoding="utf-8")

@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use when the user wants help finding jobs on Boss直聘/Zhipin, 猎聘/Liepin, or 智联招聘/Zhilian, analyzing a resume for job search, ranking job listings, drafting or reviewing platform-specific greetings, opening/applying to jobs after confirmation, or auditing past Job Agent actions.
-version: 0.2.0
+version: 0.2.1
 metadata:
   openclaw:
     emoji: "💼"
@@ -30,6 +30,7 @@ Help the user run AgentMesh Job Agent, a local CLI workflow for Chinese job sear
 - Treat platform login, resume originals, browser cookies, and sending/apply actions as local user-controlled steps.
 - If a platform shows login, CAPTCHA, security verification, or missing resume state, pause and ask the user to intervene.
 - Zhilian apply send submits an attachment resume; it does not send an in-page greeting text.
+- If the CLI prints the optional GitHub star prompt after the first successful real send/apply, relay it once. Do not repeat it after later commands.
 
 ## Setup
 
@@ -59,6 +60,14 @@ Initialize after the user provides a real key:
 jobagent init --key <jba_live_xxx>
 jobagent doctor env
 ```
+
+Optional support command:
+
+```bash
+jobagent support star
+```
+
+Starring the public repo is voluntary and must never be presented as required for install, license, or usage.
 
 ## Workflow
 
