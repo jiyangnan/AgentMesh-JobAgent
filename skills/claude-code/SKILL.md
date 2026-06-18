@@ -16,15 +16,12 @@ Closes the loop: **Resume → Cloud-analyzed candidate profile → Boss job craw
 
 ## Hard requirements before running anything
 
-1. **License key required** (format `jba_live_xxx`). If user doesn't have one, **stop and tell them to request one** via either:
-   - **Application form (recommended)**: `https://jobagent.agentmesh360.com/#apply` — 30-second structured form, replies via email
-   - **GitHub Issue**: `https://github.com/jiyangnan/AgentMesh-JobAgent/issues/new?template=license-request.yml` — public, replies on the issue thread
-   - **Email**: `hello@agentmesh360.com` — private
+1. **AgentMesh360 API key required**. If the user doesn't have one, **stop and tell them to register/log in** at `https://agentmesh360.com/app/`, copy the API key from the account dashboard, then provide it.
 
-   **As of 2026-05-11 the license is hard-enforced** — `jobagent boss rank` / `jobagent boss greet preview` / `jobagent boss greet send` / `jobagent pipeline run` / `jobagent resume analyze` exit with code 2 if no license. There is no "local fallback" to silently degrade to. Make sure the user has run `jobagent init --key …` before reaching any of these commands.
+   Cloud AI commands — `jobagent boss rank` / `jobagent boss greet preview` / `jobagent boss greet send` / `jobagent pipeline run` / `jobagent resume analyze` — require this key. Make sure the user has run `jobagent init --key …` before reaching any of these commands.
 2. **Google Chrome** installed (Boss automation requires real Chrome).
 3. **Resume file** (PDF / DOCX / TXT / MD).
-4. **Never invent or fabricate a license key.** If `init` fails with `invalid_license`, surface that error verbatim to the user.
+4. **Never invent or fabricate an API key.** If `init` fails with an auth error, surface that error verbatim to the user.
 
 ## Standard workflow
 
@@ -33,11 +30,11 @@ Run these commands in order. Read each output before proceeding to the next; som
 ### 1. One-time setup
 
 ```bash
-jobagent init --key <jba_live_xxx>
-# Verifies connectivity. Prints license info.
+jobagent init --key <your_api_key>
+# Verifies connectivity. Prints account / credit info.
 
 jobagent doctor env
-# Sanity-check Python, Chrome, network, license. Run if anything looks off.
+# Sanity-check Python, Chrome, network, API key. Run if anything looks off.
 ```
 
 ### 2. Analyze resume → 36-field profile
@@ -172,9 +169,9 @@ jobagent zhilian audit
 
 | Error | What happened | Tell the user |
 |-------|---------------|---------------|
-| `missing_license` (401) | No license key configured | Run `jobagent init --key ...` |
-| `license_revoked` (403) | Key is revoked | Contact the maintainer for a new key |
-| `quota_exceeded` (429) | Monthly cloud calls exhausted | Wait until next month or contact maintainer |
+| `missing_api_key` / `missing_license` (401) | No API key configured | Run `jobagent init --key ...` |
+| `invalid_api_key` / `license_revoked` (403) | Key is invalid or revoked | Copy a fresh API key from the AgentMesh360 account dashboard |
+| `quota_exceeded` / `insufficient_credits` (429/402) | Cloud credit exhausted | Check credit in the AgentMesh360 account dashboard |
 | Verification challenge in send result | Upstream redirected to a verify page | Pause for a while; resume later with longer delays |
 | `login_timeout` | User didn't scan QR within 5 min | Retry `jobagent login` |
 | Resume `<100 chars` | Scanned/image PDF | Ask user for a text-based resume |
@@ -182,7 +179,7 @@ jobagent zhilian audit
 ## Rules
 
 - **Never** send greetings without explicit user confirmation of the previews
-- **Never** invent a license key
+- **Never** invent an API key
 - **Always** show match scores and reasons before sending so the user can deselect bad matches
 - For batch sends > 20 jobs, suggest the user split into multiple sessions
 - Sensitive data (resume original, Boss cookie) never leaves the user's machine; you can reassure them of this

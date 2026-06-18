@@ -1,4 +1,4 @@
-"""License key storage at ~/.jobagent/credentials (mode 600).
+"""AgentMesh360 API key storage at ~/.jobagent/credentials (mode 600).
 
 Single-key model — one user, one key. M4 may add multi-profile support."""
 from __future__ import annotations
@@ -19,7 +19,7 @@ def credentials_path() -> Path:
 
 
 def load_license_key() -> str | None:
-    """Return the saved license key, or None if not configured.
+    """Return the saved API key, or None if not configured.
 
     Order: env var JOBAGENT_LICENSE_KEY > ~/.jobagent/credentials.
     """

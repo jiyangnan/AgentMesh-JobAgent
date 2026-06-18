@@ -24,7 +24,7 @@ Help the user run AgentMesh Job Agent, a local CLI workflow for Chinese job sear
 ## Safety Rules
 
 - Never send greetings or submit applications until the user has reviewed the generated previews/handoff and explicitly approved the action.
-- Never invent a license key. If the user lacks one, stop and point them to the application form, GitHub issue, or email below.
+- Never invent an AgentMesh360 API key. If the user lacks one, stop and point them to `https://agentmesh360.com/app/`.
 - Run platforms serially in this order: Boss直聘 -> 猎聘 -> 智联招聘. They share the local Chrome session.
 - Do not run platform collect commands in parallel, set page delay to zero, or wrap them with faster retry loops.
 - Treat platform login, resume originals, browser cookies, and sending/apply actions as local user-controlled steps.
@@ -48,16 +48,10 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.ps1 | iex
 ```
 
-Cloud features require a license key beginning with `jba_live_`. Request one through:
-
-- Form: `https://jobagent.agentmesh360.com/#apply`
-- GitHub Issue: `https://github.com/jiyangnan/AgentMesh-JobAgent/issues/new?template=license-request.yml`
-- Email: `hello@agentmesh360.com`
-
-Initialize after the user provides a real key:
+Cloud features require an AgentMesh360 API key. Ask the user to register/log in at `https://agentmesh360.com/app/`, copy the API key from the account dashboard, then initialize:
 
 ```bash
-jobagent init --key <jba_live_xxx>
+jobagent init --key <your_api_key>
 jobagent doctor env
 ```
 
@@ -67,7 +61,7 @@ Optional support command:
 jobagent support star
 ```
 
-Starring the public repo is voluntary and must never be presented as required for install, license, or usage.
+Starring the public repo is voluntary and must never be presented as required for install, account setup, or usage.
 
 ## Workflow
 
@@ -137,9 +131,9 @@ jobagent zhilian audit
 
 | Situation | Response |
 |---|---|
-| `missing_license` | Ask the user to request or provide a real `jba_live_...` key, then run `jobagent init --key ...`. |
-| `invalid_license` | Surface the CLI error. Do not retry with invented keys. |
-| `quota_exceeded` | Tell the user the cloud quota is exhausted and suggest contacting `hello@agentmesh360.com`. |
+| `missing_api_key` / `missing_license` | Ask the user to provide their AgentMesh360 API key, then run `jobagent init --key ...`. |
+| `invalid_api_key` / `invalid_license` | Surface the CLI error. Do not retry with invented keys. |
+| `quota_exceeded` / `insufficient_credits` | Tell the user to check credit in the AgentMesh360 account dashboard. |
 | Login timeout | Re-run `jobagent login` when the user is ready to scan. |
 | Scanned/image resume | Ask for a text-based PDF, DOCX, TXT, or Markdown resume. |
 

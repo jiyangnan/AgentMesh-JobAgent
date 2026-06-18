@@ -25,7 +25,7 @@ def _require_license_or_exit(command_label: str) -> None:
     """Hard gate for commands that depend on our cloud IP (rank / greet / pipeline).
 
     Local fallbacks were intentionally removed: degraded quality + zero funnel
-    signal made the local paths a net loss. If no license configured, surface
+    signal made the local paths a net loss. If no API key is configured, surface
     a literal user-facing prompt (the agent should relay it verbatim per the
     literal-prompt principle).
     """
@@ -34,15 +34,15 @@ def _require_license_or_exit(command_label: str) -> None:
         return
     msg = (
         f"\n{'─' * 60}\n"
-        f"⛔  `{command_label}` requires a license key.\n\n"
+        f"⛔  `{command_label}` requires an AgentMesh360 API key.\n\n"
         "   This command depends on our Cloud AI service (招聘方视角分析 /\n"
-        "   匹配评估 / 招呼语生成). M1 阶段免费申请，几小时回。\n\n"
-        "   三选一申请：\n"
-        "   1) 申请表单（推荐）→ https://jobagent.agentmesh360.com/#apply\n"
-        "   2) GitHub Issue   → https://github.com/jiyangnan/job-agent/issues/new?template=license-request.yml\n"
-        "   3) 邮件           → hello@agentmesh360.com\n\n"
-        "   拿到 key 后跑：\n"
-        "      jobagent init --key jba_live_xxx\n"
+        "   匹配评估 / 招呼语生成). 当前开放期免费，注册即送 credit。\n\n"
+        "   获取方式：\n"
+        "   1) 打开 https://agentmesh360.com/app/\n"
+        "   2) 注册 / 登录 AgentMesh360 账户\n"
+        "   3) 在账户面板复制 API key\n\n"
+        "   拿到 API key 后跑：\n"
+        "      jobagent init --key <your_api_key>\n"
         f"{'─' * 60}\n"
     )
     print(msg, file=sys.stderr)
@@ -50,8 +50,8 @@ def _require_license_or_exit(command_label: str) -> None:
         "ok": False,
         "stage": "license_check",
         "command": command_label,
-        "error": "license_required",
-        "hint": "Run `jobagent init --key jba_live_xxx`. Apply at https://jobagent.agentmesh360.com/#apply",
+        "error": "api_key_required",
+        "hint": "Run `jobagent init --key <your_api_key>`. Register at https://agentmesh360.com/app/",
     })
     sys.exit(2)
 
@@ -68,7 +68,7 @@ def _print_cloud_upgrade_hint(command_name: str) -> None:
         return
     from jobagent.infra.credentials import load_license_key
     if load_license_key():
-        return  # User has a license; they chose Path C deliberately.
+        return  # User has an API key; they chose Path C deliberately.
 
     cloud_features = {
         "resume": "用云端招聘方视角模型校准 36 字段 profile",
@@ -79,16 +79,14 @@ def _print_cloud_upgrade_hint(command_name: str) -> None:
 
     msg = (
         "\n" + "─" * 60 + "\n"
-        "💡 你正在使用 **本地模式**（不需要 license）。\n"
+        "💡 你正在使用 **本地模式**（不需要 AgentMesh360 API key）。\n"
         "   云端模式（推荐）有这些优势：\n"
         f"     • {feature}\n"
         "     • 三大业务 endpoint 共享同一份招聘方视角 profile\n"
         "     • 云端算法持续迭代，客户端无需更新即可受益\n"
         "\n"
-        "   申请 license（M1 阶段免费）三选一：\n"
-        "   • 申请表单（推荐）: https://jobagent.agentmesh360.com/#apply\n"
-        "   • GitHub Issue:    https://github.com/jiyangnan/job-agent/issues/new?template=license-request.yml\n"
-        "   • 邮件:            hello@agentmesh360.com\n"
+        "   当前开放期免费，注册 AgentMesh360 账户即可获取 API key：\n"
+        "   • https://agentmesh360.com/app/\n"
         + "─" * 60 + "\n"
     )
     print(msg, file=sys.stderr)
@@ -461,8 +459,8 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_run.add_argument("--config", "-c", required=True, help="Config YAML file path")
 
     # ── init (Cloud API setup) ──
-    init = sub.add_parser("init", help="Configure Cloud API license key + verify connectivity")
-    init.add_argument("--key", required=True, help="License key (e.g. jba_live_xxx)")
+    init = sub.add_parser("init", help="Configure AgentMesh360 API key + verify connectivity")
+    init.add_argument("--key", required=True, help="AgentMesh360 API key from https://agentmesh360.com/app/")
     init.add_argument("--no-verify", action="store_true", help="Skip /v1/me verification (offline)")
 
     return parser
@@ -927,13 +925,13 @@ def _cmd_doctor_env(args: argparse.Namespace) -> None:
             "hint": chrome_hint_by_os.get(system, "Install Google Chrome from https://www.google.com/chrome/"),
         })
 
-    # 4. License configured
+    # 4. API key configured
     key = load_license_key()
     checks.append({
-        "name": "license_key",
+        "name": "api_key",
         "ok": bool(key),
         "value": (key[:14] + "...") if key else None,
-        "hint": None if key else "Run `jobagent init --key jba_live_xxx`",
+        "hint": None if key else "Run `jobagent init --key <your_api_key>` after registering at https://agentmesh360.com/app/",
     })
 
     # 5. Network to API
@@ -950,16 +948,16 @@ def _cmd_doctor_env(args: argparse.Namespace) -> None:
         "hint": None if api_ok else f"Cannot reach API: {api_msg}",
     })
 
-    # 6. License verifies (only if key configured + api reachable)
+    # 6. API key verifies (only if key configured + api reachable)
     if key and api_ok:
         try:
             cloud_client.me()
-            checks.append({"name": "license_valid", "ok": True})
+            checks.append({"name": "api_key_valid", "ok": True})
         except cloud_client.CloudError as e:
             checks.append({
-                "name": "license_valid",
+                "name": "api_key_valid",
                 "ok": False,
-                "hint": f"License rejected by server: {e}",
+                "hint": f"API key rejected by server: {e}",
             })
 
     all_ok = all(c["ok"] for c in checks)
@@ -971,7 +969,7 @@ def _cmd_doctor_env(args: argparse.Namespace) -> None:
 
 
 def _cmd_init(args: argparse.Namespace) -> None:
-    """Save license key and verify connectivity by calling /v1/me."""
+    """Save AgentMesh360 API key and verify connectivity by calling /v1/me."""
     from jobagent.infra import cloud_client
     from jobagent.infra.credentials import save_license_key, api_base_url
 
@@ -1000,12 +998,13 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "saved_to": str(path),
         "verified": True,
         "api_base": api_base_url(),
-        "license": info.get("license", {}),
+        "account": info.get("account", {}),
+        "credit": info.get("credit", info.get("license", {})),
         "server": info.get("server", {}),
         "next_suggested": "jobagent resume analyze --file <path-to-your-resume.pdf>",
     })
     print(
-        "\n✅ License configured. Next: analyze your resume with\n"
+        "\n✅ AgentMesh360 API key configured. Next: analyze your resume with\n"
         "   jobagent resume analyze --file <path-to-your-resume.pdf>\n",
         file=sys.stderr,
     )

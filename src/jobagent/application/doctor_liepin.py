@@ -152,17 +152,17 @@ def _cloud_license_check() -> CheckResult:
     key = load_license_key()
     if key:
         return CheckResult(
-            "cloud_license_configured",
+            "cloud_api_key_configured",
             True,
-            "Cloud license key is configured for Liepin rank/greet",
+            "AgentMesh360 API key is configured for Liepin rank/greet",
             {"key_prefix": key[:14] + "..."},
         )
     return CheckResult(
-        "cloud_license_configured",
+        "cloud_api_key_configured",
         False,
-        "Cloud license key is required for Liepin rank/greet",
+        "AgentMesh360 API key is required for Liepin rank/greet",
         {
-            "error": "license_required",
-            "hint": "Run `jobagent init --key jba_live_xxx`. Apply at https://jobagent.agentmesh360.com/#apply",
+            "error": "api_key_required",
+            "hint": "Run `jobagent init --key <your_api_key>`. Register at https://agentmesh360.com/app/",
         },
     )

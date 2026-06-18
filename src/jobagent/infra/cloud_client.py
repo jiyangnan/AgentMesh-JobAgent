@@ -33,16 +33,19 @@ class CloudError(Exception):
 
 
 class NotConfiguredError(CloudError):
-    """No license key found. User needs to run `jobagent init --key ...`."""
+    """No AgentMesh360 API key found. User needs to run `jobagent init --key ...`."""
 
 
 # Friendly Chinese hints for common error codes (GAP-17).
 FRIENDLY_HINTS: dict[str, str] = {
-    "missing_license": "未配置 license key。运行 `jobagent init --key jba_live_xxx`。",
-    "invalid_license": "license key 无效或已过期。请联系发 key 的人。",
-    "license_revoked": "license key 已被撤销。请联系发 key 的人重新签发。",
-    "license_expired": "license key 已过期。请联系发 key 的人续期。",
-    "quota_exceeded": "本月配额已用完。请联系发 key 的人提额或等下月重置。",
+    "missing_license": "未配置 AgentMesh360 API key。注册/登录 https://agentmesh360.com/app/ 后复制 API key，再运行 `jobagent init --key <your_api_key>`。",
+    "missing_api_key": "未配置 AgentMesh360 API key。注册/登录 https://agentmesh360.com/app/ 后复制 API key，再运行 `jobagent init --key <your_api_key>`。",
+    "invalid_license": "API key 无效或已过期。请从 AgentMesh360 账户面板重新复制。",
+    "invalid_api_key": "API key 无效或已过期。请从 AgentMesh360 账户面板重新复制。",
+    "license_revoked": "API key 已被撤销。请从 AgentMesh360 账户面板重新生成或联系支持。",
+    "license_expired": "API key 已过期。请从 AgentMesh360 账户面板重新生成或联系支持。",
+    "quota_exceeded": "当前 credit / 配额已用完。请前往 AgentMesh360 账户面板查看。",
+    "insufficient_credits": "当前 credit 不足。请前往 AgentMesh360 账户面板查看。",
     "llm_parse_failed": "云端 LLM 输出解析失败（已自动重试 1 次）。换个简历/重试通常可恢复；持续失败请反馈。",
     "llm_timeout": "云端 LLM 调用超时。稍后重试；持续超时请反馈。",
     "llm_failed": "云端 LLM 调用失败。稍后重试。",
@@ -69,7 +72,7 @@ def _request(
         key = load_license_key()
         if not key:
             raise NotConfiguredError(
-                "No license key configured. Run `jobagent init --key jba_live_xxx`."
+                "No AgentMesh360 API key configured. Run `jobagent init --key <your_api_key>` after registering at https://agentmesh360.com/app/."
             )
         headers["Authorization"] = f"Bearer {key}"
 

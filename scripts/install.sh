@@ -109,10 +109,11 @@ cat <<EOF
 
 Next steps:
 
-1. Get your license key from the project maintainer.
+1. Register or log in at https://agentmesh360.com/app/
+   then copy your AgentMesh360 API key from the account dashboard.
 
 2. Initialize:
-     jobagent init --key <jba_live_xxx>
+     jobagent init --key <your_api_key>
 
 3. Verify environment:
      jobagent doctor env
