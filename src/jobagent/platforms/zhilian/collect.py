@@ -119,7 +119,11 @@ class ZhilianReadOnlyCollector:
                 )
 
             remaining = max(1, limit - len(jobs))
-            snapshot = self._extract_snapshot(limit=remaining)
+            # When city filter is active, fetch 2× more cards per page to
+            # compensate for non-matching ones that will be filtered out
+            # (Zhilian's sou endpoint ignores URL city params server-side).
+            fetch_limit = remaining * 2 if city else remaining
+            snapshot = self._extract_snapshot(limit=fetch_limit)
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
             snapshots.append(snapshot)
@@ -142,6 +146,9 @@ class ZhilianReadOnlyCollector:
                 if not isinstance(card, dict):
                     continue
                 job = parse_zhilian_job(card, city_name=city)
+                # Apply city post-filter (Zhilian URL params don't filter server-side)
+                if not _city_matches(job.city, city):
+                    continue
                 key = _job_dedupe_key(job, card)
                 if key in seen:
                     continue
@@ -271,12 +278,58 @@ def _combined_snapshot(snapshots: list[dict[str, Any]], fallback: dict[str, Any]
 
 
 def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
+    """Build a stable dedup key for a Zhilian job.
+
+    Priority:
+      1. Explicit job id attribute on the card.
+      2. Job id extracted from URL path (/jobdetail/CCL...J....htm) — Zhilian
+         decorates the same job's URL with different query params per page
+         (refcode, srccode, preactionid, …).
+      3. Full URL fallback.
+      4. Name+company+city text fallback when no URL at all.
+    """
+    import re
+
     job_id = zhilian_job_id(raw)
     if job_id:
         return f"id:{job_id}"
     if job.url:
+        # Zhilian job URLs look like:
+        #   https://www.zhaopin.com/jobdetail/CCL1212903980J40854050007.htm?refcode=...
+        m = re.search(r"/jobdetail/([A-Z0-9]+)\.htm", job.url)
+        if m:
+            return f"job:{m.group(1)}"
         return f"url:{job.url}"
     return f"text:{job.name}|{job.company}|{job.city}"
+
+
+def _city_matches(job_city: str, requested_city: str) -> bool:
+    """Check whether a job's parsed city matches the user-requested city.
+
+    Zhilian's sou endpoint ignores URL city params server-side (jl= param is
+    accepted but doesn't filter results), so search results are a mix of
+    cities. This post-filter is the only reliable way to apply a city filter.
+
+    Matches when:
+      - No requested_city (filter disabled), OR
+      - job_city starts with requested_city (handles "北京" and "北京·朝阳区"), OR
+      - job_city is empty (permissive — better to over-include than drop).
+    """
+    if not requested_city:
+        return True
+    if not job_city:
+        return True  # don't drop cards with missing city field
+    # Zhilian uses "·" as city/area separator ("北京·朝阳区"), Liepin uses "-".
+    # Split on both to get just the top-level city.
+    for sep in ("·", "-"):
+        if sep in job_city:
+            job_city = job_city.split(sep)[0].strip()
+            break
+    for sep in ("·", "-"):
+        if sep in requested_city:
+            requested_city = requested_city.split(sep)[0].strip()
+            break
+    return job_city == requested_city
 
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:

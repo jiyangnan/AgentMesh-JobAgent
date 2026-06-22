@@ -193,6 +193,41 @@ with a real 2/2 delivered batch against 京东物流 HR.
   `test_liepin_session_check_reports_login_required` to assert the new
   `/sojob/` URL.
 
+## [Unreleased — Zhilian beta pipeline] — 2026-06-22
+
+The Zhilian vertical chain worked end-to-end out of the box (20 jobs →
+5/5 delivered), but `--city` filter was silently ignored: 20 jobs came
+back spread across 12 cities (only 4 in 北京). Two issues fixed.
+
+### Fixed
+
+#### 1. City filter not actually applied
+- **Symptom**: `zhilian collect --city 北京` returned jobs from 上海/合肥/
+  青岛/厦门/石家庄/重庆/保定/长春/福州/佛山/广州 — only 4 of 20 were in 北京.
+- **Cause**: Zhilian's `sou.zhaopin.com` endpoint accepts the `jl=` URL
+  param but doesn't filter results server-side. Same pattern as Liepin.
+- **Fix**: added `_city_matches` Python post-filter on parsed `Job.city`.
+  Handles Zhilian's `·` separator ("北京·朝阳区") in addition to `-`.
+  Doubled snapshot fetch limit when city filter is active.
+
+#### 2. Pagination dedup used full URL string
+- **Symptom (latent)**: same job on different pages would have different
+  URLs (Zhilian decorates with `refcode=`, `srccode=`, `preactionid=`),
+  so URL-based dedup would treat them as different.
+- **Fix**: extract `/jobdetail/<ALNUM>.htm` from URL, use `job:<id>` as
+  dedup key. Falls back to full URL only if regex doesn't match.
+
+### Documentation
+
+- `ZhilianApplySender` docstring explicitly documents that:
+  - Zhilian has no Boss-style greeting chat flow.
+  - The only contact mechanism is "立即投递" (submit resume).
+  - Generated greetings are handoff-only (used by `zhilian apply open`
+    for human copy-paste), NOT auto-sent by `apply send`.
+  - The `zhilian_greeting_not_supported` step reporting
+    `zhilian_resume_submit_has_no_message_editor` on every healthy
+    Zhilian job page is **expected behavior, not a bug**.
+
 ## [0.2.1] — 2026-06-15
 
 ### Changed

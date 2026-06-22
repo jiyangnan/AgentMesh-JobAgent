@@ -144,6 +144,27 @@ class ZhilianApplyOpener:
 
 
 class ZhilianApplySender:
+    """Submit resumes to Zhilian jobs via "立即投递".
+
+    Zhilian UX differs fundamentally from Boss直聘:
+      - **No greeting-based chat flow.** Zhilian's contact mechanism on a job
+        page is "立即投递" (submit the resume bound to the user's Zhilian
+        account). The "立即沟通" button exists but opens a separate IM
+        channel that doesn't accept an outbound greeting on first contact.
+      - **Greeting is handoff-only.** ``zhilian greet preview`` generates a
+        personalized greeting, but it is NOT auto-sent by this sender. The
+        greeting is emitted into the JSON ``handoff`` field for the
+        ``zhilian apply open`` flow, where the human user manually copies
+        it into whatever channel they choose.
+      - **This sender does ONE thing: click 立即投递 to submit the resume.**
+        The ``message`` parameter is accepted for API symmetry with Boss
+        but is not delivered to the recruiter.
+
+    The ``zhilian_greeting_not_supported`` step in ``_drive_dialog`` will
+    report ``zhilian_resume_submit_has_no_message_editor`` on every healthy
+    Zhilian job page — that is expected behavior, not a bug.
+    """
+
     def __init__(self, driver: Any | None = None, audit_log: ZhilianAuditLog | None = None):
         self.driver = driver
         self.audit_log = audit_log or ZhilianAuditLog()
