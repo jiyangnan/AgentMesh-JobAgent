@@ -82,9 +82,19 @@ def execute_boss_greeting_flow(
         attempt.steps = steps
         return attempt
     if not editor_result.get("editorFound"):
-        attempt.error = "chat_editor_not_found"
-        attempt.steps = steps
-        return attempt
+        # Editor selector didn't match. But if we have evidence the chat sidebar
+        # is open (chatContainer or sendFound), the conversation IS established —
+        # Boss's DOM may have changed and our selector is stale. Try fill+send
+        # anyway: fill_chat_message has its own editor-finding logic.
+        chat_open_signals = (
+            editor_result.get("chatContainer")
+            or editor_result.get("sendFound")
+        )
+        if not chat_open_signals:
+            attempt.error = "chat_editor_not_found"
+            attempt.steps = steps
+            return attempt
+        # Fall through and try fill+send with whatever editor fill_chat_message can find.
 
     fill_result = driver.fill_chat_message(message)
     steps.append({"step": "fill_chat_message", **fill_result})

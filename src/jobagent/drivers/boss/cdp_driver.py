@@ -73,6 +73,96 @@ class CDPBossDriver(BossActionDriver):
 
     # ── BossActionDriver interface ──────────────────────────
 
+    def _cdp_click_at(self, x: float, y: float, retries: int = 3) -> None:
+        """Send a real hardware-level mouse click at viewport coords (x, y).
+
+        Uses CDP Input.dispatchMouseEvent which produces isTrusted=true events.
+        Boss's anti-automation silently drops synthetic dispatchEvent(MouseEvent)
+        calls, so this is required for any click that triggers real platform
+        behavior (立即沟通, 继续沟通, etc.).
+
+        Retries on CDP timeout — under rapid sequential operations Chrome's CDP
+        channel can briefly stall (response arrives after the 30s timeout),
+        even though the underlying browser is healthy. A short backoff + retry
+        resolves this without manual intervention.
+        """
+        self._ensure_connected()
+        last_err: Exception | None = None
+        for attempt in range(retries):
+            try:
+                self.cdp.send("Input.dispatchMouseEvent", {
+                    "type": "mouseMoved", "x": x, "y": y, "button": "none",
+                })
+                self.cdp.send("Input.dispatchMouseEvent", {
+                    "type": "mousePressed", "x": x, "y": y,
+                    "button": "left", "clickCount": 1,
+                })
+                self.cdp.send("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased", "x": x, "y": y,
+                    "button": "left", "clickCount": 1,
+                })
+                return  # success
+            except Exception as e:
+                last_err = e
+                # Brief backoff before retry; CDP stalls are usually transient
+                time.sleep(2.0 * (attempt + 1))
+        # All retries exhausted — re-raise so caller can record the failure
+        if last_err:
+            raise last_err
+
+    def _find_clickable_by_text(self, texts: list[str]) -> dict[str, Any]:
+        """Find the most specific visible element whose trimmed text matches one
+        of `texts`, and return its viewport center coordinates.
+
+        Boss renders the "立即沟通" button as nested elements (a.btn-startchat
+        wrapping a span). To avoid clicking the wrapper and the inner span at
+        the same position, we pick the smallest visible element by area.
+
+        Returns: {"ok": true, "x":, "y":, "text":, "tag":, "cls":} or
+                 {"ok": false, "error": "not_found"}.
+        """
+        js = """
+        (function(texts){
+          var matches = [];
+          var all = document.querySelectorAll('a,button,div,span');
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            var t = (el.innerText || el.textContent || '').trim();
+            if (texts.indexOf(t) < 0) continue;
+            // Must be visible & have meaningful size
+            var rect = el.getBoundingClientRect();
+            if (rect.width < 20 || rect.height < 10) continue;
+            var cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) continue;
+            matches.push({
+              text: t, tag: el.tagName,
+              cls: (el.className || '').toString().slice(0, 100),
+              x: rect.left + rect.width/2,
+              y: rect.top + rect.height/2,
+              area: rect.width * rect.height
+            });
+          }
+          if (!matches.length) return JSON.stringify({ok: false, error: 'not_found'});
+          // Pick the smallest-area match — usually the innermost clickable element
+          matches.sort(function(a, b){ return a.area - b.area; });
+          return JSON.stringify({ok: true, pick: matches[0], all: matches.length});
+        })(%s)
+        """ % json.dumps(texts)
+        try:
+            result = self.cdp.evaluate(js)
+            data = json.loads(result.get("result", {}).get("value", "{}"))
+            if not data.get("ok"):
+                return data
+            pick = data["pick"]
+            return {
+                "ok": True,
+                "x": pick["x"], "y": pick["y"],
+                "text": pick["text"], "tag": pick["tag"], "cls": pick["cls"],
+                "candidates": data["all"],
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def chrome_running(self) -> bool:
         return self.manager.is_running()
 
@@ -114,8 +204,15 @@ class CDPBossDriver(BossActionDriver):
           const txt = document.body ? (document.body.innerText || '') : '';
           const title = document.title || '';
           const href = location.href || '';
-          const loginDialog = !!document.querySelector('.sign-content, .login-dialog, .passport-login-container, .dialog-wrap .sign-form');
-          const qrLoginDialog = !![...document.querySelectorAll('div,span,p')].find(x => /扫码登录|请在App端确认登录|发送验证码/.test((x.innerText||x.textContent||'').trim()));
+          function _isVisible(el){
+            if(!el) return false;
+            const cs = getComputedStyle(el);
+            if(cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 10 && rect.height > 10;
+          }
+          const loginDialog = [...document.querySelectorAll('.sign-content, .login-dialog, .passport-login-container, .dialog-wrap .sign-form')].some(_isVisible);
+          const qrLoginDialog = [...document.querySelectorAll('div,span,p')].filter(_isVisible).find(x => /扫码登录|请在App端确认登录|发送验证码/.test((x.innerText||x.textContent||'').trim()));
           const userNav = !!document.querySelector('.user-nav');
           const geekNav = !![...document.querySelectorAll('a,span,div')].find(x => ['消息','简历','职位'].includes((x.innerText||x.textContent||'').trim()));
           const resumeActions = !![...document.querySelectorAll('a,button,div')].find(x => /完善在线简历|新增附件简历/.test((x.innerText||x.textContent||'').trim()));
@@ -142,136 +239,249 @@ class CDPBossDriver(BossActionDriver):
             return {"ok": False, "error": str(e)}
 
     def click_chat_entry(self) -> dict[str, Any]:
-        """Click the '立即沟通' button and handle the popup dialog.
+        """Click the '立即沟通' button with a real hardware-level mouse event.
 
-        After clicking 立即沟通, a popup "已向BOSS发送消息" may appear.
-        We must click "继续沟通" in that popup to open the chat sidebar.
-        If no popup appears, treat the state as ambiguous rather than sent.
+        Boss's anti-automation silently drops synthetic dispatchEvent(MouseEvent)
+        calls (isTrusted=false), so we MUST use CDP Input.dispatchMouseEvent
+        (isTrusted=true) for any click that triggers real platform behavior.
 
-        Matches boss-radar's verified 6-step flow (2026-05-07).
+        Strategy:
+        1. Locate the chat button via Boss's canonical class .btn-startchat
+           (most reliable; falls back to text matching if missing).
+        2. Send real CDP mouse press/release at its viewport center.
+        3. Poll for either:
+           - the "继续沟通" popup (shown after auto-greeting), click it, OR
+           - the chat sidebar opening (editor / send button visible).
+        4. Stop on risk-control redirect.
         """
         self._ensure_connected()
-        # Step 1: click 立即沟通
-        click_js = """
+
+        # Risk-control check first
+        try:
+            cur = self.cdp.evaluate("JSON.stringify({href: location.href})")
+            cur_href = json.loads(cur.get("result", {}).get("value", "{}")).get("href", "")
+            if "verify" in cur_href or "code=36" in cur_href:
+                return {"ok": False, "step": "risk_control", "url": cur_href}
+        except Exception:
+            pass
+
+        # Step 1: locate chat button via canonical selector, fallback to text
+        locate_js = """
         (function(){
-          var all = document.querySelectorAll('*');
-          for (var i = all.length - 1; i >= 0; i--) {
-            var text = (all[i].innerText || all[i].textContent || '').trim();
-            if (['立即沟通', '继续沟通', '继续聊', '开聊', '沟通'].indexOf(text) >= 0) {
-              all[i].dispatchEvent(new MouseEvent('click', {
-                bubbles: true, cancelable: true, view: window
-              }));
-              return JSON.stringify({ok: true, step: 'clicked_' + text});
+          function visible(el){
+            if(!el) return false;
+            var cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return false;
+            var rect = el.getBoundingClientRect();
+            return rect.width > 20 && rect.height > 10;
+          }
+          // Preferred: Boss's canonical chat button class
+          var candidates = document.querySelectorAll('a.btn-startchat, .btn-startchat, .btn-startchat-wrap');
+          for (var i = 0; i < candidates.length; i++) {
+            if (visible(candidates[i])) {
+              var rect = candidates[i].getBoundingClientRect();
+              return JSON.stringify({
+                ok: true, source: 'class_btn-startchat',
+                text: (candidates[i].innerText || '').trim(),
+                cls: (candidates[i].className || '').toString().slice(0, 80),
+                x: rect.left + rect.width/2, y: rect.top + rect.height/2
+              });
             }
           }
-          // Fallback: href matching
-          var links = document.querySelectorAll('a[href*="opchat"], a[href*="chat"]');
-          if (links.length > 0) {
-            links[0].dispatchEvent(new MouseEvent('click', {
-              bubbles: true, cancelable: true, view: window
-            }));
-            return JSON.stringify({ok: true, step: 'clicked_chat_fallback'});
+          // Fallback: visible text matching, prefer larger-area (main button)
+          var texts = ['立即沟通', '继续沟通', '继续聊', '开聊'];
+          var matches = [];
+          var all = document.querySelectorAll('a,button,div,span');
+          for (var j = 0; j < all.length; j++) {
+            var el = all[j];
+            var t = (el.innerText || el.textContent || '').trim();
+            if (texts.indexOf(t) < 0) continue;
+            if (!visible(el)) continue;
+            var r = el.getBoundingClientRect();
+            matches.push({text: t, cls: (el.className || '').toString().slice(0, 80),
+                          x: r.left + r.width/2, y: r.top + r.height/2,
+                          area: r.width * r.height});
           }
-          return JSON.stringify({ok: false, step: 'no_chat_entry'});
+          if (!matches.length) return JSON.stringify({ok: false, error: 'not_found'});
+          // Pick LARGEST area (main button is bigger than any sidebar/recommendation badge)
+          matches.sort(function(a, b){ return b.area - a.area; });
+          var p = matches[0];
+          return JSON.stringify({ok: true, source: 'text_fallback', text: p.text,
+                                 cls: p.cls, x: p.x, y: p.y});
         })()
         """
         try:
-            result = self.cdp.evaluate(click_js)
-            click_data = json.loads(result.get("result", {}).get("value", "{}"))
-            if not click_data.get("ok"):
-                return click_data
-
-            # Step 2: wait for popup and click 继续沟通 (up to 5 retries, 1s each)
-            for attempt in range(5):
-                time.sleep(1)
-                popup_js = """
-                (function(){
-                  var all = document.querySelectorAll('*');
-                  for (var i = all.length - 1; i >= 0; i--) {
-                    var text = (all[i].innerText || all[i].textContent || '').trim();
-                    if (text === '继续沟通') {
-                      all[i].dispatchEvent(new MouseEvent('click', {
-                        bubbles: true, cancelable: true, view: window
-                      }));
-                      return JSON.stringify({
-                        ok: true, step: 'clicked_继续沟通', autoSent: false
-                      });
-                    }
-                  }
-                  // Chat sidebar already open?
-                  var editor = document.querySelector('.chat-input');
-                  if (editor) {
-                    return JSON.stringify({
-                      ok: true, step: 'chat_opened', autoSent: false
-                    });
-                  }
-                  // Risk-control redirect?
-                  var href = location.href || '';
-                  if (href.indexOf('verify') >= 0 || href.indexOf('code=36') >= 0) {
-                    return JSON.stringify({
-                      ok: false, step: 'risk_control', url: href
-                    });
-                  }
-                  return JSON.stringify({ok: false, step: 'no_popup_yet'});
-                })()
-                """
-                popup_result = self.cdp.evaluate(popup_js)
-                popup_data = json.loads(popup_result.get("result", {}).get("value", "{}"))
-                if popup_data.get("ok"):
-                    click_data.update(popup_data)
-                    return click_data
-                if popup_data.get("step") == "risk_control":
-                    return popup_data
-
-            # No popup found after 5s. Opening a chat page is not evidence that
-            # Boss sent the greeting, so leave delivery to the explicit flow.
-            click_data["autoSent"] = False
-            click_data["step"] = "no_popup_after_click"
-            return click_data
+            result = self.cdp.evaluate(locate_js)
+            target = json.loads(result.get("result", {}).get("value", "{}"))
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "step": "locate_failed", "error": str(e)}
 
-    def inspect_chat_editor(self) -> dict[str, Any]:
-        """Inspect the chat editor and send button.
+        if not target.get("ok"):
+            return {"ok": False, "step": "no_chat_entry", "error": target.get("error", "not_found")}
 
-        Waits for the sidebar chat panel to load. If no editor is found, return
-        an ambiguous non-delivered state; opening chat alone is not delivery.
-        """
-        self._ensure_connected()
-        # Poll for editor appearance (up to 15 attempts, ~0.8s each = ~12s)
-        for _attempt in range(15):
-            js = """
+        try:
+            self._cdp_click_at(target["x"], target["y"])
+        except Exception as e:
+            return {"ok": False, "step": "click_failed", "error": str(e)}
+
+        clicked_text = target.get("text", "")
+        clicked_source = target.get("source", "")
+        popup_clicked = False  # track to avoid re-clicking 继续沟通 on each poll
+
+        # Step 2: poll up to 8s for sidebar open OR 继续沟通 popup.
+        # (Don't early-return even if "继续沟通" was clicked — sidebar may still
+        # need time to render, and a stray "继续沟通" element could be clicked
+        # by mistake; only the sidebar-open signal counts as success.)
+        for attempt in range(8):
+            time.sleep(1)
+            # Risk-control check
+            try:
+                href_data = self.cdp.evaluate("JSON.stringify({href: location.href})")
+                href = json.loads(href_data.get("result", {}).get("value", "{}")).get("href", "")
+                if "verify" in href or "code=36" in href:
+                    return {"ok": False, "step": "risk_control", "url": href}
+            except Exception:
+                pass
+
+            # Check for 继续沟通 popup (only when we initially clicked 立即沟通,
+            # and only once per session — once clicked, set popup_clicked to
+            # avoid sending duplicate clicks).
+            if clicked_text == "立即沟通" and not popup_clicked:
+                popup = self._find_clickable_by_text(["继续沟通"])
+                if popup.get("ok"):
+                    try:
+                        self._cdp_click_at(popup["x"], popup["y"])
+                        popup_clicked = True
+                        time.sleep(0.5)
+                        # After clicking 继续沟通, fall through to detect sidebar
+                    except Exception as e:
+                        return {"ok": False, "step": "popup_click_failed", "error": str(e)}
+
+            # Check for chat sidebar open
+            sidebar_js = """
             (function(){
-              // Prefer class containing 'chat-input', fallback to contenteditable
-              var editor = null;
-              var all = document.querySelectorAll('*');
-              for (var i = 0; i < all.length; i++) {
-                if (all[i].className && typeof all[i].className === 'string'
-                    && all[i].className.indexOf('chat-input') >= 0) {
-                  editor = all[i]; break;
-                }
+              function visible(el){
+                if(!el) return false;
+                var cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return false;
+                var rect = el.getBoundingClientRect();
+                return rect.width > 10 && rect.height > 5;
               }
-              if (!editor) {
-                var editables = document.querySelectorAll('[contenteditable="true"]');
-                if (editables.length > 0) editor = editables[0];
+              var editorSelectors = ['.chat-input', '.edit-input', '.message-input',
+                                     '[contenteditable="true"].chat-input',
+                                     '[contenteditable="true"]', '[contenteditable]'];
+              var editor = null;
+              for (var s = 0; s < editorSelectors.length; s++) {
+                var found = document.querySelector(editorSelectors[s]);
+                if (found && visible(found)) { editor = found; break; }
               }
               var send = null;
               var btns = document.querySelectorAll('button');
               for (var j = 0; j < btns.length; j++) {
-                var t = (btns[j].innerText || '').trim();
-                if (t === '\u53d1\u9001') { send = btns[j]; break; }
+                if ((btns[j].innerText || '').trim() === '发送' && visible(btns[j])) { send = btns[j]; break; }
               }
-              if (!send) send = document.querySelector('.btn-send');
-              var loginDialog = !!document.querySelector('.sign-content, .login-dialog, .passport-login-container');
+              if (!send) {
+                var sc = document.querySelectorAll('.btn-send, button.btn-send');
+                for (var k = 0; k < sc.length; k++) if (visible(sc[k])) { send = sc[k]; break; }
+              }
+              return JSON.stringify({
+                hasEditor: !!editor,
+                hasSend: !!send
+              });
+            })()
+            """
+            try:
+                sidebar_result = self.cdp.evaluate(sidebar_js)
+                sidebar = json.loads(sidebar_result.get("result", {}).get("value", "{}"))
+                if sidebar.get("hasEditor") or sidebar.get("hasSend"):
+                    return {"ok": True, "step": "chat_sidebar_open",
+                            "autoSent": False, "clicked_text": clicked_text}
+            except Exception:
+                pass
+
+        # Click was sent (real hardware event) but sidebar didn't open within 8s.
+        # Boss may have established the conversation server-side without showing
+        # the sidebar (or the sidebar uses unknown selectors). Leave delivery to
+        # the explicit fill+send flow — it has its own editor-finding fallback.
+        return {"ok": True, "step": "no_sidebar_after_click", "autoSent": False,
+                "clicked_text": clicked_text, "clicked_source": clicked_source}
+
+    def inspect_chat_editor(self) -> dict[str, Any]:
+        """Inspect the chat editor and send button.
+
+        Waits for the sidebar chat panel to load. Returns the state with
+        multiple signals (editorFound, sendFound, chatOpened) so callers can
+        decide how aggressively to retry.
+
+        Boss's chat sidebar DOM varies across versions — selectors we try:
+        - .chat-input (legacy)
+        - .edit-input / .message-input (newer)
+        - [contenteditable="true"] (universal fallback)
+        - [contenteditable] without value (defensive)
+        """
+        self._ensure_connected()
+        # Poll for editor appearance (up to 20 attempts, ~0.8s each = ~16s)
+        last_data: dict[str, Any] = {}
+        for _attempt in range(20):
+            js = """
+            (function(){
+              function visible(el){
+                if(!el) return false;
+                var cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return false;
+                var rect = el.getBoundingClientRect();
+                return rect.width > 10 && rect.height > 5;
+              }
+              // Try multiple editor selectors
+              var editor = null;
+              var editorSource = '';
+              var editorSelectors = [
+                '.chat-input', '.edit-input', '.message-input',
+                '[contenteditable="true"].chat-input',
+                '[contenteditable="true"]',
+                '[contenteditable]'
+              ];
+              for (var s = 0; s < editorSelectors.length; s++) {
+                var found = document.querySelector(editorSelectors[s]);
+                if (found && visible(found)) {
+                  editor = found; editorSource = editorSelectors[s]; break;
+                }
+              }
+              // Send button
+              var send = null;
+              var btns = document.querySelectorAll('button');
+              for (var j = 0; j < btns.length; j++) {
+                var t = (btns[j].innerText || '').trim();
+                if (t === '发送' && visible(btns[j])) { send = btns[j]; break; }
+              }
+              if (!send) {
+                var sendCandidates = document.querySelectorAll('.btn-send, button.btn-send');
+                for (var k = 0; k < sendCandidates.length; k++) {
+                  if (visible(sendCandidates[k])) { send = sendCandidates[k]; break; }
+                }
+              }
+              // Detect chat sidebar container (signals "chat opened" even without editor)
+              var chatContainer = !!(document.querySelector('.chat-message, .chat-conversation, .chat-footer, .chat-wrap, .main-message, .message-content'));
+              // Login dialog (visibility-checked)
+              var loginDialog = (function(){
+                var candidates = document.querySelectorAll('.sign-content, .login-dialog, .passport-login-container');
+                for (var k = 0; k < candidates.length; k++) {
+                  var el = candidates[k];
+                  if (visible(el)) return true;
+                }
+                return false;
+              })();
               var href = location.href || '';
               var riskControl = href.indexOf('verify') >= 0 || href.indexOf('code=36') >= 0;
               return JSON.stringify({
                 ok: true,
                 editorFound: !!editor,
+                editorSource: editorSource,
                 editorTag: editor ? editor.tagName : '',
-                editorClass: editor ? (editor.className || '') : '',
+                editorClass: editor ? (editor.className || '').toString().slice(0, 100) : '',
                 sendFound: !!send,
-                sendClass: send ? (send.className || '') : '',
+                sendClass: send ? (send.className || '').toString().slice(0, 80) : '',
+                chatContainer: chatContainer,
                 loginDialog: loginDialog,
                 riskControl: riskControl,
                 href: href
@@ -281,6 +491,7 @@ class CDPBossDriver(BossActionDriver):
             try:
                 result = self.cdp.evaluate(js)
                 data = json.loads(result.get("result", {}).get("value", "{}"))
+                last_data = data
                 if data.get("riskControl"):
                     return {"ok": False, "error": "risk_control", "url": data.get("href", "")}
                 if data.get("loginDialog"):
@@ -290,10 +501,13 @@ class CDPBossDriver(BossActionDriver):
             except Exception:
                 pass
             time.sleep(0.8)
-        # Editor not found after waiting. This can mean the page opened without a
-        # writable chat editor, but it does not prove the greeting was sent.
-        return {"ok": True, "autoSent": False, "editorFound": False,
-                "step": "editor_not_found"}
+        # Editor not found after waiting. Return rich state so caller can decide
+        # whether to retry with alternative flow (e.g., if chatContainer=true &
+        # sendFound=true, the conversation IS open — just the editor selector
+        # doesn't match. Caller should try fill+send anyway.)
+        last_data["autoSent"] = False
+        last_data["step"] = "editor_not_found"
+        return last_data
 
     def fill_chat_message(self, message: str) -> dict[str, Any]:
         """Fill the chat input with the given message.
@@ -544,9 +758,18 @@ class CDPBossDriver(BossActionDriver):
             : '';
           var hasMsg = index >= 0;
           var hasDeliveredNearMsg = /\\[?送达\\]?|已送达|\\[?已读\\]?/.test(around);
+          // Delivery signal priority:
+          //   1. Strong: message text appears in chat body AND editor is empty
+          //      (text was sent, not still being typed).
+          //   2. Bonus: explicit "送达" / "已读" marker near the message
+          //      (Boss may delay or omit this — recipients must read first).
+          // Prior versions required (hasMsg && hasDeliveredNearMsg), which fails
+          // for newly-sent messages where Boss hasn't yet shown 送达. That left
+          // every freshly-sent greeting stuck in "delivery_not_verified" limbo.
+          var delivered = hasMsg && !stillInEditor;
           return JSON.stringify({{
             ok: true,
-            delivered: hasMsg && hasDeliveredNearMsg,
+            delivered: delivered,
             stillInEditor,
             hasMsg,
             hasDeliveredNearMsg,
