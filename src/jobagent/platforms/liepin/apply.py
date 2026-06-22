@@ -171,7 +171,28 @@ class LiepinApplyOpener:
 
 
 class LiepinApplySender:
-    """Send/apply to Liepin jobs with platform-owned page automation."""
+    """Send/apply to Liepin jobs with platform-owned page automation.
+
+    Liepin UX differs fundamentally from Boss直聘:
+      - **No greeting-based chat flow.** Liepin doesn't have a Boss-style
+        "打招呼 → 进聊天 → 发招呼语" loop. The only contact mechanism on
+        a Liepin job page is "立即投递" (submit resume). The "聊一聊"
+        button (when present) requires a pre-existing relationship and
+        isn't an outbound greeting channel.
+      - **Greeting is handoff-only.** ``liepin greet preview`` generates
+        a personalized greeting, but it is NOT auto-sent by this sender.
+        The greeting is emitted into the JSON ``handoff`` field for the
+        ``liepin apply open`` flow, where the human user manually copies
+        it into whatever channel they choose (manual 聊一聊, email, etc.).
+      - **This sender does ONE thing: click 立即投递 to submit the
+        resume that's bound to the user's Liepin account.** No message
+        is sent. The ``message`` parameter is accepted for API symmetry
+        with Boss but is not delivered to the recruiter.
+
+    The ``fill_liepin_message`` step in ``_drive_dialog`` will report
+    ``editor_not_found`` on every healthy Liepin job page — that is
+    expected behavior, not a bug.
+    """
 
     def __init__(
         self,
@@ -437,6 +458,14 @@ def _liepin_apply_inspect_script() -> str:
 
 
 def _liepin_apply_click_entry_script() -> str:
+    """Return JS that clicks the primary apply/contact entry button.
+
+    Label order matters: 立即投递 variants come FIRST because Liepin only
+    supports resume submission (no Boss-style greeting chat). 聊一聊 /
+    立即沟通 are listed only as last-resort fallbacks for edge cases
+    where a job page shows only a chat entry (rare); they are NOT used
+    for sending greetings automatically.
+    """
     return r"""
     (function(){
       const labels = [

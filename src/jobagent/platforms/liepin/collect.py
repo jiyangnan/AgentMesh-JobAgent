@@ -18,12 +18,21 @@ from .selectors import build_liepin_snapshot_script
 
 
 def build_liepin_search_url(query: str, city: str = "", page: int = 1) -> str:
-    """Build a human-search URL for the live read-only spike."""
-    url = f"https://www.liepin.com/zhaopin/?key={quote(query)}"
+    """Build a human-search URL for the live read-only spike.
+
+    Path: /sojob/ (not /zhaopin/).
+      The /zhaopin/ path is a SEO landing page that returns 0 results when
+      accessed under a logged-in session (Liepin shows "非常抱歉！暂时没有
+      合适的职位"). /sojob/ is the real search endpoint.
+
+    City param: &city=<name>.
+      Older formats (&dq=<name>) get silently dropped by Liepin's redirect.
+    """
+    url = f"https://www.liepin.com/sojob/?key={quote(query)}"
     if city:
-        url += f"&dq={quote(city)}"
+        url += f"&city={quote(city)}"
     if page > 1:
-        url += f"&currentPage={page}"
+        url += f"&curPage={page}"
     return url
 
 
@@ -84,7 +93,14 @@ class LiepinReadOnlyCollector:
         pages: int = 1,
         page_delay: float = 3.0,
     ) -> LiepinCollectResult:
-        """Open one or more Liepin search pages and extract visible job cards."""
+        """Open one or more Liepin search pages and extract visible job cards.
+
+        City filtering: Liepin's sojob endpoint silently ignores URL city
+        params (city=, cityCode=, dq= all return the same mixed-city results).
+        We apply a Python-side post-filter on the parsed ``city`` field instead.
+        To compensate for cards dropped by the filter, we request more cards
+        per page from the snapshot script (2× the user's limit).
+        """
         if not query:
             raise ValueError("query is required for live Liepin read-only collect")
 
@@ -116,7 +132,10 @@ class LiepinReadOnlyCollector:
                 )
 
             remaining = max(1, limit - len(jobs))
-            snapshot = self._extract_snapshot(limit=remaining)
+            # When city filter is active, fetch 2× more cards per page to
+            # compensate for non-matching ones that will be filtered out.
+            fetch_limit = remaining * 2 if city else remaining
+            snapshot = self._extract_snapshot(limit=fetch_limit)
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
             snapshots.append(snapshot)
@@ -144,6 +163,9 @@ class LiepinReadOnlyCollector:
                 if not isinstance(card, dict):
                     continue
                 job = parse_liepin_job(card, city_name=city)
+                # Apply city post-filter (Liepin URL params don't filter server-side)
+                if not _city_matches(job.city, city):
+                    continue
                 key = _job_dedupe_key(job, card)
                 if key in seen:
                     continue
@@ -200,12 +222,48 @@ def _combined_snapshot(
 
 
 def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
+    """Build a stable dedup key for a Liepin job.
+
+    Priority:
+      1. Explicit jobId attribute on the card (rare on current Liepin DOM).
+      2. Job ID extracted from URL path (/job/<id>.shtml). This is critical
+         because Liepin decorates the same job's URL with different query
+         params per page (d_posi, skId, fkId, ckId, curPage, index, …).
+         Using the full URL as key treated the same job on page 1 and page 2
+         as different, inflating counts and defeating pagination dedup.
+      3. Full URL fallback (last resort).
+      4. Name+company+city text fallback when no URL at all.
+    """
+    import re
+
     job_id = liepin_job_id(raw)
     if job_id:
         return f"id:{job_id}"
     if job.url:
+        m = re.search(r"/job/(\d+)\.shtml", job.url)
+        if m:
+            return f"job:{m.group(1)}"
         return f"url:{job.url}"
     return f"text:{job.name}|{job.company}|{job.city}"
+
+
+def _city_matches(job_city: str, requested_city: str) -> bool:
+    """Check whether a job's parsed city matches the user-requested city.
+
+    Liepin's sojob endpoint ignores URL city params server-side, so the
+    search results are a mix of cities. This post-filter is the only
+    reliable way to apply a city filter.
+
+    Matches when:
+      - No requested_city (filter disabled), OR
+      - job_city starts with requested_city (handles "北京" and "北京-朝阳区"), OR
+      - Either side is empty (permissive — better to over-include than drop).
+    """
+    if not requested_city:
+        return True
+    if not job_city:
+        return True  # don't drop cards with missing city field
+    return job_city.split("-")[0].strip() == requested_city.split("-")[0].strip()
 
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:

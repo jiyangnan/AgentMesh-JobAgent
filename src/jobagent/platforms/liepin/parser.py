@@ -35,12 +35,21 @@ def liepin_job_id(raw: dict[str, Any]) -> str:
 
 
 def parse_liepin_job(raw: dict[str, Any], city_name: str = "") -> Job:
-    """Parse a Liepin job row into the shared Job model."""
+    """Parse a Liepin job row into the shared Job model.
+
+    ``city_name`` is the user-requested city (e.g., "北京"). It is used ONLY as
+    a fallback when the card itself doesn't expose a city — Liepin's sojob
+    endpoint ignores URL city params server-side, so cards frequently come
+    from mixed cities. The parser prefers the card's own city field so the
+    caller can post-filter accurately.
+    """
     job_id = liepin_job_id(raw)
     company = _first(raw, "companyName", "company", "compName", "company_name")
     title = _first(raw, "title", "jobTitle", "jobName", "positionName")
     salary = _first(raw, "salary", "salaryText", "salaryDesc", "salaryLabel")
-    city = city_name or _first(raw, "city", "cityName", "dq")
+    # Card's own city wins over the user-requested city_name. The requested
+    # city is only a fallback for cards that don't expose any location field.
+    city = _first(raw, "city", "cityName", "dq") or city_name
     area = _join_non_empty([
         _first(raw, "district", "districtName"),
         _first(raw, "businessArea", "businessDistrict"),
