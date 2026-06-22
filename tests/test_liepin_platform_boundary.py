@@ -397,11 +397,13 @@ def test_liepin_search_url_encodes_query_and_city():
     url = build_liepin_search_url("AI产品", "深圳")
     page_url = build_liepin_search_url("AI产品", "深圳", page=3)
 
-    assert url.startswith("https://www.liepin.com/zhaopin/?")
+    # URL contract: /sojob/ path (not /zhaopin/ which returns 0 results logged-in),
+    # city= param (not dq= which Liepin silently drops).
+    assert url.startswith("https://www.liepin.com/sojob/?")
     assert "key=AI" in url
-    assert "dq=" in url
-    assert "currentPage=" not in url
-    assert "currentPage=3" in page_url
+    assert "city=" in url
+    assert "curPage=" not in url
+    assert "curPage=3" in page_url
 
 
 def test_liepin_live_read_only_collector_uses_visible_cards_only():
@@ -417,7 +419,7 @@ def test_liepin_live_read_only_collector_uses_visible_cards_only():
     assert result.mode == "live_read_only"
     assert result.jobs[0].platform == "liepin"
     assert result.jobs[0].name == "AI商业化产品经理"
-    assert driver.calls[0].startswith("open:https://www.liepin.com/zhaopin/")
+    assert driver.calls[0].startswith("open:https://www.liepin.com/sojob/")
     assert driver.calls[-1] == "extract_snapshot"
     assert LIEPIN_SELECTOR_VERSION in driver.last_js
 
@@ -439,7 +441,7 @@ def test_liepin_live_read_only_collector_fetches_pages_and_dedupes():
     assert result.pages == 2
     assert [job.name for job in result.jobs] == ["AI商业化产品经理", "AI Agent 产品负责人"]
     assert len(driver.urls) == 2
-    assert "currentPage=2" in driver.urls[1]
+    assert "curPage=2" in driver.urls[1]
     assert result.snapshot["pages"][0]["page"] == 1
     assert result.snapshot["pages"][1]["page"] == 2
 
@@ -492,7 +494,7 @@ def test_liepin_session_check_reports_login_required():
     assert status.logged_in is False
     assert status.login_required is True
     assert status.to_dict()["next_suggested"] == "jobagent liepin login"
-    assert driver.calls[0].startswith("open:https://www.liepin.com/zhaopin/")
+    assert driver.calls[0].startswith("open:https://www.liepin.com/sojob/")
     assert driver.calls[-1] == "inspect_session"
 
 

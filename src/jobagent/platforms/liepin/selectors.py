@@ -61,7 +61,16 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
           rejected.weakSignal += 1;
           continue;
         }}
-        const link = el.querySelector('a[href*="/job/"], a[href*="liepin.com/job"]');
+        // Identity: prefer a child <a> with /job/ href; also accept the
+        // candidate itself when it IS the <a> (Liepin wraps job titles in
+        // <a href="/job/XXX.shtml"> directly, with no inner <a>).
+        let link = el.querySelector('a[href*="/job/"], a[href*="liepin.com/job"]');
+        if (!link && el.tagName === 'A') {{
+          const selfHref = el.getAttribute('href') || '';
+          if (selfHref.indexOf('/job/') >= 0 || selfHref.indexOf('liepin.com/job') >= 0) {{
+            link = el;
+          }}
+        }}
         const url = link ? absUrl(link.getAttribute('href') || '') : '';
         const id = el.getAttribute('data-job-id') || el.getAttribute('data-id') || '';
         if (!url && !id) {{
@@ -81,7 +90,20 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
           continue;
         }}
         const salaryIndex = lines.findIndex(x => /k|薪|万|元/i.test(x));
-        const cityIndex = lines.findIndex(x => /北京|上海|深圳|广州|杭州|成都|南京|苏州|武汉|西安|天津|重庆|大连|厦门|青岛|长沙|郑州|合肥|佛山|东莞|宁波/.test(x));
+        // City extraction (two strategies):
+        //   1. Prefer the 【城市-区域】 bracketed pattern Liepin uses on job
+        //      cards ("【沈阳-浑南区】", "【上海-黄浦区】", etc.) — this catches
+        //      every Chinese city, not just a whitelist.
+        //   2. Fall back to a major-city whitelist for cards without brackets.
+        let cityIndex = -1;
+        for (let i = 0; i < lines.length; i++) {{
+          if (/^[【\\[]?[\\u4e00-\\u9fa5]{2,8}-[\\u4e00-\\u9fa5]{2,8}[】\\]]?$/.test(lines[i])) {{
+            cityIndex = i; break;
+          }}
+        }}
+        if (cityIndex < 0) {{
+          cityIndex = lines.findIndex(x => /北京|上海|深圳|广州|杭州|成都|南京|苏州|武汉|西安|天津|重庆|大连|厦门|青岛|长沙|郑州|合肥|佛山|东莞|宁波|沈阳|乌鲁木齐|济南|哈尔滨|长春|昆明|南宁|福州|石家庄|太原|贵阳|兰州|海口|南昌|无锡|温州|珠海|中山|惠州/.test(x));
+        }}
         const experienceIndex = lines.findIndex(x => /经验|年/.test(x));
         const degreeIndex = lines.findIndex(x => /本科|硕士|博士|大专|学历|统招/.test(x));
         const salary = salaryIndex >= 0 ? lines[salaryIndex] : '';

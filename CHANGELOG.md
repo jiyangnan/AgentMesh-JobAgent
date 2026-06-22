@@ -110,6 +110,89 @@ end-to-end against live HR inboxes (5/5 delivered on a real batch).
     assert real `Input.dispatchMouseEvent` was emitted.
   - New evaluate sequence: risk-check + locate + 3 polling evaluates.
 
+## [Unreleased — Liepin beta pipeline] — 2026-06-22
+
+The Liepin vertical chain was returning 0 jobs on `liepin collect` and
+silently mis-attribute cities. Six issues fixed, all verified end-to-end
+with a real 2/2 delivered batch against 京东物流 HR.
+
+### Fixed
+
+#### 1. Wrong search URL path (0 jobs returned)
+- **Symptom**: `liepin collect` always returned 0 jobs.
+- **Cause**: `build_liepin_search_url` used `/zhaopin/` path. On logged-in
+  sessions, Liepin serves an SEO landing page there showing "非常抱歉！暂时
+  没有合适的职位". The real search endpoint is `/sojob/`.
+- **Fix**: switched to `/sojob/` path with `city=` param (the older `dq=`
+  param is silently dropped by Liepin's redirect).
+
+#### 2. Parser overrode real city with requested city
+- **Symptom**: every parsed Job had `city="北京"` even when the card text
+  clearly said "上海-黄浦区" or "沈阳-浑南区".
+- **Cause**: `parse_liepin_job` used `city_name or _first(raw, "city", ...)`
+  — the user-requested city won over the card's actual city.
+- **Fix**: reversed to `_first(raw, ...) or city_name`. Card's own city
+  field wins; requested city is only a fallback.
+
+#### 3. Snapshot selector rejected real `<a>` job cards as "missingIdentity"
+- **Symptom**: 109 of 190 candidate elements rejected, only 8-10 cards
+  parsed per page.
+- **Cause**: selector looked for `el.querySelector('a[href*="/job/"]')`
+  (descendant `<a>`). Liepin wraps job titles in `<a href="/job/XXX.shtml">`
+  directly — the candidate IS the `<a>`, no descendant `<a>` exists.
+- **Fix**: when the candidate element is itself an `<a>` with `/job/` href,
+  accept it as the link.
+
+#### 4. City filter not actually applied
+- **Symptom**: `--city 北京` returned jobs from 沈阳, 上海, 乌鲁木齐.
+- **Cause**: Liepin's sojob endpoint ignores URL city params server-side
+  (all of `city=`, `cityCode=`, `dq=` return the same mixed-city results).
+- **Fix**: added `_city_matches` post-filter in Python on the parsed
+  `Job.city` field. To compensate for filtered-out cards, the snapshot
+  fetch limit is doubled when a city filter is active.
+
+#### 5. Pagination dedup treated same job on different pages as different
+- **Symptom**: `--pages 3` returned 16 jobs where 8 were duplicates of
+  the other 8.
+- **Cause**: `_job_dedupe_key` used the full URL as key. Liepin decorates
+  the same job's URL with different per-page query params (`d_posi=`,
+  `skId=`, `ckId=`, `curPage=`, `index=`, …), so the same `/job/1983458373.shtml`
+  had a different URL string on page 1 vs page 2.
+- **Fix**: extract `/job/<id>.shtml` from the URL and use `job:<id>` as
+  the dedup key. Falls back to full URL only if regex doesn't match.
+
+#### 6. Snapshot city extraction missed non-whitelisted cities
+- **Symptom**: jobs in 沈阳, 乌鲁木齐, 南京 (any city not in the hardcoded
+  whitelist) were extracted with empty `cityName`, which then fell back
+  to the user-requested city (Bug #2 above), making the city filter
+  incorrectly include them.
+- **Cause**: selector used `/北京|上海|深圳|.../.test(line)` — whitelist
+  of ~20 cities.
+- **Fix**: prefer the `【城市-区域】` bracketed pattern Liepin uses on
+  every card (catches any Chinese city). Fall back to an expanded
+  whitelist (added 沈阳, 乌鲁木齐, 济南, 哈尔滨, 长春, 昆明, 南宁, 福州,
+  石家庄, 太原, 贵阳, 兰州, 海口, 南昌, 无锡, 温州, 珠海, 中山, 惠州).
+
+### Documentation
+
+- `LiepinApplySender` docstring now explicitly documents that:
+  - Liepin has no Boss-style greeting chat flow.
+  - The only contact mechanism is "立即投递" (submit resume).
+  - Generated greetings are handoff-only (used by `liepin apply open`
+    for human copy-paste), NOT auto-sent by `apply send`.
+  - The `fill_liepin_message` step reporting `editor_not_found` on
+    every healthy Liepin job page is **expected behavior, not a bug**.
+- `_liepin_apply_click_entry_script` docstring documents why 立即投递
+  variants come first in the label list.
+
+### Tests
+
+- Updated `test_liepin_search_url_encodes_query_and_city` for new URL
+  contract (`/sojob/`, `city=`, `curPage=`).
+- Updated `test_liepin_live_read_only_collector_*` and
+  `test_liepin_session_check_reports_login_required` to assert the new
+  `/sojob/` URL.
+
 ## [0.2.1] — 2026-06-15
 
 ### Changed
