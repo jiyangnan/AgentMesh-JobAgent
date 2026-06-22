@@ -5,3 +5,9 @@ __pycache__/
 data/
 .venv/
 *.egg-info/
+
+# Runtime artifacts from collect/rank/greet workflows (contain personal resume data)
+boss.raw.json
+boss.ranked.json
+boss.ready.json
+boss_greetings_*.md
