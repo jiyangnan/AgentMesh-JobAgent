@@ -11,3 +11,7 @@ boss.raw.json
 boss.ranked.json
 boss.ready.json
 boss_greetings_*.md
+# Any named collect/rank/ready JSON files (e.g., hangzhou_dpo.raw.json)
+*.raw.json
+*.ranked.json
+*.ready.json

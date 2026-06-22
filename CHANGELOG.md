@@ -68,6 +68,33 @@ end-to-end against live HR inboxes (5/5 delivered on a real batch).
   briefly stall past the 30s timeout, even though the browser is healthy.
 - **Fix**: `_cdp_click_at` retries 3× with exponential backoff (2s / 4s / 6s).
 
+#### 8. Modal dialog DOM differed from sidebar DOM (stress test discovery)
+- **Symptom**: stress test on fresh 立即沟通 clicks (杭州 数据产品负责人) —
+  all 5 send attempts failed as `chat_editor_not_found` even though the
+  sidebar was visually open.
+- **Cause**: Boss has TWO distinct chat UIs:
+  - **Sidebar** (existing conversation): `.chat-input` contenteditable +
+    `<button>发送</button>` — this is what the original code targeted.
+  - **Modal dialog** (fresh 立即沟通 first click): `<textarea.input-area>`
+    + `<div.send-message>` inside `.dialog-wrap.startchat-dialog`.
+  The original selectors only matched the sidebar variant.
+- **Fix**: `inspect_chat_editor` / `click_chat_entry` polling now try both
+  selector sets (sidebar + modal). `chatContainer` detection expanded to
+  include `.startchat-dialog`.
+
+#### 9. fill_chat_message / click_send needed textarea-aware paths
+- **Symptom**: even with the modal dialog detected, fill+send logic was
+  hardcoded for contenteditable.
+- **Cause**: `fill_chat_message` used Range API + `Input.insertText`
+  (contenteditable-only); `click_send` used `<button>` lookups and Enter
+  key (Enter inserts newline in `<textarea>`, doesn't submit).
+- **Fix**:
+  - `fill_chat_message`: detects editor type; for `<textarea>` sets `.value`
+    via JS + dispatches `input`/`change` events (React/Vue-compatible).
+  - `click_send`: detects editor type; for textarea mode skips Enter and
+    uses real CDP mouse click on `.send-message` div via `_cdp_click_at`.
+  - Send-button lookup now includes `.send-message` div (not just `<button>`).
+
 ### Changed
 
 - `.gitignore`: ignore `boss.raw.json` / `boss.ranked.json` /

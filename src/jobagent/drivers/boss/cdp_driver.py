@@ -357,7 +357,7 @@ class CDPBossDriver(BossActionDriver):
                     except Exception as e:
                         return {"ok": False, "step": "popup_click_failed", "error": str(e)}
 
-            # Check for chat sidebar open
+            # Check for chat sidebar open OR modal dialog open
             sidebar_js = """
             (function(){
               function visible(el){
@@ -367,21 +367,32 @@ class CDPBossDriver(BossActionDriver):
                 var rect = el.getBoundingClientRect();
                 return rect.width > 10 && rect.height > 5;
               }
-              var editorSelectors = ['.chat-input', '.edit-input', '.message-input',
+              // Sidebar editor (contenteditable)
+              var sidebarSelectors = ['.chat-input', '.edit-input', '.message-input',
                                      '[contenteditable="true"].chat-input',
                                      '[contenteditable="true"]', '[contenteditable]'];
               var editor = null;
-              for (var s = 0; s < editorSelectors.length; s++) {
-                var found = document.querySelector(editorSelectors[s]);
+              for (var s = 0; s < sidebarSelectors.length; s++) {
+                var found = document.querySelector(sidebarSelectors[s]);
                 if (found && visible(found)) { editor = found; break; }
               }
+              // Modal dialog editor (textarea)
+              if (!editor) {
+                var modalSelectors = ['textarea.input-area', '.edit-area textarea',
+                                      '.startchat-dialog textarea', '.dialog-wrap textarea'];
+                for (var m = 0; m < modalSelectors.length; m++) {
+                  var tf = document.querySelector(modalSelectors[m]);
+                  if (tf && visible(tf)) { editor = tf; break; }
+                }
+              }
+              // Send button — sidebar <button> or modal <div.send-message>
               var send = null;
               var btns = document.querySelectorAll('button');
               for (var j = 0; j < btns.length; j++) {
                 if ((btns[j].innerText || '').trim() === '发送' && visible(btns[j])) { send = btns[j]; break; }
               }
               if (!send) {
-                var sc = document.querySelectorAll('.btn-send, button.btn-send');
+                var sc = document.querySelectorAll('.btn-send, button.btn-send, .send-message, div.send-message');
                 for (var k = 0; k < sc.length; k++) if (visible(sc[k])) { send = sc[k]; break; }
               }
               return JSON.stringify({
@@ -409,15 +420,15 @@ class CDPBossDriver(BossActionDriver):
     def inspect_chat_editor(self) -> dict[str, Any]:
         """Inspect the chat editor and send button.
 
-        Waits for the sidebar chat panel to load. Returns the state with
-        multiple signals (editorFound, sendFound, chatOpened) so callers can
-        decide how aggressively to retry.
+        Waits for the chat panel to load. Boss has TWO chat UI variants:
+          - **Sidebar** (existing conversation, 继续沟通 state):
+            .chat-input contenteditable + <button>发送</button>
+          - **Modal dialog** (fresh 立即沟通 click):
+            .dialog-wrap.startchat-dialog containing
+            <textarea.input-area> + <div.send-message>
 
-        Boss's chat sidebar DOM varies across versions — selectors we try:
-        - .chat-input (legacy)
-        - .edit-input / .message-input (newer)
-        - [contenteditable="true"] (universal fallback)
-        - [contenteditable] without value (defensive)
+        Returns state with multiple signals so callers can decide whether to
+        retry or fall through to fill+send with the discovered editor type.
         """
         self._ensure_connected()
         # Poll for editor appearance (up to 20 attempts, ~0.8s each = ~16s)
@@ -432,22 +443,38 @@ class CDPBossDriver(BossActionDriver):
                 var rect = el.getBoundingClientRect();
                 return rect.width > 10 && rect.height > 5;
               }
-              // Try multiple editor selectors
+              // Try multiple editor selectors across both UI variants
               var editor = null;
               var editorSource = '';
-              var editorSelectors = [
+              var editorType = '';
+              // Sidebar (contenteditable)
+              var sidebarSelectors = [
                 '.chat-input', '.edit-input', '.message-input',
                 '[contenteditable="true"].chat-input',
-                '[contenteditable="true"]',
-                '[contenteditable]'
+                '[contenteditable="true"]', '[contenteditable]'
               ];
-              for (var s = 0; s < editorSelectors.length; s++) {
-                var found = document.querySelector(editorSelectors[s]);
+              for (var s = 0; s < sidebarSelectors.length; s++) {
+                var found = document.querySelector(sidebarSelectors[s]);
                 if (found && visible(found)) {
-                  editor = found; editorSource = editorSelectors[s]; break;
+                  editor = found; editorSource = sidebarSelectors[s];
+                  editorType = 'contenteditable'; break;
                 }
               }
-              // Send button
+              // Modal dialog (textarea) — only if no sidebar editor
+              if (!editor) {
+                var modalSelectors = [
+                  'textarea.input-area', '.edit-area textarea',
+                  '.startchat-dialog textarea', '.dialog-wrap textarea'
+                ];
+                for (var m = 0; m < modalSelectors.length; m++) {
+                  var tf = document.querySelector(modalSelectors[m]);
+                  if (tf && visible(tf)) {
+                    editor = tf; editorSource = modalSelectors[m];
+                    editorType = 'textarea'; break;
+                  }
+                }
+              }
+              // Send button — multiple variants
               var send = null;
               var btns = document.querySelectorAll('button');
               for (var j = 0; j < btns.length; j++) {
@@ -455,13 +482,19 @@ class CDPBossDriver(BossActionDriver):
                 if (t === '发送' && visible(btns[j])) { send = btns[j]; break; }
               }
               if (!send) {
-                var sendCandidates = document.querySelectorAll('.btn-send, button.btn-send');
+                var sendCandidates = document.querySelectorAll(
+                  '.btn-send, button.btn-send, .send-message, div.send-message'
+                );
                 for (var k = 0; k < sendCandidates.length; k++) {
                   if (visible(sendCandidates[k])) { send = sendCandidates[k]; break; }
                 }
               }
-              // Detect chat sidebar container (signals "chat opened" even without editor)
-              var chatContainer = !!(document.querySelector('.chat-message, .chat-conversation, .chat-footer, .chat-wrap, .main-message, .message-content'));
+              // Detect chat panel container (sidebar OR modal dialog)
+              var chatContainer = !!(document.querySelector(
+                '.chat-message, .chat-conversation, .chat-footer, .chat-wrap, ' +
+                '.main-message, .message-content, ' +
+                '.startchat-dialog, .dialog-wrap.startchat-dialog, .startchat-content'
+              ));
               // Login dialog (visibility-checked)
               var loginDialog = (function(){
                 var candidates = document.querySelectorAll('.sign-content, .login-dialog, .passport-login-container');
@@ -477,6 +510,7 @@ class CDPBossDriver(BossActionDriver):
                 ok: true,
                 editorFound: !!editor,
                 editorSource: editorSource,
+                editorType: editorType,
                 editorTag: editor ? editor.tagName : '',
                 editorClass: editor ? (editor.className || '').toString().slice(0, 100) : '',
                 sendFound: !!send,
@@ -512,42 +546,96 @@ class CDPBossDriver(BossActionDriver):
     def fill_chat_message(self, message: str) -> dict[str, Any]:
         """Fill the chat input with the given message.
 
-        Uses CDP-native text input so the page receives trusted keyboard/input
-        events. Direct DOM text assignment can leave BOSS's frontend state stale:
-        the text appears in the editor, but the send action does not fire.
+        Handles BOTH Boss chat UI variants:
+          - **Sidebar** (contenteditable .chat-input): use CDP Input.insertText
+            after selecting all content via Range API.
+          - **Modal dialog** (textarea.input-area): set .value via JS and
+            dispatch input/change events so React/Vue picks up the change.
+
+        Direct DOM text assignment alone can leave Boss's frontend state stale:
+        text appears in the editor but the send action does not fire.
         """
         self._ensure_connected()
-        js = """
+        # Step 1: locate editor + figure out which variant we're in
+        locate_js = """
         (function(){
-          var editor = null;
-          var all = document.querySelectorAll('*');
-          for (var i = 0; i < all.length; i++) {
-            if (all[i].className && typeof all[i].className === 'string' && all[i].className.indexOf('chat-input') >= 0) {
-              editor = all[i];
-              break;
+          function visible(el){
+            if(!el) return false;
+            var cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return false;
+            var rect = el.getBoundingClientRect();
+            return rect.width > 10 && rect.height > 5;
+          }
+          // Sidebar contenteditable
+          var sidebarSelectors = ['.chat-input', '.edit-input', '.message-input',
+                                 '[contenteditable="true"]', '[contenteditable]'];
+          for (var s = 0; s < sidebarSelectors.length; s++) {
+            var ce = document.querySelector(sidebarSelectors[s]);
+            if (ce && visible(ce)) {
+              ce.focus();
+              var range = document.createRange();
+              range.selectNodeContents(ce);
+              var sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+              return JSON.stringify({ok: true, editorType: 'contenteditable',
+                                    tag: ce.tagName, cls: (ce.className||'').toString().slice(0,80)});
             }
           }
-          if (!editor) {
-            var editables = document.querySelectorAll('[contenteditable="true"]');
-            if (editables.length > 0) editor = editables[0];
+          // Modal dialog textarea
+          var modalSelectors = ['textarea.input-area', '.edit-area textarea',
+                                '.startchat-dialog textarea', '.dialog-wrap textarea',
+                                'textarea'];
+          for (var m = 0; m < modalSelectors.length; m++) {
+            var ta = document.querySelector(modalSelectors[m]);
+            if (ta && visible(ta)) {
+              ta.focus();
+              ta.select();
+              return JSON.stringify({ok: true, editorType: 'textarea',
+                                    tag: ta.tagName, cls: (ta.className||'').slice(0,80)});
+            }
           }
-          if (!editor) return JSON.stringify({ok: false, error: 'no_editor'});
-
-          editor.focus();
-          var range = document.createRange();
-          range.selectNodeContents(editor);
-          var sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-          return JSON.stringify({ok: true, step: 'editor_selected'});
+          return JSON.stringify({ok: false, error: 'no_editor'});
         })()
         """
         try:
-            result = self.cdp.evaluate(js)
+            result = self.cdp.evaluate(locate_js)
             data = json.loads(result.get("result", {}).get("value", "{}"))
-            if not data.get("ok"):
-                return data
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        if not data.get("ok"):
+            return data
 
+        editor_type = data.get("editorType", "contenteditable")
+
+        if editor_type == "textarea":
+            # Textarea: set .value via JS + dispatch input event (React/Vue-compatible)
+            set_js = """
+            (function(message){
+              var ta = document.querySelector('textarea.input-area, .edit-area textarea, .startchat-dialog textarea, .dialog-wrap textarea, textarea');
+              if (!ta) return JSON.stringify({ok: false, error: 'no_textarea'});
+              ta.value = message;
+              ta.dispatchEvent(new Event('input', {bubbles: true}));
+              ta.dispatchEvent(new Event('change', {bubbles: true}));
+              return JSON.stringify({ok: true, len: ta.value.length, text: ta.value});
+            })(%s)
+            """ % json.dumps(message)
+            try:
+                set_result = self.cdp.evaluate(set_js)
+                set_data = json.loads(set_result.get("result", {}).get("value", "{}"))
+                if not set_data.get("ok"):
+                    return set_data
+                if set_data.get("text") != message:
+                    return {"ok": False, "error": "message_fill_mismatch",
+                            "len": set_data.get("len", 0)}
+                time.sleep(0.3)
+                return {"ok": True, "step": "filled", "editorType": "textarea",
+                        "len": set_data.get("len", 0)}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        # Contenteditable: use CDP Input.insertText after clearing via Backspace
+        try:
             self.cdp.send(
                 "Input.dispatchKeyEvent",
                 {
@@ -602,36 +690,74 @@ class CDPBossDriver(BossActionDriver):
             return {"ok": False, "error": str(e)}
 
     def click_send(self) -> dict[str, Any]:
-        """Click the send button using native CDP mouse events."""
+        """Click the send button using native CDP mouse events.
+
+        Handles both Boss UI variants:
+          - Sidebar: <button>发送</button> or .btn-send; Enter key submits
+            in contenteditable editors.
+          - Modal dialog: <div class="send-message"> (NOT a <button>);
+            Enter inserts a newline in <textarea>, so we skip Enter and
+            click the div via real CDP mouse events.
+        """
         self._ensure_connected()
         js = """
         (function(){
+          function visible(el){
+            if(!el) return false;
+            var cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return false;
+            var rect = el.getBoundingClientRect();
+            return rect.width > 10 && rect.height > 5;
+          }
+          // Try <button>发送</button> first (sidebar)
           var sendBtn = null;
           var btns = document.querySelectorAll('button');
           for (var j = 0; j < btns.length; j++) {
             var t = (btns[j].innerText || '').trim();
-            if (t === '\u53d1\u9001') { sendBtn = btns[j]; break; }
+            if (t === '发送' && visible(btns[j])) { sendBtn = btns[j]; break; }
           }
-          if (!sendBtn) sendBtn = document.querySelector('.btn-send');
+          // Then .btn-send (sidebar variants)
+          if (!sendBtn) {
+            var bs = document.querySelectorAll('.btn-send, button.btn-send');
+            for (var b = 0; b < bs.length; b++) if (visible(bs[b])) { sendBtn = bs[b]; break; }
+          }
+          // Then .send-message (modal dialog — it's a <div>, not a button)
+          if (!sendBtn) {
+            var sms = document.querySelectorAll('.send-message, div.send-message');
+            for (var s = 0; s < sms.length; s++) if (visible(sms[s])) { sendBtn = sms[s]; break; }
+          }
           if (!sendBtn) return JSON.stringify({ok: false, error: 'no_send'});
-          if (sendBtn.disabled || (sendBtn.className || '').indexOf('disabled') >= 0) {
-            var editor = document.querySelector('.chat-input');
-            var editorText = editor ? (editor.innerText || editor.textContent || '') : '';
+          // Check disabled state (modal dialog uses class 'disable' / 'disabled')
+          var cls = (sendBtn.className || '').toString();
+          var isDisabled = !!sendBtn.disabled || cls.indexOf('disabled') >= 0 || cls.indexOf('disable') >= 0;
+          if (isDisabled) {
+            // Editor might be empty — check both variants
+            var ce = document.querySelector('.chat-input');
+            var ta = document.querySelector('textarea.input-area, .edit-area textarea, textarea');
+            var editorText = ce ? (ce.innerText || ce.textContent || '') : (ta ? ta.value : '');
             if (!editorText.trim()) {
               return JSON.stringify({ok: false, error: 'send_button_disabled_empty_editor'});
             }
-            sendBtn.disabled = false;
+            // Force-enable (works for both <button> and <div>)
+            if (sendBtn.disabled !== undefined) sendBtn.disabled = false;
             sendBtn.removeAttribute('disabled');
             if (typeof sendBtn.className === 'string') {
-              sendBtn.className = sendBtn.className.replace(/\\bdisabled\\b/g, '').trim();
+              sendBtn.className = sendBtn.className.replace(/\\bdisabled\\b/g, '').replace(/\\bdisable\\b/g, '').trim();
             }
           }
-
+          // Detect editor type (Enter behavior differs)
+          var editorType = 'contenteditable';
+          if (!document.querySelector('.chat-input, [contenteditable="true"]')) {
+            if (document.querySelector('textarea.input-area, .edit-area textarea, textarea')) {
+              editorType = 'textarea';
+            }
+          }
           var rect = sendBtn.getBoundingClientRect();
           return JSON.stringify({
             ok: true,
             step: 'send_button_found',
-            disabled: !!sendBtn.disabled,
+            disabled: !!sendBtn.disabled || isDisabled,
+            editorType: editorType,
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2
           });
@@ -649,83 +775,69 @@ class CDPBossDriver(BossActionDriver):
                 self.cdp.send("Page.bringToFront")
             except Exception:
                 pass
-            focus_js = """
-            (function(){
-              var editor = document.querySelector('.chat-input');
-              if (!editor) return JSON.stringify({ok: false, error: 'no_editor'});
-              editor.focus();
-              var text = editor.innerText || editor.textContent || '';
-              return JSON.stringify({ok: true, len: text.length});
-            })()
-            """
-            focus_result = self.cdp.evaluate(focus_js)
-            focus_data = json.loads(focus_result.get("result", {}).get("value", "{}"))
-            if not focus_data.get("ok"):
-                return focus_data
 
-            self.cdp.send(
-                "Input.dispatchKeyEvent",
-                {
-                    "type": "keyDown",
-                    "key": "Enter",
-                    "code": "Enter",
-                    "windowsVirtualKeyCode": 13,
-                    "nativeVirtualKeyCode": 13,
-                    "unmodifiedText": "\r",
-                    "text": "\r",
-                },
-            )
-            self.cdp.send(
-                "Input.dispatchKeyEvent",
-                {
-                    "type": "keyUp",
-                    "key": "Enter",
-                    "code": "Enter",
-                    "windowsVirtualKeyCode": 13,
-                    "nativeVirtualKeyCode": 13,
-                },
-            )
-            time.sleep(1.0)
-            after_enter_js = """
-            (function(){
-              var editor = document.querySelector('.chat-input');
-              var text = editor ? (editor.innerText || editor.textContent || '') : '';
-              return JSON.stringify({ok: true, editorLen: text.length});
-            })()
-            """
-            after_enter_result = self.cdp.evaluate(after_enter_js)
-            after_enter = json.loads(after_enter_result.get("result", {}).get("value", "{}"))
-            if after_enter.get("ok") and after_enter.get("editorLen", 0) == 0:
-                return {"ok": True, "step": "pressed_enter_send"}
+            editor_type = data.get("editorType", "contenteditable")
 
+            # For contenteditable sidebar: Enter key submits the message.
+            # For textarea modal dialog: Enter inserts a newline, so SKIP Enter
+            # and rely entirely on clicking the send button via mouse events.
+            if editor_type != "textarea":
+                focus_js = """
+                (function(){
+                  var editor = document.querySelector('.chat-input');
+                  if (!editor) return JSON.stringify({ok: false, error: 'no_editor'});
+                  editor.focus();
+                  var text = editor.innerText || editor.textContent || '';
+                  return JSON.stringify({ok: true, len: text.length});
+                })()
+                """
+                focus_result = self.cdp.evaluate(focus_js)
+                focus_data = json.loads(focus_result.get("result", {}).get("value", "{}"))
+                if not focus_data.get("ok"):
+                    return focus_data
+
+                self.cdp.send(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyDown",
+                        "key": "Enter",
+                        "code": "Enter",
+                        "windowsVirtualKeyCode": 13,
+                        "nativeVirtualKeyCode": 13,
+                        "unmodifiedText": "\r",
+                        "text": "\r",
+                    },
+                )
+                self.cdp.send(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyUp",
+                        "key": "Enter",
+                        "code": "Enter",
+                        "windowsVirtualKeyCode": 13,
+                        "nativeVirtualKeyCode": 13,
+                    },
+                )
+                time.sleep(1.0)
+                after_enter_js = """
+                (function(){
+                  var editor = document.querySelector('.chat-input');
+                  var text = editor ? (editor.innerText || editor.textContent || '') : '';
+                  return JSON.stringify({ok: true, editorLen: text.length});
+                })()
+                """
+                after_enter_result = self.cdp.evaluate(after_enter_js)
+                after_enter = json.loads(after_enter_result.get("result", {}).get("value", "{}"))
+                if after_enter.get("ok") and after_enter.get("editorLen", 0) == 0:
+                    return {"ok": True, "step": "pressed_enter_send"}
+
+            # Textarea mode OR Enter didn't submit → click send button via real mouse event
             x = data["x"]
             y = data["y"]
-            self.cdp.send(
-                "Input.dispatchMouseEvent",
-                {"type": "mouseMoved", "x": x, "y": y, "button": "none"},
-            )
-            self.cdp.send(
-                "Input.dispatchMouseEvent",
-                {
-                    "type": "mousePressed",
-                    "x": x,
-                    "y": y,
-                    "button": "left",
-                    "clickCount": 1,
-                },
-            )
-            self.cdp.send(
-                "Input.dispatchMouseEvent",
-                {
-                    "type": "mouseReleased",
-                    "x": x,
-                    "y": y,
-                    "button": "left",
-                    "clickCount": 1,
-                },
-            )
+            self._cdp_click_at(x, y, retries=2)
             time.sleep(1.5)
-            return {"ok": True, "step": "enter_then_clicked_send", "x": x, "y": y}
+            return {"ok": True, "step": "clicked_send_button",
+                    "editorType": editor_type, "x": x, "y": y}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
