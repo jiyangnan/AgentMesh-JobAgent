@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from jobagent.infra.credentials import api_base_url, load_license_key
+from jobagent.infra.credentials import api_base_url, load_api_key
 
 # Per-endpoint timeouts (seconds) — generous to absorb DeepSeek tail latency.
 TIMEOUTS = {
@@ -38,12 +38,10 @@ class NotConfiguredError(CloudError):
 
 # Friendly Chinese hints for common error codes (GAP-17).
 FRIENDLY_HINTS: dict[str, str] = {
-    "missing_license": "未配置 AgentMesh360 API key。注册/登录 https://agentmesh360.com/app/ 后复制 API key，再运行 `jobagent init --key <your_api_key>`。",
     "missing_api_key": "未配置 AgentMesh360 API key。注册/登录 https://agentmesh360.com/app/ 后复制 API key，再运行 `jobagent init --key <your_api_key>`。",
-    "invalid_license": "API key 无效或已过期。请从 AgentMesh360 账户面板重新复制。",
     "invalid_api_key": "API key 无效或已过期。请从 AgentMesh360 账户面板重新复制。",
-    "license_revoked": "API key 已被撤销。请从 AgentMesh360 账户面板重新生成或联系支持。",
-    "license_expired": "API key 已过期。请从 AgentMesh360 账户面板重新生成或联系支持。",
+    "api_key_revoked": "API key 已被撤销。请从 AgentMesh360 账户面板重新生成或联系支持。",
+    "api_key_expired": "API key 已过期。请从 AgentMesh360 账户面板重新生成或联系支持。",
     "quota_exceeded": "当前 credit / 配额已用完。请前往 AgentMesh360 账户面板查看。",
     "insufficient_credits": "当前 credit 不足。请前往 AgentMesh360 账户面板查看。",
     "llm_parse_failed": "云端 LLM 输出解析失败（已自动重试 1 次）。换个简历/重试通常可恢复；持续失败请反馈。",
@@ -69,7 +67,7 @@ def _request(
     url = api_base_url() + path
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if require_auth:
-        key = load_license_key()
+        key = load_api_key()
         if not key:
             raise NotConfiguredError(
                 "No AgentMesh360 API key configured. Run `jobagent init --key <your_api_key>` after registering at https://agentmesh360.com/app/."

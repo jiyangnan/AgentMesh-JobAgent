@@ -5,12 +5,13 @@ from __future__ import annotations
 from .base import BossActionDriver
 
 
-def create_driver(prefer: str = "auto") -> BossActionDriver:
+def create_driver(prefer: str = "auto", platform: str = "boss") -> BossActionDriver:
     """Create the best available BossActionDriver.
 
     Args:
         prefer: 'cdp' | 'applescript' | 'auto'.
             'auto' tries CDP first, then AppleScript on macOS.
+        platform: preferred CDP tab namespace: 'boss' | 'liepin' | 'zhilian'.
 
     Returns:
         A ready-to-use BossActionDriver instance.
@@ -28,12 +29,12 @@ def create_driver(prefer: str = "auto") -> BossActionDriver:
 
     if prefer == "cdp":
         from .cdp_driver import CDPBossDriver
-        return CDPBossDriver()
+        return CDPBossDriver(platform=platform)
 
     # auto: CDP first (cross-platform), AppleScript fallback on macOS
     try:
         from .cdp_driver import CDPBossDriver
-        return CDPBossDriver()
+        return CDPBossDriver(platform=platform)
     except Exception:
         if sys.platform == "darwin":
             from .applescript_driver import AppleScriptBossDriver

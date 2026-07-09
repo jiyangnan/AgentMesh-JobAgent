@@ -9,19 +9,17 @@ class FakeCDP:
         self.values = list(value) if isinstance(value, list) else [value]
         self.last_value = self.values[-1]
         self.connected = True
-        # Track send() calls so tests can assert that real CDP mouse events
-        # were emitted (not synthetic dispatchEvent).
-        self.sent_methods: list[str] = []
+        self.js_calls: list[str] = []
+        self.send_calls: list[tuple[str, dict | None]] = []
 
     def evaluate(self, js_code: str, timeout: int = 30):
+        self.js_calls.append(js_code)
         value = self.values.pop(0) if self.values else self.last_value
         self.last_value = value
         return {"result": {"value": value}}
 
-    def send(self, method: str, params=None, timeout: float = 30.0):
-        # Record the CDP method (e.g., Input.dispatchMouseEvent) so tests can
-        # assert that real hardware-level events were issued.
-        self.sent_methods.append(method)
+    def send(self, method: str, params: dict | None = None):
+        self.send_calls.append((method, params))
         return {}
 
 
@@ -74,44 +72,52 @@ def test_exec_js_surfaces_cdp_errors():
     assert driver._exec_js("1") == {"ok": False, "error": "boom"}
 
 
-def test_click_chat_entry_no_sidebar_is_not_auto_sent(monkeypatch):
-    """If click 立即沟通 succeeds (real CDP mouse event) but no sidebar opens
-    within the polling window, the result must NOT be marked as autoSent.
-    Delivery is left to the explicit fill+send flow.
-
-    Regression: prior versions used dispatchEvent(MouseEvent) which produced
-    ok=true from JS but Boss silently dropped the click. The new flow uses
-    Input.dispatchMouseEvent via _cdp_click_at — verify the CDP method
-    was actually emitted.
-    """
+def test_click_chat_entry_no_popup_is_not_auto_sent(monkeypatch):
     monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
     driver = make_driver([
-        # Initial risk-control check: location.href
-        '{"href": "https://www.zhipin.com/job_detail/abc.html"}',
-        # Step 1: locate_js finds the chat button
-        '{"ok": true, "source": "class_btn-startchat", "text": "立即沟通", '
-        '"cls": "btn btn-startchat", "x": 300, "y": 220}',
-        # Step 2: polling iterations (8 attempts) — each iteration does:
-        #   1) risk-control check (location.href)
-        #   2) popup check (only when clicked_text == "立即沟通")
-        #   3) sidebar state check
-        # All return "not found / not open" → eventually fall through.
-        # The values below cover one iteration's 3 evaluates; the remaining
-        # 7 iterations reuse last_value (which has hasEditor/hasSend = false).
-        '{"href": "https://www.zhipin.com/job_detail/abc.html"}',
-        '{"ok": false, "error": "not_found"}',  # popup _find_clickable_by_text
-        '{"hasEditor": false, "hasSend": false}',  # sidebar state
+        '{"ok": true, "step": "target_立即沟通", "label": "立即沟通", "x": 42, "y": 24}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
     ])
 
     result = driver.click_chat_entry()
 
-    # Click was sent (ok=true) but no sidebar confirmed → not autoSent
     assert result["ok"] is True
     assert result["autoSent"] is False
-    assert result["step"] == "no_sidebar_after_click"
-    # Real CDP mouse events were emitted (3 per click: move + press + release)
-    assert "Input.dispatchMouseEvent" in driver.cdp.sent_methods
-    assert driver.cdp.sent_methods.count("Input.dispatchMouseEvent") >= 3
+    assert result["step"] == "no_popup_after_click"
+
+
+def test_click_chat_entry_targets_visible_chat_buttons(monkeypatch):
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+    driver = make_driver([
+        '{"ok": true, "step": "target_立即沟通", "label": "立即沟通", "x": 42, "y": 24}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+        '{"ok": false, "step": "no_popup_yet"}',
+    ])
+
+    driver.click_chat_entry()
+    click_js = driver.cdp.js_calls[0]
+    popup_js = driver.cdp.js_calls[1]
+
+    assert "function isVisible" in click_js
+    assert ".btn-startchat" in click_js
+    assert "targetInfo(el, labels[l])" in click_js
+    assert "text === '继续沟通' && isVisible" in popup_js
+    assert ".startchat-dialog" in popup_js
+    assert "platformDefaultSent" in popup_js
+    assert ("Input.dispatchMouseEvent", {
+        "type": "mousePressed",
+        "x": 42,
+        "y": 24,
+        "button": "left",
+        "clickCount": 1,
+    }) in driver.cdp.send_calls
 
 
 def test_inspect_chat_editor_timeout_is_not_auto_sent(monkeypatch):
@@ -124,3 +130,14 @@ def test_inspect_chat_editor_timeout_is_not_auto_sent(monkeypatch):
     assert result["autoSent"] is False
     assert result["editorFound"] is False
     assert result["step"] == "editor_not_found"
+
+
+def test_inspect_chat_editor_only_counts_visible_login_dialog(monkeypatch):
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+    driver = make_driver('{"ok": true, "editorFound": false}')
+
+    driver.inspect_chat_editor()
+    inspect_js = driver.cdp.js_calls[0]
+
+    assert "var loginEls = Array.prototype.slice.call" in inspect_js
+    assert "var loginDialog = loginEls.some(isVisible)" in inspect_js

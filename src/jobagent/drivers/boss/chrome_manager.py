@@ -197,11 +197,20 @@ class ChromeInstanceManager:
             "about:blank",
         ]
 
+        popen_kwargs: dict[str, Any] = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+        else:
+            popen_kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+
         try:
             self._process = subprocess.Popen(
                 [chrome_path, *args],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                **popen_kwargs,
             )
         except Exception as e:
             raise RuntimeError(f"启动 Chrome 失败: {e}")

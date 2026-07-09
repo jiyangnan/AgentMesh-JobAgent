@@ -119,7 +119,7 @@ def test_resume_analyze_local_saves_36_field_profile(monkeypatch, tmp_path):
     profile_path = tmp_path / "profile.json"
     resume_path.write_text(RESUME_TEXT, encoding="utf-8")
     monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: profile_path)
-    monkeypatch.setattr("jobagent.infra.credentials.load_license_key", lambda: None)
+    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: None)
     args = parse_args(
         "resume",
         "analyze",

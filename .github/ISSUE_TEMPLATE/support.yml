@@ -1,0 +1,68 @@
+name: Support Request
+description: 反馈 Job Agent CLI 使用问题或 API key 账户问题
+title: "[support] "
+labels: ["support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你反馈 Job Agent。API key 可在 AgentMesh360 账户面板自助获取：
+        https://agentmesh360.com/app/
+
+        如果涉及隐私信息，请不要贴简历原文、Cookie、Token 或 API key；可以发邮件到 **hello@agentmesh360.com** 私下沟通。
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: 问题类型
+      options:
+        - API key / 账户问题
+        - 安装或初始化失败
+        - Boss 直聘流程问题
+        - 猎聘流程问题
+        - 智联招聘流程问题
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: contact
+    attributes:
+      label: 联系方式
+      description: 邮箱（推荐）或 GitHub @用户名。
+      placeholder: "you@example.com 或 @your-github-handle"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: 你的 host agent 是哪个
+      options:
+        - Claude Code
+        - OpenClaw
+        - Cursor
+        - Codex
+        - 自己写的 / 其他
+        - 暂时不用 agent，自己跑命令
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: 具体情况
+      description: 请贴命令、报错摘要、期望行为和实际行为。不要贴 API key、Cookie 或简历全文。
+    validations:
+      required: true

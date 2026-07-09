@@ -13,7 +13,7 @@ def parse_args(*args: str):
     return build_parser().parse_args(list(args))
 
 
-def test_boss_rank_local_bypasses_license_and_cloud(monkeypatch, tmp_path):
+def test_boss_rank_local_bypasses_api_key_and_cloud(monkeypatch, tmp_path):
     input_path = tmp_path / "boss_jobs.json"
     output_path = tmp_path / "boss_ranked.json"
     input_path.write_text(
@@ -33,8 +33,8 @@ def test_boss_rank_local_bypasses_license_and_cloud(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         cli,
-        "_require_license_or_exit",
-        lambda command: pytest.fail("local Boss rank must not require license"),
+        "_require_api_key_or_exit",
+        lambda command: pytest.fail("local Boss rank must not require API key"),
     )
     monkeypatch.setattr(
         cli,
@@ -83,8 +83,8 @@ def test_boss_greet_preview_local_injects_greeting(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         cli,
-        "_require_license_or_exit",
-        lambda command: pytest.fail("local Boss greet preview must not require license"),
+        "_require_api_key_or_exit",
+        lambda command: pytest.fail("local Boss greet preview must not require API key"),
     )
     monkeypatch.setattr(
         cli,
@@ -110,7 +110,7 @@ def test_boss_greet_preview_local_injects_greeting(monkeypatch, tmp_path):
     assert "岗位方向与您的 AI 产品经验高度相关" in job["greeting"]
 
 
-def test_greet_send_uses_local_greeting_without_license(monkeypatch, tmp_path):
+def test_greet_send_uses_local_greeting_without_api_key(monkeypatch, tmp_path):
     input_path = tmp_path / "boss_ready.json"
     input_path.write_text(
         json.dumps({
@@ -147,8 +147,8 @@ def test_greet_send_uses_local_greeting_without_license(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         cli,
-        "_require_license_or_exit",
-        lambda command: pytest.fail("Boss greet send must not require license when input has local greeting"),
+        "_require_api_key_or_exit",
+        lambda command: pytest.fail("Boss greet send must not require API key when input has local greeting"),
     )
     monkeypatch.setattr("jobagent.domain.greeter.GreeterEngine", FakeGreeterEngine)
     monkeypatch.chdir(tmp_path)

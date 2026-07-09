@@ -9,7 +9,7 @@ from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
 def run_probe_send(job_url: str, message: str) -> SendAttempt:
     """Send a single greeting probe, aligned with boss-radar's verified flow.
 
-    Handles risk-control redirects and verifies any auto-sent claim.
+    Handles verification redirects and verifies any auto-sent claim.
     """
     driver = create_driver()
     attempt = execute_boss_greeting_flow(

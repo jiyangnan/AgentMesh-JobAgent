@@ -2,7 +2,159 @@
 
 from __future__ import annotations
 
-ZHILIAN_SELECTOR_VERSION = "2026-06-14.1"
+import json
+
+ZHILIAN_SELECTOR_VERSION = "2026-07-09.0"
+
+
+def build_zhilian_city_filter_script(city: str) -> str:
+    safe_city = json.dumps(city, ensure_ascii=False)
+    return f"""
+    (function(){{
+      const mode = 'zhilian_city_filter';
+      const targetCity = {safe_city};
+      const href = location.href || '';
+      const title = document.title || '';
+      const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
+      const loginRequired = /passport|login|登录[/]注册|请登录|扫码登录|验证码登录|手机验证码|安全验证|滑块/.test(href + '\\n' + title + '\\n' + bodyText.slice(0, 800));
+      if (!targetCity) {{
+        return JSON.stringify({{ok: true, mode, skipped: true}});
+      }}
+      if (loginRequired) {{
+        return JSON.stringify({{ok: false, mode, error: 'zhilian_login_required', loginRequired: true, url: href, title}});
+      }}
+      function clean(value){{
+        return String(value || '').replace(/\\s+/g, ' ').trim();
+      }}
+      function visible(el){{
+        if (!el || !(el instanceof Element)) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || '1') !== 0
+          && rect.width > 8
+          && rect.height > 8;
+      }}
+      function directText(el){{
+        const own = Array.from(el.childNodes || [])
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent || '')
+          .join('');
+        return clean(own) || clean(el.innerText || el.textContent || '');
+      }}
+      function clickPoint(el){{
+        const target = el.closest('a,button,label,li,span,div') || el;
+        const rect = target.getBoundingClientRect();
+        return {{
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          tag: target.tagName,
+          className: String(target.className || '').slice(0, 120),
+          text: directText(target)
+        }};
+      }}
+      const cityNames = ['北京','上海','广州','深圳','天津','武汉','西安','成都','大连','长春','沈阳','南京','济南','青岛','杭州','苏州','无锡','宁波','重庆','郑州','长沙','福州','厦门','哈尔滨'];
+      const visibleElements = Array.from(document.querySelectorAll('body *')).filter(visible);
+      function cityCount(text){{
+        return cityNames.reduce((count, name) => count + (text.includes(name) ? 1 : 0), 0);
+      }}
+      function findLocationHeader(){{
+        const matches = visibleElements
+          .filter((el) => /^地点\\s*[⌄∨▾⌃∧▲▼]?$/.test(directText(el)) || directText(el) === '地点')
+          .map((el) => {{
+            const rect = el.getBoundingClientRect();
+            return {{el, rect, area: rect.width * rect.height}};
+          }})
+          .filter((item) => item.rect.top < 320)
+          .sort((a, b) => a.area - b.area);
+        return matches[0] && matches[0].el;
+      }}
+      function findLocationRoot(){{
+        const header = findLocationHeader();
+        if (header) {{
+          let root = header;
+          let best = header;
+          for (let i = 0; i < 8 && root.parentElement; i++) {{
+            root = root.parentElement;
+            if (!visible(root)) continue;
+            const rect = root.getBoundingClientRect();
+            const plausibleFilterRoot = rect.top < 320 && rect.height <= 700 && rect.width >= 200;
+            const text = clean(root.innerText || root.textContent || '');
+            if (text.includes('地点') && plausibleFilterRoot) best = root;
+            if (plausibleFilterRoot && text.includes('地点') && text.includes(targetCity) && cityCount(text) >= 4) {{
+              return root;
+            }}
+          }}
+          return best;
+        }}
+        const candidates = visibleElements
+          .map((el) => {{
+            const text = clean(el.innerText || el.textContent || '');
+            const rect = el.getBoundingClientRect();
+            return {{el, text, rect, count: cityCount(text)}};
+          }})
+          .filter((item) => item.rect.top < 700 && item.text.includes(targetCity) && item.count >= 4)
+          .sort((a, b) => a.text.length - b.text.length);
+        return candidates[0] && candidates[0].el;
+      }}
+      let root = findLocationRoot();
+      let expanded = false;
+      if (!root || !clean(root.innerText || root.textContent || '').includes(targetCity) || cityCount(clean(root.innerText || root.textContent || '')) < 4) {{
+        const header = findLocationHeader();
+        if (header) {{
+          expanded = true;
+        }}
+        return JSON.stringify({{
+          ok: false,
+          mode,
+          error: 'zhilian_city_options_collapsed',
+          action: 'expand_location',
+          expanded,
+          clickPoint: header ? clickPoint(header) : null,
+          city: targetCity,
+          url: href,
+          title
+        }});
+      }}
+      const options = Array.from(root.querySelectorAll('a,button,label,li,span,div'))
+        .filter(visible)
+        .filter((el) => directText(el) === targetCity)
+        .map((el) => {{
+          const rect = el.getBoundingClientRect();
+          const className = String(el.className || '');
+          const selected = /active|selected|checked|current/.test(className);
+          return {{el, rect, selected}};
+        }})
+        .filter((item) => item.rect.top < 700)
+        .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
+      if (!options.length) {{
+        return JSON.stringify({{
+          ok: false,
+          mode,
+          error: 'zhilian_city_option_not_found',
+          city: targetCity,
+          rootText: clean(root.innerText || root.textContent || '').slice(0, 500),
+          url: href,
+          title
+        }});
+      }}
+      const option = options[0];
+      if (option.selected) {{
+        return JSON.stringify({{ok: true, mode, city: targetCity, alreadySelected: true, url: href, title}});
+      }}
+      return JSON.stringify({{
+        ok: true,
+        mode,
+        city: targetCity,
+        applied: true,
+        action: 'select_city',
+        clickPoint: clickPoint(option.el),
+        urlBefore: href,
+        title
+      }});
+    }})()
+    """
 
 
 def build_zhilian_snapshot_script(limit: int = 20) -> str:

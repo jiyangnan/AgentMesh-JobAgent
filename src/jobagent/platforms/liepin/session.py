@@ -37,7 +37,7 @@ class LiepinSessionGuide:
     """Open Liepin and inspect login state without applying or sending."""
 
     def __init__(self, driver: Any | None = None):
-        self.driver = driver or create_driver()
+        self.driver = driver or create_driver(platform="liepin")
 
     def check(
         self,

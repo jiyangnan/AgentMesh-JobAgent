@@ -169,8 +169,8 @@ jobagent zhilian audit
 
 | Error | What happened | Tell the user |
 |-------|---------------|---------------|
-| `missing_api_key` / `missing_license` (401) | No API key configured | Run `jobagent init --key ...` |
-| `invalid_api_key` / `license_revoked` (403) | Key is invalid or revoked | Copy a fresh API key from the AgentMesh360 account dashboard |
+| `missing_api_key` (401) | No API key configured | Run `jobagent init --key ...` |
+| `invalid_api_key` (403) | Key is invalid or revoked | Copy a fresh API key from the AgentMesh360 account dashboard |
 | `quota_exceeded` / `insufficient_credits` (429/402) | Cloud credit exhausted | Check credit in the AgentMesh360 account dashboard |
 | Verification challenge in send result | Upstream redirected to a verify page | Pause for a while; resume later with longer delays |
 | `login_timeout` | User didn't scan QR within 5 min | Retry `jobagent login` |

@@ -18,12 +18,12 @@ def credentials_path() -> Path:
     return CREDENTIALS_PATH
 
 
-def load_license_key() -> str | None:
+def load_api_key() -> str | None:
     """Return the saved API key, or None if not configured.
 
-    Order: env var JOBAGENT_LICENSE_KEY > ~/.jobagent/credentials.
+    Order: env var JOBAGENT_API_KEY > ~/.jobagent/credentials.
     """
-    env = os.environ.get("JOBAGENT_LICENSE_KEY")
+    env = os.environ.get("JOBAGENT_API_KEY")
     if env:
         return env.strip()
     if not CREDENTIALS_PATH.exists():
@@ -32,7 +32,7 @@ def load_license_key() -> str | None:
     return text or None
 
 
-def save_license_key(key: str) -> Path:
+def save_api_key(key: str) -> Path:
     ensure_dirs()
     CREDENTIALS_PATH.write_text(key.strip() + "\n", encoding="utf-8")
     # Tighten permissions (rw for owner only)

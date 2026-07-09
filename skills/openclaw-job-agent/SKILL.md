@@ -131,8 +131,8 @@ jobagent zhilian audit
 
 | Situation | Response |
 |---|---|
-| `missing_api_key` / `missing_license` | Ask the user to provide their AgentMesh360 API key, then run `jobagent init --key ...`. |
-| `invalid_api_key` / `invalid_license` | Surface the CLI error. Do not retry with invented keys. |
+| `missing_api_key` | Ask the user to provide their AgentMesh360 API key, then run `jobagent init --key ...`. |
+| `invalid_api_key` | Surface the CLI error. Do not retry with invented keys. |
 | `quota_exceeded` / `insufficient_credits` | Tell the user to check credit in the AgentMesh360 account dashboard. |
 | Login timeout | Re-run `jobagent login` when the user is ready to scan. |
 | Scanned/image resume | Ask for a text-based PDF, DOCX, TXT, or Markdown resume. |

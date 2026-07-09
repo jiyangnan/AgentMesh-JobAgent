@@ -95,7 +95,7 @@ class LiepinApplyOpener:
             elif dry_run:
                 planned += 1
             else:
-                driver = self.driver or create_driver()
+                driver = self.driver or create_driver(platform="liepin")
                 self.driver = driver
                 result = driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
                 if result.get("ok"):
@@ -280,7 +280,7 @@ class LiepinApplySender:
             attempt.steps = [{"step": "plan_liepin_apply_send", "ok": True, "url": url}]
             return attempt
 
-        driver = self.driver or create_driver()
+        driver = self.driver or create_driver(platform="liepin")
         self.driver = driver
 
         open_result = driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)

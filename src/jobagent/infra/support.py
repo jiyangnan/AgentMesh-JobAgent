@@ -18,7 +18,7 @@ def star_prompt_message() -> str:
         + "你已经完成了 Job Agent 的首次真实投递。谢谢你把工具跑到了真正有价值的一步。\n"
         + "如果它对你有帮助，欢迎给公开 CLI 仓库点一个 star：\n"
         + f"{PUBLIC_REPO_URL}\n"
-        + "这只是自愿支持，不影响 license 或后续使用。这个提示只会出现一次。\n"
+        + "这只是自愿支持，不影响后续使用。这个提示只会出现一次。\n"
         + "-" * 60
         + "\n"
     )
@@ -30,7 +30,7 @@ def support_star_payload() -> dict[str, Any]:
         "action": "open_github_repo_and_star_if_you_want",
         "url": PUBLIC_REPO_URL,
         "message": "如果 Job Agent 对你有帮助，欢迎自愿给公开 CLI 仓库点一个 star。",
-        "note": "Star is optional. It is never required for license, download, or usage.",
+        "note": "Star is optional. It is never required for download or usage.",
     }
 
 

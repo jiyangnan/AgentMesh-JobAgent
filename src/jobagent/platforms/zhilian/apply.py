@@ -81,7 +81,7 @@ class ZhilianApplyOpener:
                 planned += 1
                 event = self._event_from_job(job, status=status, message=message, evidence={"index": index, **handoff})
             else:
-                driver = self.driver or create_driver()
+                driver = self.driver or create_driver(platform="zhilian")
                 self.driver = driver
                 result = driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
                 if result.get("ok"):
@@ -238,7 +238,7 @@ class ZhilianApplySender:
             attempt.steps = [{"step": "plan_zhilian_apply_send", "ok": True, "url": url}]
             return attempt
 
-        driver = self.driver or create_driver()
+        driver = self.driver or create_driver(platform="zhilian")
         self.driver = driver
         open_result = driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
         steps.append({"step": "open_job_url", **open_result})

@@ -81,6 +81,17 @@ class LoginDialogRecoveredDriver(LoginDialogDriver):
         return {"ok": True, "delivered": True}
 
 
+class PlatformDefaultSentDriver(FlowDriver):
+    def click_chat_entry(self):
+        self.calls.append("click_chat_entry")
+        return {
+            "ok": True,
+            "autoSent": True,
+            "platformDefaultSent": True,
+            "sentMessage": "已发送 这是我的资料，希望能够成为贵团队的一员。",
+        }
+
+
 def test_boss_send_flow_preserves_verified_step_order():
     driver = FlowDriver(delivered_sequence=[False, True])
 
@@ -144,6 +155,24 @@ def test_boss_send_flow_skips_duplicate_when_already_delivered():
         "inspect_chat_editor",
         "verify_delivery",
     ]
+
+
+def test_boss_send_flow_accepts_platform_default_sent_dialog():
+    driver = PlatformDefaultSentDriver(delivered=False)
+
+    attempt = execute_boss_greeting_flow(
+        driver,
+        "https://example.test/job/1",
+        "hello",
+    )
+
+    assert attempt.delivered is True
+    assert attempt.error == ""
+    assert driver.calls == [
+        "open_url_in_new_tab",
+        "click_chat_entry",
+    ]
+    assert attempt.steps[-1]["platformDefaultSent"] is True
 
 
 def test_boss_send_flow_verifies_before_failing_missing_editor():

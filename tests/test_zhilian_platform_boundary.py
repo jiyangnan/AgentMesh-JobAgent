@@ -25,10 +25,12 @@ from jobagent.platforms.zhilian import (
     ZhilianReadOnlyCollector,
     ZhilianSessionGuide,
     build_zhilian_detail_snapshot_script,
+    build_zhilian_city_filter_script,
     build_zhilian_search_url,
     build_zhilian_snapshot_script,
     collect_zhilian_fixture,
     merge_zhilian_detail_into_job,
+    normalize_zhilian_keyword,
     parse_zhilian_detail_snapshot,
     parse_zhilian_job,
     zhilian_job_id,
@@ -152,13 +154,18 @@ def test_zhilian_detail_snapshot_cleans_real_company_and_publisher():
 
 def test_zhilian_search_url_and_snapshot_script_contract():
     url = build_zhilian_search_url("AI 产品经理", city="深圳", page=2)
+    city_script = build_zhilian_city_filter_script("深圳")
     script = build_zhilian_snapshot_script(limit=7)
     detail_script = build_zhilian_detail_snapshot_script()
 
     assert url.startswith("https://sou.zhaopin.com/?")
     assert "kw=AI%20%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86" in url
-    assert "jl=%E6%B7%B1%E5%9C%B3" in url
+    assert "jl=%E6%B7%B1%E5%9C%B3" not in url
     assert "p=2" in url
+    assert normalize_zhilian_keyword("深圳 AI产品经理", city="深圳") == "AI产品经理"
+    assert "zhilian_city_filter" in city_script
+    assert "targetCity" in city_script
+    assert "地点" in city_script
     assert ZHILIAN_SELECTOR_VERSION in script
     assert "loginRequired" in script
     assert "candidateCount" in script
@@ -185,6 +192,14 @@ class FakeZhilianDriver:
         return {"ok": True, "url": url}
 
     def _exec_js(self, js_code: str):
+        if "zhilian_city_filter" in js_code:
+            self.calls.append("apply_city_filter")
+            return {
+                "ok": True,
+                "mode": "zhilian_city_filter",
+                "city": "深圳",
+                "applied": True,
+            }
         self.calls.append("extract_snapshot")
         return {
             "ok": True,
@@ -216,6 +231,14 @@ class DetailHydrationZhilianDriver:
         return {"ok": True, "url": url}
 
     def _exec_js(self, js_code: str):
+        if "zhilian_city_filter" in js_code:
+            self.calls.append("apply_city_filter")
+            return {
+                "ok": True,
+                "mode": "zhilian_city_filter",
+                "city": "深圳",
+                "applied": True,
+            }
         self.calls.append("extract_detail" if "detail_read_only" in js_code else "extract_snapshot")
         if "detail_read_only" in js_code:
             return {
@@ -251,6 +274,14 @@ class PrioritizedDetailHydrationZhilianDriver:
         return {"ok": True, "url": url}
 
     def _exec_js(self, js_code: str):
+        if "zhilian_city_filter" in js_code:
+            self.calls.append("apply_city_filter")
+            return {
+                "ok": True,
+                "mode": "zhilian_city_filter",
+                "city": "深圳",
+                "applied": True,
+            }
         self.calls.append("extract_detail" if "detail_read_only" in js_code else "extract_snapshot")
         if "detail_read_only" in js_code:
             return {
@@ -405,7 +436,39 @@ def test_zhilian_live_collector_extracts_visible_cards():
     assert result.jobs[0].platform == "zhilian"
     assert result.jobs[0].name == "AI商业化产品经理"
     assert driver.calls[0].startswith("open:https://sou.zhaopin.com/")
+    assert driver.calls[1] == "apply_city_filter"
     assert "extract_detail" not in driver.calls
+
+
+def test_zhilian_live_collector_keeps_city_out_of_keyword_box():
+    driver = FakeZhilianDriver()
+
+    result = ZhilianReadOnlyCollector(driver=driver).collect(
+        query="深圳 AI产品经理",
+        city="深圳",
+        limit=5,
+        wait_seconds=2,
+    )
+
+    assert result.query == "AI产品经理"
+    assert result.ok is True
+    assert "kw=%E6%B7%B1%E5%9C%B3%20AI" not in driver.calls[0]
+    assert "kw=AI%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86" in driver.calls[0]
+    assert driver.calls[1] == "apply_city_filter"
+
+
+def test_zhilian_live_collector_filters_city_mismatch():
+    driver = FakeZhilianDriver()
+
+    result = ZhilianReadOnlyCollector(driver=driver).collect(
+        query="AI产品经理",
+        city="广州",
+        limit=5,
+        wait_seconds=2,
+    )
+
+    assert result.ok is True
+    assert result.jobs == []
 
 
 def test_zhilian_live_collector_can_hydrate_detail_fields():
@@ -563,7 +626,7 @@ def test_zhilian_rank_local_outputs_zhilian_platform(tmp_path):
 
 
 def test_zhilian_greet_preview_local_outputs_zhilian_ready_file(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr("jobagent.cli._require_license_or_exit", lambda command: pytest.fail("local preview must not require license"))
+    monkeypatch.setattr("jobagent.cli._require_api_key_or_exit", lambda command: pytest.fail("local preview must not require API key"))
     input_path = tmp_path / "zhilian_ranked.json"
     output_path = tmp_path / "zhilian_ready.json"
     input_path.write_text(

@@ -66,6 +66,21 @@ def test_liepin_parser_uses_platform_boundary_fixture():
     assert job.url == "https://www.liepin.com/job/liepin-1001.shtml"
 
 
+def test_liepin_parser_prefers_card_city_over_search_city():
+    job = parse_liepin_job(
+        {
+            "jobId": "liepin-city-1",
+            "jobTitle": "AI产品经理",
+            "companyName": "City Example",
+            "cityName": "上海",
+            "jobUrl": "https://www.liepin.com/job/liepin-city-1.shtml",
+        },
+        city_name="深圳",
+    )
+
+    assert job.city == "上海"
+
+
 def test_liepin_collect_fixture_outputs_shared_jobs():
     jobs = collect_liepin_fixture(FIXTURE)
 
@@ -172,6 +187,61 @@ class FakeLiepinDriver:
                     "cityName": "深圳",
                     "workYear": "3-5年",
                     "education": "本科",
+                    "jobUrl": "https://www.liepin.com/job/liepin-live-1.shtml",
+                },
+            ],
+        }
+
+
+class FakeLiepinSearchFallbackCDP:
+    def __init__(self):
+        self.sent: list[tuple[str, dict]] = []
+
+    def send(self, method: str, params: dict | None = None):
+        self.sent.append((method, params or {}))
+        return {}
+
+
+class SearchFallbackLiepinDriver:
+    def __init__(self):
+        self.calls: list[str] = []
+        self.clicks: list[tuple[int, int]] = []
+        self.cdp = FakeLiepinSearchFallbackCDP()
+
+    def open_url_in_new_tab(self, url: str, wait_seconds: int = 5):
+        self.calls.append(f"open:{url}:{wait_seconds}")
+        return {"ok": True, "url": url}
+
+    def _click_at(self, x: int, y: int):
+        self.clicks.append((x, y))
+
+    def _exec_js(self, js_code: str):
+        if "placeholder" in js_code and "button" in js_code:
+            self.calls.append("extract_search_state")
+            return {
+                "ok": True,
+                "href": "https://www.liepin.com/zhaopin/?inputFrom=head_navigation",
+                "body": "无关键词职位列表",
+                "input": {"x": 500, "y": 120},
+                "button": {"x": 900, "y": 120},
+            }
+        if "deleteContentBackward" in js_code:
+            self.calls.append("clear_search_input")
+            return {"ok": True, "value": ""}
+        self.calls.append("extract_snapshot")
+        return {
+            "ok": True,
+            "url": "https://www.liepin.com/zhaopin/?key=AI产品",
+            "selectorVersion": LIEPIN_SELECTOR_VERSION,
+            "candidateCount": 1,
+            "rejected": {"emptyText": 0, "weakSignal": 0, "duplicate": 0, "missingIdentity": 0},
+            "cards": [
+                {
+                    "jobId": "liepin-live-1",
+                    "jobTitle": "AI产品经理",
+                    "salary": "35-60k·14薪",
+                    "companyName": "Live Example",
+                    "cityName": "深圳",
                     "jobUrl": "https://www.liepin.com/job/liepin-live-1.shtml",
                 },
             ],
@@ -397,13 +467,12 @@ def test_liepin_search_url_encodes_query_and_city():
     url = build_liepin_search_url("AI产品", "深圳")
     page_url = build_liepin_search_url("AI产品", "深圳", page=3)
 
-    # URL contract: /sojob/ path (not /zhaopin/ which returns 0 results logged-in),
-    # city= param (not dq= which Liepin silently drops).
-    assert url.startswith("https://www.liepin.com/sojob/?")
+    assert url.startswith("https://www.liepin.com/zhaopin/?")
     assert "key=AI" in url
-    assert "city=" in url
-    assert "curPage=" not in url
-    assert "curPage=3" in page_url
+    assert "city=410" in url
+    assert "dq=410" in url
+    assert "currentPage=0" in url
+    assert "currentPage=2" in page_url
 
 
 def test_liepin_live_read_only_collector_uses_visible_cards_only():
@@ -419,9 +488,45 @@ def test_liepin_live_read_only_collector_uses_visible_cards_only():
     assert result.mode == "live_read_only"
     assert result.jobs[0].platform == "liepin"
     assert result.jobs[0].name == "AI商业化产品经理"
-    assert driver.calls[0].startswith("open:https://www.liepin.com/sojob/")
+    assert driver.calls[0].startswith("open:https://www.liepin.com/zhaopin/")
     assert driver.calls[-1] == "extract_snapshot"
     assert LIEPIN_SELECTOR_VERSION in driver.last_js
+
+
+def test_liepin_live_read_only_collector_filters_city_mismatch():
+    driver = MultiPageLiepinDriver()
+
+    result = LiepinReadOnlyCollector(driver=driver).collect(
+        query="AI产品",
+        city="广州",
+        limit=3,
+        page_delay=0,
+    )
+
+    assert result.ok is True
+    assert result.jobs == []
+
+
+def test_liepin_live_read_only_collector_submits_search_when_key_url_is_ignored(monkeypatch):
+    monkeypatch.setattr("jobagent.platforms.liepin.collect.time.sleep", lambda _seconds: None)
+    driver = SearchFallbackLiepinDriver()
+
+    result = LiepinReadOnlyCollector(driver=driver).collect(
+        query="AI产品",
+        city="深圳",
+        wait_seconds=3,
+    )
+
+    assert result.ok is True
+    assert [job.name for job in result.jobs] == ["AI产品经理"]
+    assert driver.calls == [
+        "open:https://www.liepin.com/zhaopin/?city=410&dq=410&currentPage=0&pageSize=40&key=AI%E4%BA%A7%E5%93%81&scene=input&sfrom=search_job_pc:3",
+        "extract_search_state",
+        "clear_search_input",
+        "extract_snapshot",
+    ]
+    assert driver.clicks == [(500, 120), (900, 120)]
+    assert ("Input.insertText", {"text": "AI产品"}) in driver.cdp.sent
 
 
 def test_liepin_live_read_only_collector_fetches_pages_and_dedupes():
@@ -441,7 +546,7 @@ def test_liepin_live_read_only_collector_fetches_pages_and_dedupes():
     assert result.pages == 2
     assert [job.name for job in result.jobs] == ["AI商业化产品经理", "AI Agent 产品负责人"]
     assert len(driver.urls) == 2
-    assert "curPage=2" in driver.urls[1]
+    assert "currentPage=1" in driver.urls[1]
     assert result.snapshot["pages"][0]["page"] == 1
     assert result.snapshot["pages"][1]["page"] == 2
 
@@ -494,7 +599,7 @@ def test_liepin_session_check_reports_login_required():
     assert status.logged_in is False
     assert status.login_required is True
     assert status.to_dict()["next_suggested"] == "jobagent liepin login"
-    assert driver.calls[0].startswith("open:https://www.liepin.com/sojob/")
+    assert driver.calls[0].startswith("open:https://www.liepin.com/zhaopin/")
     assert driver.calls[-1] == "inspect_session"
 
 
@@ -600,22 +705,22 @@ def test_liepin_doctor_ready_when_logged_in_and_selector_extracts(monkeypatch, t
     assert driver.extract_count == 2
 
 
-def test_liepin_doctor_with_cloud_reports_missing_license(monkeypatch, tmp_path):
+def test_liepin_doctor_with_cloud_reports_missing_api_key(monkeypatch, tmp_path):
     driver = FakeLiepinDoctorDriver(login_required=False)
     monkeypatch.setattr(
         "jobagent.application.doctor_liepin.last_doctor_path",
         lambda: tmp_path / "last_doctor_report.json",
     )
-    monkeypatch.setattr("jobagent.application.doctor_liepin.load_license_key", lambda: None)
+    monkeypatch.setattr("jobagent.application.doctor_liepin.load_api_key", lambda: None)
 
     report = run_liepin_doctor(driver=driver, wait_seconds=1, check_cloud=True)
 
     checks = {check.name: check for check in report.checks}
     assert checks["liepin_logged_in"].ok is True
     assert checks["liepin_selector_extracts_jobs"].ok is True
-    assert checks["cloud_license_configured"].ok is False
-    assert checks["cloud_license_configured"].evidence["error"] == "license_required"
-    assert "jobagent init --key" in checks["cloud_license_configured"].evidence["hint"]
+    assert checks["cloud_api_key_configured"].ok is False
+    assert checks["cloud_api_key_configured"].evidence["error"] == "api_key_required"
+    assert "jobagent init --key" in checks["cloud_api_key_configured"].evidence["hint"]
     assert report.status == "NOT_READY"
 
 
@@ -818,7 +923,7 @@ def test_liepin_rank_cli_rejects_non_liepin_input(monkeypatch, tmp_path, capsys)
         json.dumps({"jobs": [{"name": "AI产品经理", "platform": "zhipin"}]}, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(cli, "_require_license_or_exit", lambda command: None)
+    monkeypatch.setattr(cli, "_require_api_key_or_exit", lambda command: None)
     args = parse_args("liepin", "rank", "--input", str(input_path))
 
     with pytest.raises(SystemExit) as exc:
@@ -855,7 +960,7 @@ def test_liepin_rank_cli_passes_liepin_jobs_to_cloud_rank(monkeypatch, tmp_path)
         captured["source_platform"] = source_platform
         Path(args.output).write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(cli, "_require_license_or_exit", lambda command: None)
+    monkeypatch.setattr(cli, "_require_api_key_or_exit", lambda command: None)
     monkeypatch.setattr(cli, "_cmd_jobs_rank_cloud", fake_cloud_rank)
     args = parse_args("liepin", "rank", "--input", str(input_path), "--output", str(output_path))
 
@@ -865,7 +970,7 @@ def test_liepin_rank_cli_passes_liepin_jobs_to_cloud_rank(monkeypatch, tmp_path)
     assert captured["raw_jobs"][0]["platform"] == "liepin"
 
 
-def test_liepin_rank_local_bypasses_license_and_cloud(monkeypatch, tmp_path):
+def test_liepin_rank_local_bypasses_api_key_and_cloud(monkeypatch, tmp_path):
     input_path = tmp_path / "liepin_jobs.json"
     output_path = tmp_path / "liepin_ranked.json"
     input_path.write_text(
@@ -886,8 +991,8 @@ def test_liepin_rank_local_bypasses_license_and_cloud(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         cli,
-        "_require_license_or_exit",
-        lambda command: pytest.fail("local Liepin rank must not require license"),
+        "_require_api_key_or_exit",
+        lambda command: pytest.fail("local Liepin rank must not require API key"),
     )
     monkeypatch.setattr(
         cli,
@@ -968,7 +1073,7 @@ def test_liepin_greet_preview_rejects_non_liepin_ranked_input(monkeypatch, tmp_p
         json.dumps({"jobs": [{"name": "AI产品经理", "platform": "zhipin"}]}, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(cli, "_require_license_or_exit", lambda command: None)
+    monkeypatch.setattr(cli, "_require_api_key_or_exit", lambda command: None)
     args = parse_args("liepin", "greet", "preview", "--input", str(input_path))
 
     with pytest.raises(SystemExit) as exc:
@@ -1001,7 +1106,7 @@ def test_liepin_greet_preview_calls_cloud_preview_with_safe_next_message(monkeyp
     def fake_preview(args, next_message=None):
         captured["next_message"] = next_message
 
-    monkeypatch.setattr(cli, "_require_license_or_exit", lambda command: None)
+    monkeypatch.setattr(cli, "_require_api_key_or_exit", lambda command: None)
     monkeypatch.setattr(cli, "_cmd_greet_preview_cloud", fake_preview)
     args = parse_args("liepin", "greet", "preview", "--input", str(input_path))
 
@@ -1036,8 +1141,8 @@ def test_liepin_greet_preview_local_injects_manual_handoff_greeting(monkeypatch,
     )
     monkeypatch.setattr(
         cli,
-        "_require_license_or_exit",
-        lambda command: pytest.fail("local Liepin greet preview must not require license"),
+        "_require_api_key_or_exit",
+        lambda command: pytest.fail("local Liepin greet preview must not require API key"),
     )
     monkeypatch.setattr(
         cli,

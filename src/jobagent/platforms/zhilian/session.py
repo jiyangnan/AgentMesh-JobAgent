@@ -9,7 +9,7 @@ from typing import Any
 
 from jobagent.drivers.boss import create_driver
 
-from .collect import build_zhilian_search_url
+from .collect import build_zhilian_search_url, normalize_zhilian_keyword
 from .constants import ZHILIAN_BROWSER_JS_USER_PROMPT, ZHILIAN_LOGIN_URL, ZHILIAN_LOGIN_USER_PROMPT
 
 
@@ -42,7 +42,7 @@ class ZhilianSessionGuide:
     """Open Zhilian and inspect login state without applying or sending."""
 
     def __init__(self, driver: Any | None = None):
-        self.driver = driver or create_driver()
+        self.driver = driver or create_driver(platform="zhilian")
 
     def check(
         self,
@@ -50,7 +50,7 @@ class ZhilianSessionGuide:
         city: str = "深圳",
         wait_seconds: int = 5,
     ) -> ZhilianSessionStatus:
-        url = build_zhilian_search_url(query, city)
+        url = build_zhilian_search_url(normalize_zhilian_keyword(query, city), city)
         open_result = self.driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
         if not open_result.get("ok"):
             return ZhilianSessionStatus(

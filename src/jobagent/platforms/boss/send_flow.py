@@ -40,6 +40,10 @@ def execute_boss_greeting_flow(
         attempt.steps = steps
         return attempt
     if chat_click.get("autoSent"):
+        if chat_click.get("platformDefaultSent"):
+            attempt.delivered = True
+            attempt.steps = steps
+            return attempt
         verify_result = driver.verify_delivery(message)
         steps.append({"step": "verify_auto_sent", **verify_result})
         attempt.delivered = bool(verify_result.get("delivered"))

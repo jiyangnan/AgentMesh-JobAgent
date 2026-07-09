@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from jobagent.domain.models import Job
 from jobagent.drivers.boss import create_driver
@@ -16,23 +16,27 @@ from .constants import LIEPIN_LOGIN_USER_PROMPT
 from .parser import liepin_job_id, parse_liepin_job
 from .selectors import build_liepin_snapshot_script
 
+LIEPIN_CITY_CODES = {
+    "深圳": "410",
+}
+
 
 def build_liepin_search_url(query: str, city: str = "", page: int = 1) -> str:
-    """Build a human-search URL for the live read-only spike.
-
-    Path: /sojob/ (not /zhaopin/).
-      The /zhaopin/ path is a SEO landing page that returns 0 results when
-      accessed under a logged-in session (Liepin shows "非常抱歉！暂时没有
-      合适的职位"). /sojob/ is the real search endpoint.
-
-    City param: &city=<name>.
-      Older formats (&dq=<name>) get silently dropped by Liepin's redirect.
-    """
-    url = f"https://www.liepin.com/sojob/?key={quote(query)}"
+    """Build a human-search URL for the live read-only spike."""
+    city_code = LIEPIN_CITY_CODES.get(city.strip()) if city else ""
+    if city_code:
+        current_page = max(0, int(page) - 1)
+        return (
+            "https://www.liepin.com/zhaopin/"
+            f"?city={quote(city_code)}&dq={quote(city_code)}"
+            f"&currentPage={current_page}&pageSize=40&key={quote(query)}"
+            "&scene=input&sfrom=search_job_pc"
+        )
+    url = f"https://www.liepin.com/zhaopin/?key={quote(query)}"
     if city:
-        url += f"&city={quote(city)}"
+        url += f"&dq={quote(city)}"
     if page > 1:
-        url += f"&curPage={page}"
+        url += f"&currentPage={page}"
     return url
 
 
@@ -81,7 +85,7 @@ class LiepinReadOnlyCollector:
     """Collect Liepin search cards without applying or sending messages."""
 
     def __init__(self, driver: Any | None = None):
-        self.driver = driver or create_driver()
+        self.driver = driver or create_driver(platform="liepin")
 
     def collect(
         self,
@@ -93,14 +97,7 @@ class LiepinReadOnlyCollector:
         pages: int = 1,
         page_delay: float = 3.0,
     ) -> LiepinCollectResult:
-        """Open one or more Liepin search pages and extract visible job cards.
-
-        City filtering: Liepin's sojob endpoint silently ignores URL city
-        params (city=, cityCode=, dq= all return the same mixed-city results).
-        We apply a Python-side post-filter on the parsed ``city`` field instead.
-        To compensate for cards dropped by the filter, we request more cards
-        per page from the snapshot script (2× the user's limit).
-        """
+        """Open one or more Liepin search pages and extract visible job cards."""
         if not query:
             raise ValueError("query is required for live Liepin read-only collect")
 
@@ -131,11 +128,10 @@ class LiepinReadOnlyCollector:
                     error=str(open_result.get("error", "open_url_failed")),
                 )
 
+            self._submit_search_if_query_missing(query, wait_seconds=wait_seconds)
+
             remaining = max(1, limit - len(jobs))
-            # When city filter is active, fetch 2× more cards per page to
-            # compensate for non-matching ones that will be filtered out.
-            fetch_limit = remaining * 2 if city else remaining
-            snapshot = self._extract_snapshot(limit=fetch_limit)
+            snapshot = self._extract_snapshot(limit=remaining)
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
             snapshots.append(snapshot)
@@ -163,8 +159,7 @@ class LiepinReadOnlyCollector:
                 if not isinstance(card, dict):
                     continue
                 job = parse_liepin_job(card, city_name=city)
-                # Apply city post-filter (Liepin URL params don't filter server-side)
-                if not _city_matches(job.city, city):
+                if city and job.city and job.city != city:
                     continue
                 key = _job_dedupe_key(job, card)
                 if key in seen:
@@ -200,6 +195,87 @@ class LiepinReadOnlyCollector:
                 return {"ok": False, "error": "snapshot_parse_failed", "raw": result["raw"]}
         return result if isinstance(result, dict) else {}
 
+    def _submit_search_if_query_missing(self, query: str, wait_seconds: int = 8) -> None:
+        """Use the visible Liepin search bar when the URL shortcut is ignored.
+
+        Liepin's current React search page can redirect old `?key=` URLs to a
+        generic list. CDP-native typing keeps the frontend state in sync.
+        """
+        cdp = getattr(self.driver, "cdp", None)
+        click_at = getattr(self.driver, "_click_at", None)
+        if cdp is None or not callable(click_at):
+            return
+        current = self._extract_search_state()
+        href = unquote(str(current.get("href", "")))
+        body = str(current.get("body", ""))
+        no_results = "非常抱歉" in body or "暂时没有合适" in body
+        if query and not no_results and (f"key={query}" in href or query in body[:300]):
+            return
+        input_target = current.get("input") if isinstance(current.get("input"), dict) else None
+        button_target = current.get("button") if isinstance(current.get("button"), dict) else None
+        if not input_target or not button_target:
+            return
+
+        click_at(input_target["x"], input_target["y"])
+        _clear_visible_search_input(self.driver)
+        _replace_focused_text(cdp, query)
+        time.sleep(0.5)
+        click_at(button_target["x"], button_target["y"])
+        time.sleep(max(3, min(8, int(wait_seconds))))
+
+    def _extract_search_state(self) -> dict[str, Any]:
+        js = """
+        (function(){
+          function visible(el) {
+            if (!el) return false;
+            var style = window.getComputedStyle(el);
+            var rect = el.getBoundingClientRect();
+            return style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && Number(style.opacity || 1) > 0
+              && rect.width > 0
+              && rect.height > 0;
+          }
+          function center(el) {
+            var rect = el.getBoundingClientRect();
+            return {
+              x: Math.round(rect.left + rect.width / 2),
+              y: Math.round(rect.top + rect.height / 2),
+              w: Math.round(rect.width),
+              h: Math.round(rect.height)
+            };
+          }
+          var input = Array.from(document.querySelectorAll('input')).find(function(el) {
+            return visible(el) && String(el.getAttribute('placeholder') || '').indexOf('搜索') >= 0;
+          });
+          var buttons = Array.from(document.querySelectorAll('span,button,a,div')).filter(function(el) {
+            return visible(el) && (el.innerText || el.textContent || '').trim() === '搜索';
+          }).map(function(el) {
+            var data = center(el);
+            data.tag = el.tagName;
+            data.className = String(el.className || '');
+            return data;
+          }).sort(function(a, b) {
+            return (a.w * a.h) - (b.w * b.h);
+          });
+          return JSON.stringify({
+            ok: true,
+            href: location.href || '',
+            body: (document.body && (document.body.innerText || document.body.textContent) || '').slice(0, 600),
+            input: input ? center(input) : null,
+            button: buttons.length ? buttons[0] : null
+          });
+        })()
+        """
+        result = self.driver._exec_js(js)
+        if isinstance(result, dict) and "raw" in result:
+            try:
+                parsed = json.loads(result["raw"])
+                return parsed if isinstance(parsed, dict) else {}
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return result if isinstance(result, dict) else {}
+
 
 def write_liepin_snapshot(path: str | Path, payload: dict[str, Any]) -> None:
     """Persist a Liepin live-read snapshot or command payload."""
@@ -222,48 +298,12 @@ def _combined_snapshot(
 
 
 def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
-    """Build a stable dedup key for a Liepin job.
-
-    Priority:
-      1. Explicit jobId attribute on the card (rare on current Liepin DOM).
-      2. Job ID extracted from URL path (/job/<id>.shtml). This is critical
-         because Liepin decorates the same job's URL with different query
-         params per page (d_posi, skId, fkId, ckId, curPage, index, …).
-         Using the full URL as key treated the same job on page 1 and page 2
-         as different, inflating counts and defeating pagination dedup.
-      3. Full URL fallback (last resort).
-      4. Name+company+city text fallback when no URL at all.
-    """
-    import re
-
     job_id = liepin_job_id(raw)
     if job_id:
         return f"id:{job_id}"
     if job.url:
-        m = re.search(r"/job/(\d+)\.shtml", job.url)
-        if m:
-            return f"job:{m.group(1)}"
         return f"url:{job.url}"
     return f"text:{job.name}|{job.company}|{job.city}"
-
-
-def _city_matches(job_city: str, requested_city: str) -> bool:
-    """Check whether a job's parsed city matches the user-requested city.
-
-    Liepin's sojob endpoint ignores URL city params server-side, so the
-    search results are a mix of cities. This post-filter is the only
-    reliable way to apply a city filter.
-
-    Matches when:
-      - No requested_city (filter disabled), OR
-      - job_city starts with requested_city (handles "北京" and "北京-朝阳区"), OR
-      - Either side is empty (permissive — better to over-include than drop).
-    """
-    if not requested_city:
-        return True
-    if not job_city:
-        return True  # don't drop cards with missing city field
-    return job_city.split("-")[0].strip() == requested_city.split("-")[0].strip()
 
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:
@@ -279,3 +319,106 @@ def _snapshot_failure(snapshot: dict[str, Any]) -> str:
     if snapshot.get("ok") is False:
         return str(snapshot.get("error") or "liepin_snapshot_failed")
     return ""
+
+
+def _replace_focused_text(cdp: Any, text: str) -> None:
+    cdp.send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyDown",
+            "key": "Meta",
+            "code": "MetaLeft",
+            "windowsVirtualKeyCode": 91,
+            "nativeVirtualKeyCode": 91,
+            "modifiers": 4,
+        },
+    )
+    cdp.send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyDown",
+            "key": "a",
+            "code": "KeyA",
+            "windowsVirtualKeyCode": 65,
+            "nativeVirtualKeyCode": 65,
+            "modifiers": 4,
+        },
+    )
+    cdp.send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyUp",
+            "key": "a",
+            "code": "KeyA",
+            "windowsVirtualKeyCode": 65,
+            "nativeVirtualKeyCode": 65,
+            "modifiers": 4,
+        },
+    )
+    cdp.send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyUp",
+            "key": "Meta",
+            "code": "MetaLeft",
+            "windowsVirtualKeyCode": 91,
+            "nativeVirtualKeyCode": 91,
+        },
+    )
+    cdp.send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyDown",
+            "key": "Backspace",
+            "code": "Backspace",
+            "windowsVirtualKeyCode": 8,
+            "nativeVirtualKeyCode": 8,
+        },
+    )
+    cdp.send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyUp",
+            "key": "Backspace",
+            "code": "Backspace",
+            "windowsVirtualKeyCode": 8,
+            "nativeVirtualKeyCode": 8,
+        },
+    )
+    cdp.send("Input.insertText", {"text": text})
+
+
+def _clear_visible_search_input(driver: Any) -> None:
+    js = """
+    (function(){
+      function visible(el) {
+        if (!el) return false;
+        var style = window.getComputedStyle(el);
+        var rect = el.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || 1) > 0
+          && rect.width > 0
+          && rect.height > 0;
+      }
+      var input = Array.from(document.querySelectorAll('input')).find(function(el) {
+        return visible(el) && String(el.getAttribute('placeholder') || '').indexOf('搜索') >= 0;
+      });
+      if (!input) return JSON.stringify({ok: false, error: 'search_input_not_found'});
+      input.focus();
+      var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '');
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'deleteContentBackward',
+        data: null
+      }));
+      input.dispatchEvent(new Event('change', {bubbles: true}));
+      try { input.setSelectionRange(0, 0); } catch (e) {}
+      return JSON.stringify({ok: true, value: input.value || ''});
+    })()
+    """
+    try:
+        driver._exec_js(js)
+    except Exception:
+        return

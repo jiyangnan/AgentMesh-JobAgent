@@ -4,7 +4,7 @@ from typing import Any
 
 from jobagent.domain.models import CheckResult, DoctorReport
 from jobagent.drivers.boss import create_driver
-from jobagent.infra.credentials import load_license_key
+from jobagent.infra.credentials import load_api_key
 from jobagent.infra.state import last_doctor_path, save_json
 from jobagent.platforms.liepin import LiepinReadOnlyCollector, LiepinSessionGuide
 
@@ -23,7 +23,7 @@ def run_liepin_doctor(
     intervention point explicit and avoids turning a login/session issue into a
     misleading selector or collect failure.
     """
-    active_driver = driver or create_driver()
+    active_driver = driver or create_driver(platform="liepin")
     checks: list[CheckResult] = []
 
     chrome_ok = _call_bool(active_driver, "chrome_running", default=True)
@@ -94,7 +94,7 @@ def run_liepin_doctor(
         ))
 
     if check_cloud:
-        checks.append(_cloud_license_check())
+        checks.append(_cloud_api_key_check())
 
     report = _build_report(checks)
     checks.append(_save_report_check(report))
@@ -148,19 +148,19 @@ def _save_report_check(report: DoctorReport) -> CheckResult:
     )
 
 
-def _cloud_license_check() -> CheckResult:
-    key = load_license_key()
+def _cloud_api_key_check() -> CheckResult:
+    key = load_api_key()
     if key:
         return CheckResult(
             "cloud_api_key_configured",
             True,
-            "AgentMesh360 API key is configured for Liepin rank/greet",
+            "Cloud API key is configured for Liepin rank/greet",
             {"key_prefix": key[:14] + "..."},
         )
     return CheckResult(
         "cloud_api_key_configured",
         False,
-        "AgentMesh360 API key is required for Liepin rank/greet",
+        "Cloud API key is required for Liepin rank/greet",
         {
             "error": "api_key_required",
             "hint": "Run `jobagent init --key <your_api_key>`. Register at https://agentmesh360.com/app/",

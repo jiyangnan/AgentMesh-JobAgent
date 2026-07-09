@@ -19,14 +19,17 @@ from .detail import (
     unwrap_zhilian_detail_js_result,
 )
 from .parser import parse_zhilian_job, zhilian_job_id
-from .selectors import build_zhilian_snapshot_script
+from .selectors import build_zhilian_city_filter_script, build_zhilian_snapshot_script
 
 
 def build_zhilian_search_url(query: str, city: str = "", page: int = 1) -> str:
-    """Build a human-search URL for the Zhilian read-only spike."""
+    """Build a keyword-only search URL for the Zhilian read-only spike.
+
+    Zhilian keeps location in a dedicated filter panel, not in the keyword box.
+    The `city` argument is accepted for API compatibility but intentionally not
+    encoded into the URL; live collection applies it via the page filter UI.
+    """
     url = f"https://sou.zhaopin.com/?kw={quote(query)}"
-    if city:
-        url += f"&jl={quote(city)}"
     if page > 1:
         url += f"&p={page}"
     return url
@@ -77,7 +80,7 @@ class ZhilianReadOnlyCollector:
     """Collect Zhilian search cards without applying or sending messages."""
 
     def __init__(self, driver: Any | None = None):
-        self.driver = driver or create_driver()
+        self.driver = driver or create_driver(platform="zhilian")
 
     def collect(
         self,
@@ -100,14 +103,15 @@ class ZhilianReadOnlyCollector:
         seen: set[str] = set()
         snapshots: list[dict[str, Any]] = []
         detail_snapshots: list[dict[str, Any]] = []
-        first_url = build_zhilian_search_url(query, city, page=start_page)
+        search_query = normalize_zhilian_keyword(query, city)
+        first_url = build_zhilian_search_url(search_query, city, page=start_page)
 
         for index, current_page in enumerate(range(start_page, start_page + page_count)):
-            url = build_zhilian_search_url(query, city, page=current_page)
+            url = build_zhilian_search_url(search_query, city, page=current_page)
             open_result = self.driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
             if not open_result.get("ok"):
                 return ZhilianCollectResult(
-                    query=query,
+                    query=search_query,
                     city=city,
                     url=url,
                     jobs=jobs,
@@ -117,20 +121,45 @@ class ZhilianReadOnlyCollector:
                     ok=False,
                     error=str(open_result.get("error", "open_url_failed")),
                 )
+            city_filter: dict[str, Any] = {}
+            if city:
+                city_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
+                if city_filter.get("loginRequired"):
+                    return ZhilianCollectResult(
+                        query=search_query,
+                        city=city,
+                        url=str(city_filter.get("url") or open_result.get("url") or url),
+                        jobs=jobs,
+                        snapshot=_combined_snapshot(snapshots, {"error": "zhilian_login_required", "cityFilter": city_filter, "page": current_page}),
+                        page=start_page,
+                        pages=page_count,
+                        ok=False,
+                        error="zhilian_login_required",
+                    )
+                if not _city_filter_applied(city_filter):
+                    return ZhilianCollectResult(
+                        query=search_query,
+                        city=city,
+                        url=str(city_filter.get("url") or open_result.get("url") or url),
+                        jobs=jobs,
+                        snapshot=_combined_snapshot(snapshots, {"error": "zhilian_city_filter_failed", "cityFilter": city_filter, "page": current_page}),
+                        page=start_page,
+                        pages=page_count,
+                        ok=False,
+                        error="zhilian_city_filter_failed",
+                    )
 
             remaining = max(1, limit - len(jobs))
-            # When city filter is active, fetch 2× more cards per page to
-            # compensate for non-matching ones that will be filtered out
-            # (Zhilian's sou endpoint ignores URL city params server-side).
-            fetch_limit = remaining * 2 if city else remaining
-            snapshot = self._extract_snapshot(limit=fetch_limit)
+            snapshot = self._extract_snapshot(limit=remaining)
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
+            if city_filter:
+                snapshot["cityFilter"] = city_filter
             snapshots.append(snapshot)
             failure = _snapshot_failure(snapshot)
             if failure:
                 return ZhilianCollectResult(
-                    query=query,
+                    query=search_query,
                     city=city,
                     url=str(snapshot.get("url") or open_result.get("url") or url),
                     jobs=jobs,
@@ -146,8 +175,7 @@ class ZhilianReadOnlyCollector:
                 if not isinstance(card, dict):
                     continue
                 job = parse_zhilian_job(card, city_name=city)
-                # Apply city post-filter (Zhilian URL params don't filter server-side)
-                if not _city_matches(job.city, city):
+                if city and job.city and job.city != city:
                     continue
                 key = _job_dedupe_key(job, card)
                 if key in seen:
@@ -169,7 +197,7 @@ class ZhilianReadOnlyCollector:
             failure = detail_result.get("error", "")
             if failure:
                 return ZhilianCollectResult(
-                    query=query,
+                    query=search_query,
                     city=city,
                     url=str((snapshots[0].get("url") if snapshots else "") or first_url),
                     jobs=jobs,
@@ -185,7 +213,7 @@ class ZhilianReadOnlyCollector:
             combined_snapshot["details"] = detail_snapshots
 
         return ZhilianCollectResult(
-            query=query,
+            query=search_query,
             city=city,
             url=str((snapshots[0].get("url") if snapshots else "") or first_url),
             jobs=jobs,
@@ -204,6 +232,30 @@ class ZhilianReadOnlyCollector:
             except (json.JSONDecodeError, TypeError):
                 return {"ok": False, "error": "snapshot_parse_failed", "raw": result["raw"]}
         return result if isinstance(result, dict) else {}
+
+    def _apply_city_filter(self, city: str, wait_seconds: int = 8) -> dict[str, Any]:
+        last: dict[str, Any] = {}
+        for attempt in range(2):
+            result = self.driver._exec_js(build_zhilian_city_filter_script(city))
+            last = _unwrap_js_result(result)
+            if last.get("loginRequired"):
+                time.sleep(min(max(wait_seconds, 1), 4))
+                return last
+            click_point = last.get("clickPoint") if isinstance(last.get("clickPoint"), dict) else None
+            if click_point and hasattr(self.driver, "_click_at"):
+                self.driver._click_at(click_point.get("x"), click_point.get("y"))
+                last["nativeClicked"] = True
+                time.sleep(1.2 if last.get("action") == "expand_location" else min(max(wait_seconds, 1), 4))
+                if last.get("action") == "select_city":
+                    return last
+            if _city_filter_applied(last):
+                time.sleep(min(max(wait_seconds, 1), 4))
+                return last
+            if last.get("action") == "expand_location" and attempt == 0:
+                time.sleep(0.8)
+                continue
+            return last
+        return last
 
     def _hydrate_from_details(
         self,
@@ -278,58 +330,12 @@ def _combined_snapshot(snapshots: list[dict[str, Any]], fallback: dict[str, Any]
 
 
 def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
-    """Build a stable dedup key for a Zhilian job.
-
-    Priority:
-      1. Explicit job id attribute on the card.
-      2. Job id extracted from URL path (/jobdetail/CCL...J....htm) — Zhilian
-         decorates the same job's URL with different query params per page
-         (refcode, srccode, preactionid, …).
-      3. Full URL fallback.
-      4. Name+company+city text fallback when no URL at all.
-    """
-    import re
-
     job_id = zhilian_job_id(raw)
     if job_id:
         return f"id:{job_id}"
     if job.url:
-        # Zhilian job URLs look like:
-        #   https://www.zhaopin.com/jobdetail/CCL1212903980J40854050007.htm?refcode=...
-        m = re.search(r"/jobdetail/([A-Z0-9]+)\.htm", job.url)
-        if m:
-            return f"job:{m.group(1)}"
         return f"url:{job.url}"
     return f"text:{job.name}|{job.company}|{job.city}"
-
-
-def _city_matches(job_city: str, requested_city: str) -> bool:
-    """Check whether a job's parsed city matches the user-requested city.
-
-    Zhilian's sou endpoint ignores URL city params server-side (jl= param is
-    accepted but doesn't filter results), so search results are a mix of
-    cities. This post-filter is the only reliable way to apply a city filter.
-
-    Matches when:
-      - No requested_city (filter disabled), OR
-      - job_city starts with requested_city (handles "北京" and "北京·朝阳区"), OR
-      - job_city is empty (permissive — better to over-include than drop).
-    """
-    if not requested_city:
-        return True
-    if not job_city:
-        return True  # don't drop cards with missing city field
-    # Zhilian uses "·" as city/area separator ("北京·朝阳区"), Liepin uses "-".
-    # Split on both to get just the top-level city.
-    for sep in ("·", "-"):
-        if sep in job_city:
-            job_city = job_city.split(sep)[0].strip()
-            break
-    for sep in ("·", "-"):
-        if sep in requested_city:
-            requested_city = requested_city.split(sep)[0].strip()
-            break
-    return job_city == requested_city
 
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:
@@ -342,3 +348,28 @@ def _snapshot_failure(snapshot: dict[str, Any]) -> str:
     if snapshot.get("ok") is False:
         return str(snapshot.get("error") or "zhilian_snapshot_failed")
     return ""
+
+
+def _unwrap_js_result(result: Any) -> dict[str, Any]:
+    if isinstance(result, dict) and "raw" in result:
+        try:
+            parsed = json.loads(result["raw"])
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {"ok": False, "error": "zhilian_js_parse_failed"}
+    return result if isinstance(result, dict) else {"ok": False, "error": "zhilian_js_empty_result"}
+
+
+def _city_filter_applied(result: dict[str, Any]) -> bool:
+    if result.get("mode") != "zhilian_city_filter":
+        return False
+    return bool(result.get("ok") and (result.get("applied") or result.get("alreadySelected") or result.get("skipped")))
+
+
+def normalize_zhilian_keyword(query: str, city: str = "") -> str:
+    value = query.strip()
+    marker = city.strip()
+    if marker and value.startswith(marker):
+        stripped = value[len(marker):].strip()
+        return stripped or value
+    return value

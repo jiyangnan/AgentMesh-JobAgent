@@ -7,6 +7,8 @@ from typing import Any
 APP_DIR = Path.home() / ".jobagent"
 STATE_DIR = APP_DIR / "state"
 LOG_DIR = APP_DIR / "logs"
+ROUNDS_DIR = STATE_DIR / "rounds"
+LOCKS_DIR = STATE_DIR / "locks"
 
 
 def ensure_dirs() -> None:
@@ -48,3 +50,30 @@ def profile_path() -> Path:
 def support_state_path() -> Path:
     ensure_dirs()
     return STATE_DIR / "support_state.json"
+
+
+def current_round_path() -> Path:
+    ensure_dirs()
+    return STATE_DIR / "current_round.json"
+
+
+def rounds_dir() -> Path:
+    ensure_dirs()
+    ROUNDS_DIR.mkdir(parents=True, exist_ok=True)
+    return ROUNDS_DIR
+
+
+def browser_session_path() -> Path:
+    ensure_dirs()
+    return STATE_DIR / "browser_session.json"
+
+
+def platform_tabs_path() -> Path:
+    ensure_dirs()
+    return STATE_DIR / "platform_tabs.json"
+
+
+def browser_session_lock_path() -> Path:
+    ensure_dirs()
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    return LOCKS_DIR / "browser-session.lock"

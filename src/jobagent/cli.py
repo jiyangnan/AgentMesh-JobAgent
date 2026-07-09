@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 import json
 import re
 import sys
@@ -21,7 +22,30 @@ def _print_json(obj: dict) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
-def _require_license_or_exit(command_label: str) -> None:
+@contextmanager
+def _platform_browser_lock(platform: str, command: str, enabled: bool = True):
+    if not enabled:
+        with nullcontext():
+            yield
+        return
+    from jobagent.infra.platform_lock import PlatformLockError, PlatformSessionLock
+
+    try:
+        lock = PlatformSessionLock(platform=platform, command=command)
+        lock.acquire()
+    except PermissionError:
+        yield
+        return
+    except PlatformLockError as e:
+        _print_json(e.payload)
+        sys.exit(2)
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def _require_api_key_or_exit(command_label: str) -> None:
     """Hard gate for commands that depend on our cloud IP (rank / greet / pipeline).
 
     Local fallbacks were intentionally removed: degraded quality + zero funnel
@@ -29,8 +53,8 @@ def _require_license_or_exit(command_label: str) -> None:
     a literal user-facing prompt (the agent should relay it verbatim per the
     literal-prompt principle).
     """
-    from jobagent.infra.credentials import load_license_key
-    if load_license_key():
+    from jobagent.infra.credentials import load_api_key
+    if load_api_key():
         return
     msg = (
         f"\n{'─' * 60}\n"
@@ -48,7 +72,7 @@ def _require_license_or_exit(command_label: str) -> None:
     print(msg, file=sys.stderr)
     _print_json({
         "ok": False,
-        "stage": "license_check",
+        "stage": "api_key_check",
         "command": command_label,
         "error": "api_key_required",
         "hint": "Run `jobagent init --key <your_api_key>`. Register at https://agentmesh360.com/app/",
@@ -60,14 +84,14 @@ def _print_cloud_upgrade_hint(command_name: str) -> None:
     """Tail-printed to stderr after any Path C (local) command.
 
     Read by the user's host agent and—per the literal-prompt principle—relayed
-    to the human user. Drives license-funnel conversion from anonymous local
+    to the human user. Drives API-key funnel conversion from anonymous local
     usage to cloud usage. Skipped when JOBAGENT_QUIET=1 (CI / repeated runs).
     """
     import os
     if os.environ.get("JOBAGENT_QUIET"):
         return
-    from jobagent.infra.credentials import load_license_key
-    if load_license_key():
+    from jobagent.infra.credentials import load_api_key
+    if load_api_key():
         return  # User has an API key; they chose Path C deliberately.
 
     cloud_features = {
@@ -102,15 +126,16 @@ def _ensure_boss_login() -> None:
     from jobagent.drivers.boss import create_driver
     from jobagent.drivers.boss.cdp_driver import CDPBossDriver
 
-    driver = create_driver()
-    if isinstance(driver, CDPBossDriver):
-        if not driver.ensure_logged_in():
-            print(json.dumps({
-                "ok": False,
-                "error": "login_timeout",
-                "message": "登录超时（5分钟），请重试",
-            }), file=sys.stderr)
-            sys.exit(2)
+    with _platform_browser_lock("boss", "jobagent login/ensure"):
+        driver = create_driver()
+        if isinstance(driver, CDPBossDriver):
+            if not driver.ensure_logged_in():
+                print(json.dumps({
+                    "ok": False,
+                    "error": "login_timeout",
+                    "message": "登录超时（5分钟），请重试",
+                }), file=sys.stderr)
+                sys.exit(2)
     # AppleScript fallback: cannot do passive login guide,
     # rely on the downstream LoginRequiredError path.
 
@@ -212,7 +237,7 @@ def _add_zhilian_greet_preview_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", "-c", default=DEFAULT_CONFIG_PATH, help="Optional YAML config with platforms.<name>.enabled overrides")
     parser.add_argument("--input", "-i", required=True, help="Ranked JSON from `jobagent zhilian rank`")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to preview")
-    parser.add_argument("--local", action="store_true", help="Use local template greeting preview without Cloud API or license")
+    parser.add_argument("--local", action="store_true", help="Use local template greeting preview without Cloud API or API key")
     parser.add_argument(
         "--output", "-o",
         help="Save ranked Zhilian jobs with cloud/local greetings injected; defaults to <input>.with_greetings.json.",
@@ -249,14 +274,14 @@ def _add_rank_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", "-i", required=True, help="Input JSON file with job list (from a platform collect command)")
     parser.add_argument("--top", "-n", type=int, default=20, help="Keep only top N results (default: 20)")
     parser.add_argument("--output", "-o", help="Output JSON file path (default: stdout)")
-    parser.add_argument("--local", action="store_true", help="Use local rule ranking without Cloud API or license")
+    parser.add_argument("--local", action="store_true", help="Use local rule ranking without Cloud API or API key")
 
 
 def _add_greet_preview_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", "-c", default=DEFAULT_CONFIG_PATH, help="Optional YAML config with platforms.<name>.enabled overrides")
     parser.add_argument("--input", "-i", required=True, help="Ranked JSON from `jobagent boss rank`")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to preview")
-    parser.add_argument("--local", action="store_true", help="Use local template greeting preview without Cloud API or license")
+    parser.add_argument("--local", action="store_true", help="Use local template greeting preview without Cloud API or API key")
     parser.add_argument(
         "--output", "-o",
         help="Save ranked jobs with cloud greetings injected; defaults to <input>.with_greetings.json. `jobagent boss greet send --input <output>` will then use those.",
@@ -267,7 +292,7 @@ def _add_liepin_greet_preview_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", "-c", default=DEFAULT_CONFIG_PATH, help="Optional YAML config with platforms.<name>.enabled overrides")
     parser.add_argument("--input", "-i", required=True, help="Ranked JSON from `jobagent liepin rank`")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max jobs to preview")
-    parser.add_argument("--local", action="store_true", help="Use local template greeting preview without Cloud API or license")
+    parser.add_argument("--local", action="store_true", help="Use local template greeting preview without Cloud API or API key")
     parser.add_argument(
         "--output", "-o",
         help="Save ranked Liepin jobs with cloud greetings injected; defaults to <input>.with_greetings.json. Next use `jobagent liepin apply open` for manual handoff.",
@@ -331,9 +356,9 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_liepin.add_argument("--city", default="", help="Optional sample city used for readiness checks")
     doctor_liepin.add_argument("--wait-seconds", type=int, default=5, help="Seconds to wait after opening Liepin pages")
     doctor_liepin.add_argument("--limit", type=int, default=5, help="Max visible cards to test during selector extraction")
-    doctor_liepin.add_argument("--with-cloud", action="store_true", help="Also check cloud license readiness for Liepin rank/greet")
+    doctor_liepin.add_argument("--with-cloud", action="store_true", help="Also check cloud API key readiness for Liepin rank/greet")
 
-    doctor_env = doctor_sub.add_parser("env", help="Check local environment: Python / Chrome / network / license")
+    doctor_env = doctor_sub.add_parser("env", help="Check local environment: Python / Chrome / network / API key")
 
     # ── boss ──
     boss = sub.add_parser("boss", help="Boss-related commands")
@@ -437,7 +462,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_analyze.add_argument("--target-role", help="Optional hint: target role title (helps disambiguate)")
     resume_analyze.add_argument("--target-cities", nargs="*", help="Optional hint: target city names")
     resume_analyze.add_argument("--output", "-o", help="Output profile JSON path (default: ~/.jobagent/state/profile.json)")
-    resume_analyze.add_argument("--local", action="store_true", help="Analyze resume locally into the 36-field profile shape without Cloud API/license")
+    resume_analyze.add_argument("--local", action="store_true", help="Analyze resume locally into the 36-field profile shape without Cloud API/API key")
 
     # ── profile ──
     profile = sub.add_parser("profile", help="Candidate profile management")
@@ -559,52 +584,53 @@ def _cmd_jobs_collect(args: argparse.Namespace) -> None:
     from jobagent.infra.exceptions import LoginRequiredError
     from jobagent.platforms.boss import BossDataDriver
 
-    _ensure_boss_login()
-
     import random
     import time
 
-    city_name, city_code = _resolve_city(args.city)
-    driver = BossDataDriver()
-    pages_total = max(1, getattr(args, "pages", 1))
-    page_delay = max(0.0, getattr(args, "page_delay", 5.0))
-    page_jitter = max(0.0, getattr(args, "page_delay_jitter", 2.0))
-    all_jobs = []
-    seen_urls: set[str] = set()
-    try:
-        for offset in range(pages_total):
-            # Courteous sleep between pages (we throttle our own requests to be
-            # polite to the upstream API). Skip before the first page.
-            if offset > 0 and page_delay > 0:
-                delay = page_delay + random.uniform(0, page_jitter)
-                print(
-                    f"  ⏳ sleeping {delay:.1f}s before next page (throttled fetch)",
-                    file=sys.stderr,
-                )
-                time.sleep(delay)
+    with _platform_browser_lock("boss", "jobagent boss collect"):
+        _ensure_boss_login()
 
-            cur_page = args.page + offset
-            page_jobs = driver.fetch_jobs(
-                query=args.query,
-                city_code=city_code,
-                city_name=city_name,
-                page=cur_page,
-                page_size=args.page_size,
-            )
-            new_count = 0
-            for j in page_jobs:
-                if j.url and j.url in seen_urls:
-                    continue
-                seen_urls.add(j.url) if j.url else None
-                all_jobs.append(j)
-                new_count += 1
-            if pages_total > 1:
-                print(f"  page {cur_page}: +{new_count} new jobs (total {len(all_jobs)})", file=sys.stderr)
-            if not page_jobs:  # End of results
-                break
-    except LoginRequiredError as e:
-        print(e, file=sys.stderr)
-        sys.exit(2)
+        city_name, city_code = _resolve_city(args.city)
+        driver = BossDataDriver()
+        pages_total = max(1, getattr(args, "pages", 1))
+        page_delay = max(0.0, getattr(args, "page_delay", 5.0))
+        page_jitter = max(0.0, getattr(args, "page_delay_jitter", 2.0))
+        all_jobs = []
+        seen_urls: set[str] = set()
+        try:
+            for offset in range(pages_total):
+                # Courteous sleep between pages (we throttle our own requests to be
+                # polite to the upstream API). Skip before the first page.
+                if offset > 0 and page_delay > 0:
+                    delay = page_delay + random.uniform(0, page_jitter)
+                    print(
+                        f"  ⏳ sleeping {delay:.1f}s before next page (throttled fetch)",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+
+                cur_page = args.page + offset
+                page_jobs = driver.fetch_jobs(
+                    query=args.query,
+                    city_code=city_code,
+                    city_name=city_name,
+                    page=cur_page,
+                    page_size=args.page_size,
+                )
+                new_count = 0
+                for j in page_jobs:
+                    if j.url and j.url in seen_urls:
+                        continue
+                    seen_urls.add(j.url) if j.url else None
+                    all_jobs.append(j)
+                    new_count += 1
+                if pages_total > 1:
+                    print(f"  page {cur_page}: +{new_count} new jobs (total {len(all_jobs)})", file=sys.stderr)
+                if not page_jobs:  # End of results
+                    break
+        except LoginRequiredError as e:
+            print(e, file=sys.stderr)
+            sys.exit(2)
 
     payload = {
         "query": args.query,
@@ -657,44 +683,45 @@ def _cmd_liepin_collect(args: argparse.Namespace) -> None:
             })
             sys.exit(2)
 
-        driver = None
-        if not args.skip_login_check:
-            from jobagent.drivers.boss import create_driver
+        with _platform_browser_lock("liepin", "jobagent liepin collect"):
+            driver = None
+            if not args.skip_login_check:
+                from jobagent.drivers.boss import create_driver
 
-            driver = create_driver()
-            status = LiepinSessionGuide(driver=driver).check(
+                driver = create_driver()
+                status = LiepinSessionGuide(driver=driver).check(
+                    query=args.query,
+                    city=args.city,
+                    wait_seconds=max(1, args.wait_seconds),
+                )
+                if not status.logged_in:
+                    payload = status.to_dict()
+                    payload["platform"] = "liepin"
+                    payload["mode"] = "login_check"
+                    payload["query"] = args.query
+                    payload["city"] = args.city
+                    payload["error"] = payload.get("error") or "liepin_login_required"
+                    output = json.dumps(payload, ensure_ascii=False, indent=2)
+                    if args.output:
+                        Path(args.output).write_text(output, encoding="utf-8")
+                        print(f"Saved Liepin login-check payload -> {args.output}")
+                    else:
+                        print(output)
+                    if payload.get("requires_user_action") and payload.get("user_prompt"):
+                        print(payload["user_prompt"], file=sys.stderr)
+                        if payload.get("next_suggested"):
+                            print(f"Next: {payload['next_suggested']}", file=sys.stderr)
+                    sys.exit(2)
+
+            result = LiepinReadOnlyCollector(driver=driver).collect(
                 query=args.query,
                 city=args.city,
+                limit=max(1, args.limit),
                 wait_seconds=max(1, args.wait_seconds),
+                page=max(1, args.page),
+                pages=max(1, args.pages),
+                page_delay=max(0.0, args.page_delay),
             )
-            if not status.logged_in:
-                payload = status.to_dict()
-                payload["platform"] = "liepin"
-                payload["mode"] = "login_check"
-                payload["query"] = args.query
-                payload["city"] = args.city
-                payload["error"] = payload.get("error") or "liepin_login_required"
-                output = json.dumps(payload, ensure_ascii=False, indent=2)
-                if args.output:
-                    Path(args.output).write_text(output, encoding="utf-8")
-                    print(f"Saved Liepin login-check payload -> {args.output}")
-                else:
-                    print(output)
-                if payload.get("requires_user_action") and payload.get("user_prompt"):
-                    print(payload["user_prompt"], file=sys.stderr)
-                    if payload.get("next_suggested"):
-                        print(f"Next: {payload['next_suggested']}", file=sys.stderr)
-                sys.exit(2)
-
-        result = LiepinReadOnlyCollector(driver=driver).collect(
-            query=args.query,
-            city=args.city,
-            limit=max(1, args.limit),
-            wait_seconds=max(1, args.wait_seconds),
-            page=max(1, args.page),
-            pages=max(1, args.pages),
-            page_delay=max(0.0, args.page_delay),
-        )
         payload = result.to_payload(include_snapshot=args.include_snapshot)
         if result.ok and args.output:
             payload["next_suggested"] = f"jobagent liepin rank --input {args.output} --output <liepin.ranked.json>"
@@ -751,44 +778,45 @@ def _cmd_zhilian_collect(args: argparse.Namespace) -> None:
             })
             sys.exit(2)
 
-        driver = None
-        from jobagent.drivers.boss import create_driver
+        with _platform_browser_lock("zhilian", "jobagent zhilian collect"):
+            driver = None
+            from jobagent.drivers.boss import create_driver
 
-        driver = create_driver()
-        status = ZhilianSessionGuide(driver=driver).check(
-            query=args.query,
-            city=args.city,
-            wait_seconds=max(1, args.wait_seconds),
-        )
-        if not status.logged_in:
-            payload = status.to_dict()
-            payload["platform"] = "zhilian"
-            payload["mode"] = "login_check"
-            payload["query"] = args.query
-            payload["city"] = args.city
-            payload["error"] = payload.get("error") or "zhilian_login_required"
-            output = json.dumps(payload, ensure_ascii=False, indent=2)
-            if args.output:
-                Path(args.output).write_text(output, encoding="utf-8")
-                print(f"Saved Zhilian login-check payload -> {args.output}")
-            else:
-                print(output)
-            if payload.get("requires_user_action") and payload.get("user_prompt"):
-                print(payload["user_prompt"], file=sys.stderr)
-                if payload.get("next_suggested"):
-                    print(f"Next: {payload['next_suggested']}", file=sys.stderr)
-            sys.exit(2)
+            driver = create_driver()
+            status = ZhilianSessionGuide(driver=driver).check(
+                query=args.query,
+                city=args.city,
+                wait_seconds=max(1, args.wait_seconds),
+            )
+            if not status.logged_in:
+                payload = status.to_dict()
+                payload["platform"] = "zhilian"
+                payload["mode"] = "login_check"
+                payload["query"] = args.query
+                payload["city"] = args.city
+                payload["error"] = payload.get("error") or "zhilian_login_required"
+                output = json.dumps(payload, ensure_ascii=False, indent=2)
+                if args.output:
+                    Path(args.output).write_text(output, encoding="utf-8")
+                    print(f"Saved Zhilian login-check payload -> {args.output}")
+                else:
+                    print(output)
+                if payload.get("requires_user_action") and payload.get("user_prompt"):
+                    print(payload["user_prompt"], file=sys.stderr)
+                    if payload.get("next_suggested"):
+                        print(f"Next: {payload['next_suggested']}", file=sys.stderr)
+                sys.exit(2)
 
-        result = ZhilianReadOnlyCollector(driver=driver).collect(
-            query=args.query,
-            city=args.city,
-            limit=max(1, args.limit),
-            wait_seconds=max(1, args.wait_seconds),
-            page=max(1, args.page),
-            pages=max(1, args.pages),
-            page_delay=max(0.0, args.page_delay),
-            detail_limit=max(0, args.detail_limit),
-        )
+            result = ZhilianReadOnlyCollector(driver=driver).collect(
+                query=args.query,
+                city=args.city,
+                limit=max(1, args.limit),
+                wait_seconds=max(1, args.wait_seconds),
+                page=max(1, args.page),
+                pages=max(1, args.pages),
+                page_delay=max(0.0, args.page_delay),
+                detail_limit=max(0, args.detail_limit),
+            )
         payload = result.to_payload(include_snapshot=args.include_snapshot)
         if result.ok and args.output:
             payload["next_suggested"] = f"jobagent zhilian rank --input {args.output} --output <zhilian.ranked.json>"
@@ -814,11 +842,27 @@ def _cmd_zhilian_collect(args: argparse.Namespace) -> None:
 def _cmd_zhilian_login(args: argparse.Namespace) -> None:
     from jobagent.platforms.zhilian import ZhilianSessionGuide
 
-    guide = ZhilianSessionGuide()
-    if args.check:
-        status = guide.check(
-            query=args.query,
-            city=args.city,
+    with _platform_browser_lock("zhilian", "jobagent zhilian login"):
+        guide = ZhilianSessionGuide()
+        if args.check:
+            status = guide.check(
+                query=args.query,
+                city=args.city,
+                wait_seconds=max(1, args.wait_seconds),
+            )
+            _print_json(status.to_dict())
+            if not status.logged_in:
+                prompt_payload = status.to_dict()
+                if prompt_payload.get("user_prompt"):
+                    print(prompt_payload["user_prompt"], file=sys.stderr)
+                if prompt_payload.get("next_suggested"):
+                    print(f"Next: {prompt_payload['next_suggested']}", file=sys.stderr)
+                sys.exit(2)
+            return
+
+        status = guide.wait_for_login(
+            timeout=max(1, args.timeout),
+            poll_interval=max(1, args.poll_interval),
             wait_seconds=max(1, args.wait_seconds),
         )
         _print_json(status.to_dict())
@@ -826,32 +870,36 @@ def _cmd_zhilian_login(args: argparse.Namespace) -> None:
             prompt_payload = status.to_dict()
             if prompt_payload.get("user_prompt"):
                 print(prompt_payload["user_prompt"], file=sys.stderr)
-            if prompt_payload.get("next_suggested"):
-                print(f"Next: {prompt_payload['next_suggested']}", file=sys.stderr)
             sys.exit(2)
-        return
-
-    status = guide.wait_for_login(
-        timeout=max(1, args.timeout),
-        poll_interval=max(1, args.poll_interval),
-        wait_seconds=max(1, args.wait_seconds),
-    )
-    _print_json(status.to_dict())
-    if not status.logged_in:
-        prompt_payload = status.to_dict()
-        if prompt_payload.get("user_prompt"):
-            print(prompt_payload["user_prompt"], file=sys.stderr)
-        sys.exit(2)
 
 
 def _cmd_liepin_login(args: argparse.Namespace) -> None:
     from jobagent.platforms.liepin import LiepinSessionGuide
 
-    guide = LiepinSessionGuide()
-    if args.check:
-        status = guide.check(
-            query=args.query,
-            city=args.city,
+    with _platform_browser_lock("liepin", "jobagent liepin login"):
+        guide = LiepinSessionGuide()
+        if args.check:
+            status = guide.check(
+                query=args.query,
+                city=args.city,
+                wait_seconds=max(1, args.wait_seconds),
+            )
+            _print_json(status.to_dict())
+            if status.login_required:
+                prompt_payload = status.to_dict()
+                print(prompt_payload["user_prompt"], file=sys.stderr)
+                print(f"Next: {prompt_payload['next_suggested']}", file=sys.stderr)
+            sys.exit(0 if status.logged_in else 2)
+
+        print(
+            "\nLiepin login guide: opening a dedicated browser page for read-only collection.\n"
+            "Complete login in the browser window. Job Agent will only poll login state;\n"
+            "it will not apply, send messages, or upload cookies.\n",
+            file=sys.stderr,
+        )
+        status = guide.wait_for_login(
+            timeout=max(1, args.timeout),
+            poll_interval=max(1, args.poll_interval),
             wait_seconds=max(1, args.wait_seconds),
         )
         _print_json(status.to_dict())
@@ -861,31 +909,13 @@ def _cmd_liepin_login(args: argparse.Namespace) -> None:
             print(f"Next: {prompt_payload['next_suggested']}", file=sys.stderr)
         sys.exit(0 if status.logged_in else 2)
 
-    print(
-        "\nLiepin login guide: opening a dedicated browser page for read-only collection.\n"
-        "Complete login in the browser window. Job Agent will only poll login state;\n"
-        "it will not apply, send messages, or upload cookies.\n",
-        file=sys.stderr,
-    )
-    status = guide.wait_for_login(
-        timeout=max(1, args.timeout),
-        poll_interval=max(1, args.poll_interval),
-        wait_seconds=max(1, args.wait_seconds),
-    )
-    _print_json(status.to_dict())
-    if status.login_required:
-        prompt_payload = status.to_dict()
-        print(prompt_payload["user_prompt"], file=sys.stderr)
-        print(f"Next: {prompt_payload['next_suggested']}", file=sys.stderr)
-    sys.exit(0 if status.logged_in else 2)
-
 
 def _cmd_doctor_env(args: argparse.Namespace) -> None:
-    """Check Python version, Chrome installed, network to api, license configured."""
+    """Check Python version, Chrome installed, network to api, API key configured."""
     import platform
     from jobagent.drivers.boss.chrome_manager import find_chrome
     from jobagent.infra import cloud_client
-    from jobagent.infra.credentials import api_base_url, load_license_key
+    from jobagent.infra.credentials import api_base_url, load_api_key
 
     checks: list[dict] = []
     system = platform.system()  # "Darwin" / "Linux" / "Windows"
@@ -926,12 +956,12 @@ def _cmd_doctor_env(args: argparse.Namespace) -> None:
         })
 
     # 4. API key configured
-    key = load_license_key()
+    key = load_api_key()
     checks.append({
         "name": "api_key",
         "ok": bool(key),
         "value": (key[:14] + "...") if key else None,
-        "hint": None if key else "Run `jobagent init --key <your_api_key>` after registering at https://agentmesh360.com/app/",
+        "hint": None if key else "Run `jobagent init --key <your_api_key>`",
     })
 
     # 5. Network to API
@@ -969,11 +999,11 @@ def _cmd_doctor_env(args: argparse.Namespace) -> None:
 
 
 def _cmd_init(args: argparse.Namespace) -> None:
-    """Save AgentMesh360 API key and verify connectivity by calling /v1/me."""
+    """Save API key and verify connectivity by calling /v1/me."""
     from jobagent.infra import cloud_client
-    from jobagent.infra.credentials import save_license_key, api_base_url
+    from jobagent.infra.credentials import save_api_key, api_base_url
 
-    path = save_license_key(args.key)
+    path = save_api_key(args.key)
 
     if args.no_verify:
         _print_json({"ok": True, "saved_to": str(path), "verified": False, "api_base": api_base_url()})
@@ -999,12 +1029,11 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "verified": True,
         "api_base": api_base_url(),
         "account": info.get("account", {}),
-        "credit": info.get("credit", info.get("license", {})),
         "server": info.get("server", {}),
         "next_suggested": "jobagent resume analyze --file <path-to-your-resume.pdf>",
     })
     print(
-        "\n✅ AgentMesh360 API key configured. Next: analyze your resume with\n"
+        "\n✅ API key configured. Next: analyze your resume with\n"
         "   jobagent resume analyze --file <path-to-your-resume.pdf>\n",
         file=sys.stderr,
     )
@@ -1159,13 +1188,13 @@ def _cmd_jobs_rank(args: argparse.Namespace) -> None:
         _cmd_jobs_rank_local(args, raw_jobs, source_platform="zhipin")
         return
 
-    _require_license_or_exit("boss rank")
+    _require_api_key_or_exit("boss rank")
 
     _cmd_jobs_rank_cloud(args, raw_jobs)
 
 
 def _cmd_liepin_rank(args: argparse.Namespace) -> None:
-    """Rank Liepin read-only collected jobs via Cloud AI. License required."""
+    """Rank Liepin read-only collected jobs via Cloud AI. API key required."""
     _, raw_jobs = _load_jobs_payload_or_exit(args.input)
     _require_jobs_platform_or_exit(
         raw_jobs,
@@ -1177,7 +1206,7 @@ def _cmd_liepin_rank(args: argparse.Namespace) -> None:
         _cmd_liepin_rank_local(args, raw_jobs)
         return
 
-    _require_license_or_exit("liepin rank")
+    _require_api_key_or_exit("liepin rank")
     _cmd_jobs_rank_cloud(args, raw_jobs, source_platform="liepin")
 
 
@@ -1199,7 +1228,7 @@ def _cmd_zhilian_rank(args: argparse.Namespace) -> None:
         _cmd_jobs_rank_local(args, raw_jobs, source_platform="zhilian")
         return
 
-    _require_license_or_exit("zhilian rank")
+    _require_api_key_or_exit("zhilian rank")
     _cmd_jobs_rank_cloud(args, raw_jobs, source_platform="zhilian")
 
 
@@ -1392,7 +1421,7 @@ def _cmd_greet_preview(args: argparse.Namespace) -> None:
         _cmd_greet_preview_local(args, data, raw_jobs, source_platform="zhipin")
         return
 
-    _require_license_or_exit("boss greet preview")
+    _require_api_key_or_exit("boss greet preview")
     _cmd_greet_preview_cloud(args)
 
 
@@ -1409,7 +1438,7 @@ def _cmd_liepin_greet_preview(args: argparse.Namespace) -> None:
         _cmd_liepin_greet_preview_local(args, data, raw_jobs)
         return
 
-    _require_license_or_exit("liepin greet preview")
+    _require_api_key_or_exit("liepin greet preview")
     _cmd_greet_preview_cloud(
         args,
         next_message=(
@@ -1441,7 +1470,7 @@ def _cmd_zhilian_greet_preview(args: argparse.Namespace) -> None:
         _cmd_greet_preview_local(args, data, raw_jobs, source_platform="zhilian")
         return
 
-    _require_license_or_exit("zhilian greet preview")
+    _require_api_key_or_exit("zhilian greet preview")
     _cmd_greet_preview_cloud(
         args,
         next_message=(
@@ -1697,32 +1726,33 @@ def _cmd_liepin_apply_open(args: argparse.Namespace) -> None:
         })
         sys.exit(2)
 
-    driver = None
-    if not args.dry_run and not args.skip_login_check:
-        from jobagent.drivers.boss import create_driver
+    with _platform_browser_lock("liepin", "jobagent liepin apply open", enabled=not bool(args.dry_run)):
+        driver = None
+        if not args.dry_run and not args.skip_login_check:
+            from jobagent.drivers.boss import create_driver
 
-        driver = create_driver()
-        status = LiepinSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
-        if not status.logged_in:
-            payload = status.to_dict()
-            payload["platform"] = "liepin"
-            payload["mode"] = "apply_open_login_check"
-            payload["input"] = args.input
-            payload["error"] = payload.get("error") or "liepin_login_required"
-            _print_json(payload)
-            if payload.get("requires_user_action") and payload.get("user_prompt"):
-                print(payload["user_prompt"], file=sys.stderr)
-                if payload.get("next_suggested"):
-                    print(f"Next: {payload['next_suggested']}", file=sys.stderr)
-            sys.exit(2)
+            driver = create_driver()
+            status = LiepinSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
+            if not status.logged_in:
+                payload = status.to_dict()
+                payload["platform"] = "liepin"
+                payload["mode"] = "apply_open_login_check"
+                payload["input"] = args.input
+                payload["error"] = payload.get("error") or "liepin_login_required"
+                _print_json(payload)
+                if payload.get("requires_user_action") and payload.get("user_prompt"):
+                    print(payload["user_prompt"], file=sys.stderr)
+                    if payload.get("next_suggested"):
+                        print(f"Next: {payload['next_suggested']}", file=sys.stderr)
+                sys.exit(2)
 
-    result = LiepinApplyOpener(driver=driver).open_jobs(
-        raw_jobs,
-        limit=max(1, args.limit),
-        start=max(0, args.start),
-        wait_seconds=max(1, args.wait_seconds),
-        dry_run=bool(args.dry_run),
-    )
+        result = LiepinApplyOpener(driver=driver).open_jobs(
+            raw_jobs,
+            limit=max(1, args.limit),
+            start=max(0, args.start),
+            wait_seconds=max(1, args.wait_seconds),
+            dry_run=bool(args.dry_run),
+        )
     payload = result.to_payload()
     if missing_greetings:
         payload["warning"] = "selected_jobs_missing_greeting"
@@ -1770,34 +1800,35 @@ def _cmd_liepin_apply_send(args: argparse.Namespace) -> None:
         })
         sys.exit(2)
 
-    driver = None
-    if not args.dry_run and not args.skip_login_check:
-        from jobagent.drivers.boss import create_driver
+    with _platform_browser_lock("liepin", "jobagent liepin apply send", enabled=not bool(args.dry_run)):
+        driver = None
+        if not args.dry_run and not args.skip_login_check:
+            from jobagent.drivers.boss import create_driver
 
-        driver = create_driver()
-        status = LiepinSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
-        if not status.logged_in:
-            payload = status.to_dict()
-            payload["platform"] = "liepin"
-            payload["mode"] = "apply_send_login_check"
-            payload["input"] = args.input
-            payload["error"] = payload.get("error") or "liepin_login_required"
-            _print_json(payload)
-            if payload.get("requires_user_action") and payload.get("user_prompt"):
-                print(payload["user_prompt"], file=sys.stderr)
-                if payload.get("next_suggested"):
-                    print(f"Next: {payload['next_suggested']}", file=sys.stderr)
-            sys.exit(2)
+            driver = create_driver()
+            status = LiepinSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
+            if not status.logged_in:
+                payload = status.to_dict()
+                payload["platform"] = "liepin"
+                payload["mode"] = "apply_send_login_check"
+                payload["input"] = args.input
+                payload["error"] = payload.get("error") or "liepin_login_required"
+                _print_json(payload)
+                if payload.get("requires_user_action") and payload.get("user_prompt"):
+                    print(payload["user_prompt"], file=sys.stderr)
+                    if payload.get("next_suggested"):
+                        print(f"Next: {payload['next_suggested']}", file=sys.stderr)
+                sys.exit(2)
 
-    attempts = LiepinApplySender(driver=driver).send_batch(
-        raw_jobs,
-        limit=limit,
-        start=start,
-        wait_seconds=max(1, args.wait_seconds),
-        dry_run=bool(args.dry_run),
-        skip_delivered=not bool(getattr(args, "no_skip_delivered", False)),
-        stop_on_failure=not bool(getattr(args, "continue_on_failure", False)),
-    )
+        attempts = LiepinApplySender(driver=driver).send_batch(
+            raw_jobs,
+            limit=limit,
+            start=start,
+            wait_seconds=max(1, args.wait_seconds),
+            dry_run=bool(args.dry_run),
+            skip_delivered=not bool(getattr(args, "no_skip_delivered", False)),
+            stop_on_failure=not bool(getattr(args, "continue_on_failure", False)),
+        )
     delivered = sum(1 for attempt in attempts if attempt.delivered)
     planned = sum(1 for attempt in attempts if attempt.error == "dry_run")
     skipped = sum(1 for attempt in attempts if attempt.error == "already_delivered")
@@ -1891,32 +1922,33 @@ def _cmd_zhilian_apply_open(args: argparse.Namespace) -> None:
         })
         sys.exit(2)
 
-    driver = None
-    if not args.dry_run and not args.skip_login_check:
-        from jobagent.drivers.boss import create_driver
+    with _platform_browser_lock("zhilian", "jobagent zhilian apply open", enabled=not bool(args.dry_run)):
+        driver = None
+        if not args.dry_run and not args.skip_login_check:
+            from jobagent.drivers.boss import create_driver
 
-        driver = create_driver()
-        status = ZhilianSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
-        if not status.logged_in:
-            payload = status.to_dict()
-            payload["platform"] = "zhilian"
-            payload["mode"] = "apply_open_login_check"
-            payload["input"] = args.input
-            payload["error"] = payload.get("error") or "zhilian_login_required"
-            _print_json(payload)
-            if payload.get("requires_user_action") and payload.get("user_prompt"):
-                print(payload["user_prompt"], file=sys.stderr)
-                if payload.get("next_suggested"):
-                    print(f"Next: {payload['next_suggested']}", file=sys.stderr)
-            sys.exit(2)
+            driver = create_driver()
+            status = ZhilianSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
+            if not status.logged_in:
+                payload = status.to_dict()
+                payload["platform"] = "zhilian"
+                payload["mode"] = "apply_open_login_check"
+                payload["input"] = args.input
+                payload["error"] = payload.get("error") or "zhilian_login_required"
+                _print_json(payload)
+                if payload.get("requires_user_action") and payload.get("user_prompt"):
+                    print(payload["user_prompt"], file=sys.stderr)
+                    if payload.get("next_suggested"):
+                        print(f"Next: {payload['next_suggested']}", file=sys.stderr)
+                sys.exit(2)
 
-    result = ZhilianApplyOpener(driver=driver).open_jobs(
-        raw_jobs,
-        limit=max(1, args.limit),
-        start=max(0, args.start),
-        wait_seconds=max(1, args.wait_seconds),
-        dry_run=bool(args.dry_run),
-    )
+        result = ZhilianApplyOpener(driver=driver).open_jobs(
+            raw_jobs,
+            limit=max(1, args.limit),
+            start=max(0, args.start),
+            wait_seconds=max(1, args.wait_seconds),
+            dry_run=bool(args.dry_run),
+        )
     payload = result.to_payload()
     if missing_greetings:
         payload["warning"] = "selected_jobs_missing_greeting"
@@ -1964,34 +1996,35 @@ def _cmd_zhilian_apply_send(args: argparse.Namespace) -> None:
         })
         sys.exit(2)
 
-    driver = None
-    if not args.dry_run and not args.skip_login_check:
-        from jobagent.drivers.boss import create_driver
+    with _platform_browser_lock("zhilian", "jobagent zhilian apply send", enabled=not bool(args.dry_run)):
+        driver = None
+        if not args.dry_run and not args.skip_login_check:
+            from jobagent.drivers.boss import create_driver
 
-        driver = create_driver()
-        status = ZhilianSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
-        if not status.logged_in:
-            payload = status.to_dict()
-            payload["platform"] = "zhilian"
-            payload["mode"] = "apply_send_login_check"
-            payload["input"] = args.input
-            payload["error"] = payload.get("error") or "zhilian_login_required"
-            _print_json(payload)
-            if payload.get("requires_user_action") and payload.get("user_prompt"):
-                print(payload["user_prompt"], file=sys.stderr)
-                if payload.get("next_suggested"):
-                    print(f"Next: {payload['next_suggested']}", file=sys.stderr)
-            sys.exit(2)
+            driver = create_driver()
+            status = ZhilianSessionGuide(driver=driver).check(wait_seconds=max(1, args.wait_seconds))
+            if not status.logged_in:
+                payload = status.to_dict()
+                payload["platform"] = "zhilian"
+                payload["mode"] = "apply_send_login_check"
+                payload["input"] = args.input
+                payload["error"] = payload.get("error") or "zhilian_login_required"
+                _print_json(payload)
+                if payload.get("requires_user_action") and payload.get("user_prompt"):
+                    print(payload["user_prompt"], file=sys.stderr)
+                    if payload.get("next_suggested"):
+                        print(f"Next: {payload['next_suggested']}", file=sys.stderr)
+                sys.exit(2)
 
-    attempts = ZhilianApplySender(driver=driver).send_batch(
-        raw_jobs,
-        limit=limit,
-        start=start,
-        wait_seconds=max(1, args.wait_seconds),
-        dry_run=bool(args.dry_run),
-        skip_delivered=not bool(getattr(args, "no_skip_delivered", False)),
-        stop_on_failure=not bool(getattr(args, "continue_on_failure", False)),
-    )
+        attempts = ZhilianApplySender(driver=driver).send_batch(
+            raw_jobs,
+            limit=limit,
+            start=start,
+            wait_seconds=max(1, args.wait_seconds),
+            dry_run=bool(args.dry_run),
+            skip_delivered=not bool(getattr(args, "no_skip_delivered", False)),
+            stop_on_failure=not bool(getattr(args, "continue_on_failure", False)),
+        )
     delivered = sum(1 for attempt in attempts if attempt.delivered)
     planned = sum(1 for attempt in attempts if attempt.error == "dry_run")
     skipped = sum(1 for attempt in attempts if attempt.error == "already_delivered")
@@ -2181,8 +2214,9 @@ def _cmd_greet_send(args: argparse.Namespace) -> None:
     else:
         greeter_config = GreeterConfig()
 
-    engine = GreeterEngine(greeter_config)
-    results = engine.send_batch(ranked, limit=args.limit, message_overrides=message_overrides)
+    with _platform_browser_lock("boss", "jobagent boss greet send"):
+        engine = GreeterEngine(greeter_config)
+        results = engine.send_batch(ranked, limit=args.limit, message_overrides=message_overrides)
 
     # Save detailed results
     payload = {
@@ -2305,7 +2339,7 @@ def _cmd_resume_analyze(args: argparse.Namespace) -> None:
     the product capability available for self-use/offline validation.
     """
     from jobagent.domain.resume_parser import ResumeParser
-    from jobagent.infra.credentials import load_license_key
+    from jobagent.infra.credentials import load_api_key
     from jobagent.infra import cloud_client
     from jobagent.infra.state import save_json, profile_path
 
@@ -2324,7 +2358,7 @@ def _cmd_resume_analyze(args: argparse.Namespace) -> None:
     if args.target_cities:
         hints["target_cities"] = args.target_cities
 
-    if args.local or not load_license_key():
+    if args.local or not load_api_key():
         from jobagent.domain.local_profile import analyze_resume_local
 
         analysis = analyze_resume_local(
@@ -2470,11 +2504,11 @@ def _cmd_profile_show(args: argparse.Namespace) -> None:
 
 
 def _cmd_pipeline_run(args: argparse.Namespace) -> None:
-    """Legacy all-in-one pipeline. Now gated on license — the underlying
+    """Legacy all-in-one pipeline. Now gated on an AgentMesh360 API key — the underlying
     ranking + greeting steps depend on our cloud IP. New users should follow
     docs/agent-onboarding.md instead.
     """
-    _require_license_or_exit("pipeline run")
+    _require_api_key_or_exit("pipeline run")
     print(
         "ℹ️  `pipeline run` is the legacy local flow. Prefer the agent-driven\n"
         "   flow described in docs/agent-onboarding.md (init → resume analyze\n"
@@ -2725,7 +2759,7 @@ def main() -> None:
         return
 
     if args.command == "pipeline" and args.pipeline_command == "run":
-        _require_license_or_exit("pipeline run")  # gate before Boss login (need license first)
+        _require_api_key_or_exit("pipeline run")  # gate before Boss login (need API key first)
         _ensure_boss_login()
         _cmd_pipeline_run(args)
         return
