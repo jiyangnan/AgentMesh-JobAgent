@@ -1,185 +1,109 @@
 ---
 name: job-agent
-description: AgentMesh Job Agent — agent-driven job hunting on Boss直聘. Use when the user asks for help finding jobs, analyzing their resume for the job market, batch greeting recruiters on Boss直聘, or auditing past greetings. Trigger phrases include "找工作", "投简历", "Boss直聘", "打招呼", "简历分析", "求职 agent", "match jobs", "send greetings".
+description: AgentMesh Job Agent for resume-driven job discovery, review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
+version: 0.3.0
 ---
 
-# Job Agent (AgentMesh)
+# Job Agent
 
-You are helping the user run **Job Agent**, AgentMesh's vertical product for AI-driven job hunting on Boss直聘. The CLI is pre-installed; your job is to drive it through the workflow.
+Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platform login, review overrides and every real greeting/application.
 
-## What this product does
+## Required Behavior
 
-Closes the loop: **Resume → Cloud-analyzed candidate profile → Boss job crawl → Cloud-ranked match → Cloud-personalized greeting → Sent on Boss直聘**.
+- Never invent an AgentMesh API Key. Without one, ask the user to create it at `https://agentmesh360.com/app/` and wait.
+- Run platforms serially: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job.
+- When output contains `requires_user_action=true`, stop, relay `user_prompt` and wait for the user.
+- Never send before the user reviews `selected / review / rejected` and explicitly confirms.
+- `review` is excluded by default. Promote only IDs named by the user and always pass `--confirm-promote`.
+- Never automatically promote `rejected`.
+- Keep the dedicated Job Agent Chrome window open.
 
-- **Sensitive data stays local**: resume original file, Boss cookie, browser action all run on the user's machine.
-- **Algorithm runs on cloud** (`api.jobagent.agentmesh360.com`): resume analysis (36-field profile), match scoring, greeting generation.
-
-## Hard requirements before running anything
-
-1. **AgentMesh360 API key required**. If the user doesn't have one, **stop and tell them to register/log in** at `https://agentmesh360.com/app/`, copy the API key from the account dashboard, then provide it.
-
-   Cloud AI commands — `jobagent boss rank` / `jobagent boss greet preview` / `jobagent boss greet send` / `jobagent pipeline run` / `jobagent resume analyze` — require this key. Make sure the user has run `jobagent init --key …` before reaching any of these commands.
-2. **Google Chrome** installed (Boss automation requires real Chrome).
-3. **Resume file** (PDF / DOCX / TXT / MD).
-4. **Never invent or fabricate an API key.** If `init` fails with an auth error, surface that error verbatim to the user.
-
-## Standard workflow
-
-Run these commands in order. Read each output before proceeding to the next; some steps require human action.
-
-### 1. One-time setup
+## Setup
 
 ```bash
 jobagent init --key <your_api_key>
-# Verifies connectivity. Prints account / credit info.
-
 jobagent doctor env
-# Sanity-check Python, Chrome, network, API key. Run if anything looks off.
+jobagent resume analyze --file <resume-path> \
+  --target-role "<target role>" \
+  --target-cities <city1> <city2>
 ```
 
-### 2. Analyze resume → 36-field profile
+One completed Discover covers one platform, processes at most 100 candidate jobs and costs 10 credits. Local browser failure occurs before charging; cloud decision failure after charging is refunded.
+
+## Boss直聘
 
 ```bash
-jobagent resume analyze --file <path-to-resume.pdf> \
-    --target-role "<user's target role>" \
-    --target-cities <city1> <city2>
-# Saves to ~/.jobagent/state/profile.json. Takes ~25s.
+jobagent boss login --check
+jobagent boss discover
+jobagent boss greet preview
 ```
 
-If the user wants to fine-tune the generated profile:
+Show the signed decision and greetings. After explicit approval:
 
 ```bash
-jobagent profile edit       # opens in $EDITOR (vim by default)
-jobagent profile show       # display current profile
+jobagent boss greet send --confirm-send
+jobagent boss audit
 ```
 
-### 3. Log in to Boss直聘 (one-time per machine)
-
-**Before running the command**, read this prompt to the user **verbatim** (do not paraphrase, do not skip the URL):
-
-> 接下来我要登录 Boss 直聘。我会启动一个**独立的 Chrome 窗口**（不是你日常用的那个 Chrome；这是为了隔离 cookie、保护你的隐私）。
->
-> 请按以下步骤操作：
->
-> 1. 我马上会执行 `jobagent login`。一个新的 Chrome 窗口会自动弹出，地址栏会是 **https://www.zhipin.com/**
-> 2. 在那个新弹出的 Chrome 窗口里（不是你平时的 Chrome），用 Boss 直聘 App 扫码登录。
-> 3. 扫完后页面会跳转到你的 Boss 工作台，**回到这里告诉我"登录好了"**。
-> 4. 我收到你的"登录好了"后，会继续下一步。
->
-> ⚠️ 不要关闭那个 Chrome 窗口；后续抓岗位和发招呼语都依赖它保持登录状态。
-> （5 分钟未扫码会超时——告诉我即可，我重新跑一遍。）
-
-Then run:
-
-```bash
-jobagent login
-```
-
-The command will block (up to 5 min) polling the login status. **Do not background it, do not timeout it early.** When the user says "登录好了", the command auto-detects and exits cleanly; proceed to step 4.
-
-### 4. Crawl jobs (local Chrome → Boss API)
-
-```bash
-jobagent boss collect \
-    --city <city> --query "<role keyword>" \
-    --pages 3 \
-    --output raw.json
-```
-
-`--pages` controls how many pages of results to fetch (15 jobs/page).
-
-**⚠️ Throttling constraint** — the CLI auto-sleeps **5–7 seconds between pages** (5.0 base + 2.0 jitter) to be courteous to the upstream API. This is mandatory:
-
-- ❌ Do NOT pass `--page-delay 0` to "speed up" (unless `--pages 1`).
-- ❌ Do NOT run `jobagent boss collect` in parallel processes.
-- ❌ Do NOT bypass with your own retry/sleep wrapper.
-- The CLI prints `⏳ sleeping X.Xs before next page` to stderr — this is **not** the process hanging. Relay the message to the user so they know it's intentional.
-
-### 5. Cloud rank
-
-```bash
-jobagent boss rank --input raw.json --top 20 --output ranked.json
-```
-
-Returns each job with `score` (0-100), `match_level` (strong_match/match/partial_match/weak_match/no_match), `reasons`, `risk_flags`. Sorted descending.
-
-### 6. Cloud-generated personalized greetings
-
-```bash
-jobagent boss greet preview --input ranked.json --limit 10 --output ready.json
-```
-
-Each greeting is ≤150 chars, cites quantified achievements, no "您好我对贵公司XX岗位很感兴趣" boilerplate.
-
-**Show the previews to the user. Get explicit confirmation before sending.**
-
-### 7. Send (with rate limiting)
-
-```bash
-jobagent boss greet send --input ready.json --limit 10
-```
-
-This drives the user's local Chrome to send actual greetings on Boss直聘. The CLI auto-uses the cloud greetings stored in `ready.json` (will fall back to local template if the field is missing).
-
-### 8. Audit results
-
-```bash
-jobagent boss greet audit
-```
-
-## Additional platform workflows
-
-Run these after the Boss flow when the user wants broader coverage. Keep one local Chrome session in order; do not run platform workflows in parallel.
-
-### Liepin beta
+## 猎聘
 
 ```bash
 jobagent liepin login --check
-jobagent liepin collect --query "<role keyword>" --city <city> --pages 1 --output liepin.raw.json
-jobagent liepin rank --input liepin.raw.json --top 20 --output liepin.ranked.json
-jobagent liepin greet preview --input liepin.ranked.json --limit 10 --output liepin.ready.json
-jobagent liepin apply open --input liepin.ready.json --limit 5
+jobagent liepin discover
+jobagent liepin apply review
 ```
 
-Use `apply open` for manual review first. Only run real apply/send after the user explicitly approves:
+After explicit approval:
 
 ```bash
-jobagent liepin apply send --input liepin.ready.json --limit 5 --confirm-submit
+jobagent liepin apply send --confirm-submit
 jobagent liepin audit
 ```
 
-### Zhilian beta
+## 智联招聘
 
 ```bash
 jobagent zhilian login --check
-jobagent zhilian collect --query "<role keyword>" --city <city> --pages 1 --detail-limit 2 --output zhilian.raw.json
-jobagent zhilian rank --input zhilian.raw.json --top 20 --output zhilian.ranked.json
-jobagent zhilian greet preview --input zhilian.ranked.json --limit 10 --output zhilian.ready.json
-jobagent zhilian apply open --input zhilian.ready.json --limit 5
+jobagent zhilian discover
+jobagent zhilian apply review
 ```
 
-Zhilian apply send submits the user's attachment resume. It does not send the greeting/review note into the page. Only run real submit after explicit approval:
+After explicit approval:
 
 ```bash
-jobagent zhilian apply send --input zhilian.ready.json --limit 5 --confirm-submit
+jobagent zhilian apply send --confirm-submit
 jobagent zhilian audit
 ```
 
-## Common errors & how to handle them
+## 51Job
 
-| Error | What happened | Tell the user |
-|-------|---------------|---------------|
-| `missing_api_key` (401) | No API key configured | Run `jobagent init --key ...` |
-| `invalid_api_key` (403) | Key is invalid or revoked | Copy a fresh API key from the AgentMesh360 account dashboard |
-| `quota_exceeded` / `insufficient_credits` (429/402) | Cloud credit exhausted | Check credit in the AgentMesh360 account dashboard |
-| Verification challenge in send result | Upstream redirected to a verify page | Pause for a while; resume later with longer delays |
-| `login_timeout` | User didn't scan QR within 5 min | Retry `jobagent login` |
-| Resume `<100 chars` | Scanned/image PDF | Ask user for a text-based resume |
+```bash
+jobagent 51job login --check
+jobagent 51job discover
+jobagent 51job apply review
+```
 
-## Rules
+After explicit approval:
 
-- **Never** send greetings without explicit user confirmation of the previews
-- **Never** invent an API key
-- **Always** show match scores and reasons before sending so the user can deselect bad matches
-- For batch sends > 20 jobs, suggest the user split into multiple sessions
-- Sensitive data (resume original, Boss cookie) never leaves the user's machine; you can reassure them of this
+```bash
+jobagent 51job apply send --confirm-submit
+jobagent 51job audit
+```
+
+猎聘、智联和 51Job submit the account's resume; they do not send a Boss-style greeting. The 51Job web chat entry is a QR handoff and is not used by this flow.
+
+## Review Override
+
+For non-Boss platforms:
+
+```bash
+jobagent <platform> apply review --promote <job-id> --confirm-promote
+```
+
+For Boss, replace `apply review` with `greet preview`.
+
+## Completion
+
+Report the platform, Discover ID, candidate/category counts, credits, user overrides, attempted/delivered/failed/skipped counts, user interventions and audit result. Do not infer delivery from a button click alone.
+
+Canonical guide: `docs/agent-onboarding.md`.

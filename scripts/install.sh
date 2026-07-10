@@ -2,7 +2,7 @@
 # Job Agent CLI installer.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jiyangnan/job-agent/main/scripts/install.sh | bash
 #
 # Or, if you've already cloned the repo:
 #   bash scripts/install.sh
@@ -11,15 +11,12 @@
 # 1. Verifies prerequisites (Python ≥ 3.11, git, Chrome)
 # 2. Clones the repo to ~/.local/share/job-agent (if running via curl)
 # 3. Sets up an isolated venv at ~/.local/share/job-agent/.venv
-# 4. Installs the CLI in editable mode
+# 4. Installs the CLI in editable mode and marks it as an official managed install
 # 5. Adds a `jobagent` shim at ~/.local/bin/jobagent (PATH-friendly)
 #
-# Pre-PyPI: this is the official install path during M1.
-# M2 will switch to `pipx install jobagent` once we publish to PyPI.
-
 set -euo pipefail
 
-REPO_URL="${JOBAGENT_REPO_URL:-https://github.com/jiyangnan/AgentMesh-JobAgent.git}"
+REPO_URL="${JOBAGENT_REPO_URL:-https://github.com/jiyangnan/job-agent.git}"
 INSTALL_DIR="${JOBAGENT_INSTALL_DIR:-$HOME/.local/share/job-agent}"
 BIN_DIR="${JOBAGENT_BIN_DIR:-$HOME/.local/bin}"
 
@@ -60,7 +57,9 @@ esac
 # 2. Clone or update repo
 if [ -d "$INSTALL_DIR/.git" ]; then
     info "Updating existing checkout at $INSTALL_DIR"
-    git -C "$INSTALL_DIR" pull --ff-only
+    [ -z "$(git -C "$INSTALL_DIR" status --porcelain)" ] || err "Existing install has local changes; automatic bootstrap update refused."
+    git -C "$INSTALL_DIR" fetch origin main --tags
+    git -C "$INSTALL_DIR" checkout --detach origin/main
 else
     info "Cloning Job Agent into $INSTALL_DIR"
     mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -80,6 +79,16 @@ info "Installing dependencies (this may take a minute)"
 "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip --quiet
 "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR" --quiet
 ok "CLI installed"
+
+cat > "$INSTALL_DIR/.jobagent-install.json" <<EOF
+{
+  "managed": true,
+  "install_type": "official-installer",
+  "repository": "$REPO_URL",
+  "install_dir": "$INSTALL_DIR"
+}
+EOF
+ok "Managed install metadata written"
 
 # 5. Shim
 mkdir -p "$BIN_DIR"
@@ -109,11 +118,10 @@ cat <<EOF
 
 Next steps:
 
-1. Register or log in at https://agentmesh360.com/app/
-   then copy your AgentMesh360 API key from the account dashboard.
+1. Get your license key from the project maintainer.
 
 2. Initialize:
-     jobagent init --key <your_api_key>
+     jobagent init --key <jba_live_xxx>
 
 3. Verify environment:
      jobagent doctor env
@@ -121,7 +129,10 @@ Next steps:
 4. Analyze your resume:
      jobagent resume analyze --file ~/Downloads/your-resume.pdf
 
-5. Read the full guide:
+5. Start with one platform:
+     jobagent boss discover
+
+6. Read the full guide:
      $INSTALL_DIR/README.md
 
 EOF

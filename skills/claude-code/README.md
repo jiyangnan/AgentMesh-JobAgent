@@ -1,6 +1,6 @@
 # Claude Code Skill — Job Agent
 
-Lets Claude Code drive Job Agent CLI from natural-language prompts like "帮我找深圳的 AI 产品经理岗位".
+Lets Claude Code drive the Job Agent 0.3 workflow on Boss直聘, 猎聘, 智联招聘 and 51Job from requests such as "帮我找深圳的 AI 产品经理岗位".
 
 ## Install
 
@@ -21,7 +21,7 @@ You should see `job-agent` listed.
 
 Mention any of these in chat:
 
-- "找工作" / "投简历" / "Boss 直聘" / "打招呼"
+- "找工作" / "投简历" / "Boss 直聘" / "猎聘" / "智联" / "51Job"
 - "简历分析" / "求职 agent" / "帮我看下我的简历"
 - "match jobs" / "send greetings"
 
@@ -35,4 +35,4 @@ Whenever Job Agent's CLI surface changes (new commands, new flags), update [SKIL
 cp SKILL.md ~/.claude/skills/job-agent/SKILL.md
 ```
 
-Future M2 work: have `jobagent init` install/update this skill automatically.
+The skill follows the signed `discover -> review -> confirmed send -> audit` product flow.

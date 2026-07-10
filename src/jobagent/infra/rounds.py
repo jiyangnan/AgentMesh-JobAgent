@@ -7,7 +7,7 @@ from typing import Any
 
 from jobagent.infra.state import current_round_path, rounds_dir, save_json, load_json
 
-DEFAULT_PLATFORM_ORDER = ["boss", "liepin", "zhilian"]
+DEFAULT_PLATFORM_ORDER = ["boss", "liepin", "zhilian", "51job"]
 
 
 def utc_now() -> str:

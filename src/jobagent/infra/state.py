@@ -77,3 +77,27 @@ def browser_session_lock_path() -> Path:
     ensure_dirs()
     LOCKS_DIR.mkdir(parents=True, exist_ok=True)
     return LOCKS_DIR / "browser-session.lock"
+
+
+def activity_lock_path() -> Path:
+    ensure_dirs()
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    return LOCKS_DIR / "activity.lock"
+
+
+def update_lock_path() -> Path:
+    ensure_dirs()
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    return LOCKS_DIR / "update.lock"
+
+
+def release_cache_path() -> Path:
+    ensure_dirs()
+    return STATE_DIR / "release_manifest_cache.json"
+
+
+def discoveries_dir() -> Path:
+    ensure_dirs()
+    path = STATE_DIR / "discoveries"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

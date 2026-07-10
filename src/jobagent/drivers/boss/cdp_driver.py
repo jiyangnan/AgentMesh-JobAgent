@@ -148,7 +148,7 @@ class CDPBossDriver(BossActionDriver):
             )
             info = json.loads(result.get("result", {}).get("value", "{}"))
             current_url = info.get("url", "")
-            # Risk-control detection: BOSS redirects to verify page when flagged
+            # Verification detection: upstream may redirect to a verify page
             if "verify" in current_url or "code=36" in current_url:
                 return {
                     "ok": False,
@@ -352,7 +352,7 @@ class CDPBossDriver(BossActionDriver):
                       ok: true, step: 'chat_opened', autoSent: false
                     });
                   }
-                  // Risk-control redirect?
+                  // Verification redirect?
                   var href = location.href || '';
                   if (href.indexOf('verify') >= 0 || href.indexOf('code=36') >= 0) {
                     return JSON.stringify({

@@ -2,16 +2,8 @@
 __pycache__/
 *.pyc
 .jobagent/
+.jobagent-install.json
 data/
 .venv/
 *.egg-info/
-
-# Runtime artifacts from collect/rank/greet workflows (contain personal resume data)
-boss.raw.json
-boss.ranked.json
-boss.ready.json
-boss_greetings_*.md
-# Any named collect/rank/ready JSON files (e.g., hangzhou_dpo.raw.json)
-*.raw.json
-*.ranked.json
-*.ready.json
+build/

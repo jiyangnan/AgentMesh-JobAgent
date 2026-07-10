@@ -60,10 +60,18 @@ def check_platform_health(
     if platform_info.status == "disabled":
         return PlatformHealth(platform=key, status="disabled", ok=False, checks=checks)
 
-    if key == "boss":
+    if key in {"boss", "liepin", "zhilian", "51job"}:
         from jobagent.drivers.boss.chrome_manager import find_chrome
+        from jobagent.platforms.discovery import collect_from_search_plan
 
         chrome_path = find_chrome()
+        checks.append(
+            HealthCheck(
+                "discover_adapter_available",
+                callable(collect_from_search_plan),
+                "The platform Discover adapter is available.",
+            ),
+        )
         checks.append(
             HealthCheck(
                 "chrome_available",
@@ -77,100 +85,6 @@ def check_platform_health(
         return PlatformHealth(
             platform=key,
             status="available" if all(check.ok for check in checks) else "degraded",
-            ok=all(check.ok for check in checks),
-            checks=checks,
-        )
-
-    if key == "liepin":
-        from jobagent.drivers.boss.chrome_manager import find_chrome
-        from jobagent.platforms.liepin import (
-            LiepinReadOnlyCollector,
-            LiepinSessionGuide,
-            parse_liepin_job,
-        )
-
-        checks.append(
-            HealthCheck(
-                "fixture_parser_available",
-                callable(parse_liepin_job),
-                "Read-only fixture parser is available.",
-            ),
-        )
-        checks.append(
-            HealthCheck(
-                "login_guide_available",
-                callable(LiepinSessionGuide),
-                "Read-only login guide and login-state check are available.",
-            ),
-        )
-        checks.append(
-            HealthCheck(
-                "live_read_only_collector_available",
-                callable(LiepinReadOnlyCollector),
-                "Live read-only collector code path is available; apply-open/apply-send are covered by the Liepin vertical chain.",
-            ),
-        )
-        chrome_path = find_chrome()
-        checks.append(
-            HealthCheck(
-                "chrome_available",
-                chrome_path is not None,
-                "Chrome executable found for live read-only browser access"
-                if chrome_path
-                else "Chrome executable not found",
-                {"path": chrome_path or ""},
-            ),
-        )
-        return PlatformHealth(
-            platform=key,
-            status=platform_info.status if all(check.ok for check in checks) else "degraded",
-            ok=all(check.ok for check in checks),
-            checks=checks,
-        )
-
-    if key == "zhilian":
-        from jobagent.drivers.boss.chrome_manager import find_chrome
-        from jobagent.platforms.zhilian import (
-            ZhilianReadOnlyCollector,
-            ZhilianSessionGuide,
-            parse_zhilian_job,
-        )
-
-        checks.append(
-            HealthCheck(
-                "fixture_parser_available",
-                callable(parse_zhilian_job),
-                "Read-only fixture parser is available.",
-            ),
-        )
-        checks.append(
-            HealthCheck(
-                "live_read_only_collector_available",
-                callable(ZhilianReadOnlyCollector),
-                "Live read-only collector code path is available; apply-open/apply-send are covered by the Zhilian vertical chain.",
-            ),
-        )
-        checks.append(
-            HealthCheck(
-                "login_guide_available",
-                callable(ZhilianSessionGuide),
-                "Read-only login guide and login-state check are available.",
-            ),
-        )
-        chrome_path = find_chrome()
-        checks.append(
-            HealthCheck(
-                "chrome_available",
-                chrome_path is not None,
-                "Chrome executable found for live read-only browser access"
-                if chrome_path
-                else "Chrome executable not found",
-                {"path": chrome_path or ""},
-            ),
-        )
-        return PlatformHealth(
-            platform=key,
-            status=platform_info.status if all(check.ok for check in checks) else "degraded",
             ok=all(check.ok for check in checks),
             checks=checks,
         )

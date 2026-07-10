@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "platform": "51job",
+  "url": "https://we.51job.com/pc/search?keyword=AI%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86",
+  "cards": [
+    {
+      "jobId": "J172480001",
+      "companyId": "C510001",
+      "jobTitle": "AI产品经理",
+      "salary": "1.5-3万·18薪",
+      "cityName": "深圳·南山区",
+      "workYear": "3-5年",
+      "education": "本科",
+      "companyName": "深圳迈瑞生物医疗电子股份有限公司",
+      "companyIndustry": "医疗设备/器械",
+      "companyUrl": "https://jobs.51job.com/all/co510001.html",
+      "tags": ["ai", "ai系统", "解决方案", "技术实现方案"],
+      "sourceUrl": "https://we.51job.com/pc/search?keyword=AI%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86",
+      "actions": {
+        "hasChat": true,
+        "chatText": "去聊聊",
+        "hasApply": true,
+        "applyText": "投递"
+      },
+      "sensors": {
+        "jobId": "J172480001",
+        "jobTitle": "AI产品经理",
+        "jobSalary": "1.5-3万·18薪",
+        "jobArea": "深圳·南山区",
+        "jobYear": "3-5年",
+        "jobDegree": "本科",
+        "companyName": "深圳迈瑞生物医疗电子股份有限公司"
+      }
+    }
+  ]
+}

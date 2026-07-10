@@ -23,6 +23,10 @@ PLATFORM_TAB_DEFAULTS: dict[str, dict[str, Any]] = {
         "domains": ("zhaopin.com", "sou.zhaopin.com", "passport.zhaopin.com"),
         "initial_url": "https://sou.zhaopin.com/",
     },
+    "51job": {
+        "domains": ("51job.com", "we.51job.com", "jobs.51job.com"),
+        "initial_url": "https://we.51job.com/pc/search",
+    },
 }
 
 

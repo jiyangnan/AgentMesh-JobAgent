@@ -1,8 +1,5 @@
-"""HTTP client for the Job Agent Cloud API.
+"""Current Job Agent 0.3 cloud protocol client."""
 
-Uses stdlib urllib only (no extra deps). Endpoints documented in
-docs/m1-engineering-plan-20260509.md §2.
-"""
 from __future__ import annotations
 
 import json
@@ -10,22 +7,13 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from jobagent import __version__
 from jobagent.infra.credentials import api_base_url, load_api_key
 
-# Per-endpoint timeouts (seconds) — generous to absorb DeepSeek tail latency.
-TIMEOUTS = {
-    "/v1/health": 10,
-    "/v1/health/llm": 30,
-    "/v1/me": 10,
-    "/v1/resume/analyze": 180,
-    "/v1/jobs/rank": 120,
-    "/v1/greet/generate": 60,
-}
+PROTOCOL_VERSION = 1
 
 
 class CloudError(Exception):
-    """Wraps any failure (network, timeout, HTTP status, JSON decode)."""
-
     def __init__(self, message: str, *, status: int | None = None, code: str | None = None):
         super().__init__(message)
         self.status = status
@@ -33,28 +21,7 @@ class CloudError(Exception):
 
 
 class NotConfiguredError(CloudError):
-    """No AgentMesh360 API key found. User needs to run `jobagent init --key ...`."""
-
-
-# Friendly Chinese hints for common error codes (GAP-17).
-FRIENDLY_HINTS: dict[str, str] = {
-    "missing_api_key": "未配置 AgentMesh360 API key。注册/登录 https://agentmesh360.com/app/ 后复制 API key，再运行 `jobagent init --key <your_api_key>`。",
-    "invalid_api_key": "API key 无效或已过期。请从 AgentMesh360 账户面板重新复制。",
-    "api_key_revoked": "API key 已被撤销。请从 AgentMesh360 账户面板重新生成或联系支持。",
-    "api_key_expired": "API key 已过期。请从 AgentMesh360 账户面板重新生成或联系支持。",
-    "quota_exceeded": "当前 credit / 配额已用完。请前往 AgentMesh360 账户面板查看。",
-    "insufficient_credits": "当前 credit 不足。请前往 AgentMesh360 账户面板查看。",
-    "llm_parse_failed": "云端 LLM 输出解析失败（已自动重试 1 次）。换个简历/重试通常可恢复；持续失败请反馈。",
-    "llm_timeout": "云端 LLM 调用超时。稍后重试；持续超时请反馈。",
-    "llm_failed": "云端 LLM 调用失败。稍后重试。",
-    "empty_message": "云端返回了空消息。重试一次通常可恢复。",
-}
-
-
-def hint_for(code: str | None) -> str | None:
-    if not code:
-        return None
-    return FRIENDLY_HINTS.get(code)
+    pass
 
 
 def _request(
@@ -63,77 +30,113 @@ def _request(
     body: dict[str, Any] | None = None,
     *,
     require_auth: bool = True,
+    timeout: int = 180,
 ) -> dict[str, Any]:
-    url = api_base_url() + path
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-JobAgent-Client-Version": __version__,
+        "X-JobAgent-Protocol-Version": str(PROTOCOL_VERSION),
+    }
     if require_auth:
         key = load_api_key()
         if not key:
             raise NotConfiguredError(
-                "No AgentMesh360 API key configured. Run `jobagent init --key <your_api_key>` after registering at https://agentmesh360.com/app/."
+                "AgentMesh API Key is required. Run `jobagent init --key <your_api_key>`."
             )
         headers["Authorization"] = f"Bearer {key}"
-
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    timeout = TIMEOUTS.get(path, 60)
+    request = urllib.request.Request(
+        api_base_url() + path,
+        data=(json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None),
+        method=method,
+        headers=headers,
+    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode("utf-8", errors="replace")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        raw_error = exc.read().decode("utf-8", errors="replace")
+        code = None
+        message = raw_error
         try:
-            payload = json.loads(body_text)
-            detail = payload.get("detail", {})
-            code = detail.get("code") if isinstance(detail, dict) else None
-            msg = detail.get("message") if isinstance(detail, dict) else body_text
+            payload = json.loads(raw_error)
+            detail = payload.get("detail", payload)
+            if isinstance(detail, dict):
+                code = detail.get("code") or detail.get("reason")
+                message = detail.get("message") or json.dumps(detail, ensure_ascii=False)
         except json.JSONDecodeError:
-            code, msg = None, body_text
-        raise CloudError(
-            f"HTTP {e.code} on {path}: {msg}", status=e.code, code=code
-        ) from e
-    except urllib.error.URLError as e:
-        raise CloudError(f"Network error on {path}: {e.reason}") from e
-    except TimeoutError as e:
-        raise CloudError(f"Timeout on {path} (>{timeout}s)") from e
-
+            pass
+        raise CloudError(message, status=exc.code, code=code) from exc
+    except urllib.error.URLError as exc:
+        raise CloudError(f"Network error: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise CloudError(f"Request timed out after {timeout}s") from exc
     try:
-        return json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError as e:
-        raise CloudError(f"Invalid JSON from {path}: {e}") from e
-
-
-# ── Public API ────────────────────────────────────────────────────
+        payload = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise CloudError("Cloud returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise CloudError("Cloud returned an unexpected payload")
+    return payload
 
 
 def health() -> dict[str, Any]:
-    return _request("GET", "/v1/health", require_auth=False)
+    return _request("GET", "/v1/health", require_auth=False, timeout=15)
 
 
 def me() -> dict[str, Any]:
-    return _request("GET", "/v1/me")
+    return _request("GET", "/v1/me", timeout=20)
 
 
 def resume_analyze(
     resume_text: str,
     file_name: str | None = None,
-    hints: dict | None = None,
+    hints: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"resume_text": resume_text}
     if file_name:
         body["file_name"] = file_name
     if hints:
         body["hints"] = hints
-    return _request("POST", "/v1/resume/analyze", body)
+    return _request("POST", "/v1/resume/analyze", body, timeout=180)
 
 
-def jobs_rank(profile: dict, jobs: list[dict]) -> dict[str, Any]:
-    return _request("POST", "/v1/jobs/rank", {"profile": profile, "jobs": jobs})
+def discovery_start(
+    *,
+    platform: str,
+    profile: dict[str, Any],
+    request_id: str,
+) -> dict[str, Any]:
+    from jobagent.infra.protocol import digest_payload
 
-
-def greet_generate(profile: dict, job: dict, style: str = "concise") -> dict[str, Any]:
     return _request(
         "POST",
-        "/v1/greet/generate",
-        {"profile": profile, "job": job, "style": style},
+        "/v1/discovery/start",
+        {
+            "platform": platform,
+            "profile": profile,
+            "profile_digest": digest_payload(profile),
+            "client_version": __version__,
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": request_id,
+        },
+        timeout=60,
+    )
+
+
+def discovery_decide(
+    *,
+    discover_id: str,
+    jobs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _request(
+        "POST",
+        "/v1/discovery/decide",
+        {
+            "discover_id": discover_id,
+            "client_version": __version__,
+            "protocol_version": PROTOCOL_VERSION,
+            "jobs": jobs,
+        },
+        timeout=600,
     )

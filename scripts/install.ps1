@@ -2,7 +2,7 @@
 #
 # Usage (recommended one-liner; open PowerShell as a normal user):
 #
-#   irm https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/jiyangnan/job-agent/main/scripts/install.ps1 | iex
 #
 # Or, if you've already cloned the repo:
 #
@@ -12,14 +12,14 @@
 # 1. Verifies prerequisites (Python ≥ 3.11, git, Chrome)
 # 2. Clones the repo to %USERPROFILE%\.job-agent (if running via irm)
 # 3. Creates an isolated venv at %USERPROFILE%\.job-agent\.venv
-# 4. Installs the CLI in editable mode
+# 4. Installs the CLI in editable mode and marks it as an official managed install
 # 5. Adds a `jobagent.cmd` shim at %USERPROFILE%\.job-agent\bin (PATH-friendly)
 #
 # Pre-PyPI; this is the official Windows install path during M1.
 
 $ErrorActionPreference = "Stop"
 
-$RepoUrl     = $env:JOBAGENT_REPO_URL    ; if (-not $RepoUrl)     { $RepoUrl     = "https://github.com/jiyangnan/AgentMesh-JobAgent.git" }
+$RepoUrl     = $env:JOBAGENT_REPO_URL    ; if (-not $RepoUrl)     { $RepoUrl     = "https://github.com/jiyangnan/job-agent.git" }
 $InstallDir  = $env:JOBAGENT_INSTALL_DIR ; if (-not $InstallDir)  { $InstallDir  = Join-Path $env:USERPROFILE ".job-agent" }
 $BinDir      = Join-Path $InstallDir "bin"
 
@@ -63,7 +63,9 @@ else { Warn "Google Chrome not found. Install from https://www.google.com/chrome
 if (Test-Path (Join-Path $InstallDir ".git")) {
     Info "Updating existing checkout at $InstallDir"
     Push-Location $InstallDir
-    git pull --ff-only | Out-Null
+    if (git status --porcelain) { Pop-Location; Die "Existing install has local changes; automatic bootstrap update refused." }
+    git fetch origin main --tags | Out-Null
+    git checkout --detach origin/main | Out-Null
     Pop-Location
 } else {
     Info "Cloning Job Agent into $InstallDir"
@@ -87,6 +89,15 @@ Info "Installing dependencies (this may take a minute)"
 & $venvPy -m pip install --upgrade pip --quiet
 & $venvPip install -e $InstallDir --quiet
 Ok "CLI installed"
+
+$metadata = @{
+    managed = $true
+    install_type = "official-installer"
+    repository = $RepoUrl
+    install_dir = $InstallDir
+} | ConvertTo-Json
+$metadata | Set-Content -Path (Join-Path $InstallDir ".jobagent-install.json") -Encoding UTF8
+Ok "Managed install metadata written"
 
 # 5. Shim
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
@@ -112,11 +123,10 @@ Write-Host "=========================================="
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host ""
-Write-Host "1. Register or log in at https://agentmesh360.com/app/"
-Write-Host "   then copy your AgentMesh360 API key from the account dashboard."
+Write-Host "1. Get your license key from the project maintainer."
 Write-Host ""
 Write-Host "2. Open a NEW PowerShell window (so PATH refreshes), then:"
-Write-Host "     jobagent init --key <your_api_key>"
+Write-Host "     jobagent init --key <jba_live_xxx>"
 Write-Host ""
 Write-Host "3. Verify environment:"
 Write-Host "     jobagent doctor env"
@@ -124,6 +134,9 @@ Write-Host ""
 Write-Host "4. Analyze your resume:"
 Write-Host "     jobagent resume analyze --file %USERPROFILE%\Downloads\your-resume.pdf"
 Write-Host ""
-Write-Host "5. Read the full guide:"
+Write-Host "5. Start with one platform:"
+Write-Host "     jobagent boss discover"
+Write-Host ""
+Write-Host "6. Read the full guide:"
 Write-Host "     $InstallDir\README.md"
 Write-Host ""

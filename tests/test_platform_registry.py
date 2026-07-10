@@ -28,41 +28,49 @@ def test_linkedin_is_dropped_in_registry():
 def test_liepin_registry_exposes_vertical_chain():
     liepin = next(platform for platform in list_platforms() if platform.key == "liepin")
 
-    assert liepin.status == "beta"
+    assert liepin.status == "available"
     assert liepin.capabilities == [
-        "fixture_parse",
-        "login_check",
-        "live_read_only_collect",
-        "rank",
-        "greet_preview",
-        "apply_open",
+        "login",
+        "discover",
+        "apply_review",
         "apply_send",
         "audit",
     ]
-    assert "controlled apply-send" in liepin.notes
+    assert "signed review" in liepin.notes
 
 
 def test_zhilian_registry_exposes_vertical_chain():
     zhilian = next(platform for platform in list_platforms() if platform.key == "zhilian")
 
-    assert zhilian.status == "beta"
+    assert zhilian.status == "available"
     assert zhilian.capabilities == [
-        "fixture_parse",
-        "login_check",
-        "live_read_only_collect",
-        "rank",
-        "greet_preview",
-        "apply_open",
+        "login",
+        "discover",
+        "apply_review",
         "apply_send",
         "audit",
     ]
-    assert "resume-submit apply-send" in zhilian.notes
-    assert "does not support in-page greeting send" in zhilian.notes
+    assert "resume submission" in zhilian.notes
+
+
+def test_job51_registry_exposes_vertical_chain():
+    job51 = next(platform for platform in list_platforms() if platform.key == "51job")
+
+    assert job51.status == "available"
+    assert job51.capabilities == [
+        "login",
+        "discover",
+        "apply_review",
+        "apply_send",
+        "audit",
+    ]
+    assert "QR-only" in job51.notes
 
 
 def test_legacy_zhipin_platform_normalizes_to_boss():
     assert normalize_platform_key("zhipin") == "boss"
     assert normalize_platform_key("") == "boss"
+    assert normalize_platform_key("job51") == "51job"
 
 
 def test_platform_can_be_disabled_by_config_override():
@@ -86,8 +94,12 @@ def test_boss_health_reports_available_when_chrome_exists(monkeypatch):
     assert health.platform == "boss"
     assert health.status == "available"
     assert health.ok is True
-    assert [check.name for check in health.checks] == ["enabled", "chrome_available"]
-    assert health.checks[1].evidence["path"].endswith("Google Chrome")
+    assert [check.name for check in health.checks] == [
+        "enabled",
+        "discover_adapter_available",
+        "chrome_available",
+    ]
+    assert health.checks[2].evidence["path"].endswith("Google Chrome")
 
 
 def test_boss_health_reports_degraded_when_chrome_missing(monkeypatch):
@@ -101,8 +113,8 @@ def test_boss_health_reports_degraded_when_chrome_missing(monkeypatch):
     assert health.platform == "boss"
     assert health.status == "degraded"
     assert health.ok is False
-    assert health.checks[1].name == "chrome_available"
-    assert health.checks[1].ok is False
+    assert health.checks[2].name == "chrome_available"
+    assert health.checks[2].ok is False
 
 
 def test_disabled_platform_health_stops_before_runtime_checks(monkeypatch):
@@ -140,13 +152,11 @@ def test_liepin_health_reports_read_only_collect_available(monkeypatch):
     health = check_platform_health("liepin")
 
     assert health.platform == "liepin"
-    assert health.status == "beta"
+    assert health.status == "available"
     assert health.ok is True
     assert [check.name for check in health.checks] == [
         "enabled",
-        "fixture_parser_available",
-        "login_guide_available",
-        "live_read_only_collector_available",
+        "discover_adapter_available",
         "chrome_available",
     ]
 
@@ -160,13 +170,29 @@ def test_zhilian_health_reports_read_only_collect_available(monkeypatch):
     health = check_platform_health("zhilian")
 
     assert health.platform == "zhilian"
-    assert health.status == "beta"
+    assert health.status == "available"
     assert health.ok is True
     assert [check.name for check in health.checks] == [
         "enabled",
-        "fixture_parser_available",
-        "live_read_only_collector_available",
-        "login_guide_available",
+        "discover_adapter_available",
+        "chrome_available",
+    ]
+
+
+def test_job51_health_reports_read_only_collect_available(monkeypatch):
+    monkeypatch.setattr(
+        "jobagent.drivers.boss.chrome_manager.find_chrome",
+        lambda: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    )
+
+    health = check_platform_health("51job")
+
+    assert health.platform == "51job"
+    assert health.status == "available"
+    assert health.ok is True
+    assert [check.name for check in health.checks] == [
+        "enabled",
+        "discover_adapter_available",
         "chrome_available",
     ]
 
@@ -179,4 +205,4 @@ def test_all_platform_health_uses_registry_order(monkeypatch):
 
     health = check_all_platforms()
 
-    assert [item.platform for item in health] == ["boss", "liepin", "zhilian", "linkedin"]
+    assert [item.platform for item in health] == ["boss", "liepin", "zhilian", "51job", "linkedin"]
