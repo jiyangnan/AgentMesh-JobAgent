@@ -17,7 +17,7 @@ from .parser import liepin_job_id, parse_liepin_job
 from .selectors import build_liepin_snapshot_script
 
 LIEPIN_CITY_CODES = {
-    "深圳": "410",
+    "深圳": "050090",
 }
 
 

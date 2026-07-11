@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.7] - 2026-07-11
+
+### Fixed
+
+- Liepin uses the current Shenzhen city code instead of the former nationwide code.
+- Liepin card locations such as `深圳-南山区` are split into city and district fields before city filtering.
+
 ## [0.3.6] - 2026-07-11
 
 ### Added
@@ -85,6 +92,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.7]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.7
 [0.3.6]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.6
 [0.3.5]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.5
 [0.3.4]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.4

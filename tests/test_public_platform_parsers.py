@@ -4,6 +4,7 @@ from pathlib import Path
 from jobagent.platforms.boss import boss_job_id, parse_boss_job
 from jobagent.platforms.job51 import job51_job_id, parse_job51_job
 from jobagent.platforms.liepin import liepin_job_id, parse_liepin_job
+from jobagent.platforms.liepin.collect import build_liepin_search_url
 from jobagent.platforms.zhilian import parse_zhilian_job, zhilian_job_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -25,6 +26,21 @@ def test_liepin_public_parser_extracts_stable_identity():
     job = parse_liepin_job(raw, city_name="深圳")
     assert liepin_job_id(raw)
     assert job.name and job.url
+
+
+def test_liepin_public_adapter_uses_current_shenzhen_location_shape():
+    url = build_liepin_search_url("AI产品经理", city="深圳")
+    job = parse_liepin_job(
+        {
+            "jobId": "location-1",
+            "jobTitle": "AI产品经理",
+            "cityName": "深圳-南山区",
+        }
+    )
+
+    assert "city=050090" in url and "dq=050090" in url
+    assert job.city == "深圳"
+    assert job.area == "南山区"
 
 
 def test_zhilian_public_parser_extracts_stable_identity():

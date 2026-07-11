@@ -40,8 +40,10 @@ def parse_liepin_job(raw: dict[str, Any], city_name: str = "") -> Job:
     company = _first(raw, "companyName", "company", "compName", "company_name")
     title = _first(raw, "title", "jobTitle", "jobName", "positionName")
     salary = _first(raw, "salary", "salaryText", "salaryDesc", "salaryLabel")
-    city = _first(raw, "city", "cityName", "dq") or city_name
+    location = str(_first(raw, "city", "cityName", "dq") or city_name)
+    city, _, location_area = location.partition("-")
     area = _join_non_empty([
+        location_area,
         _first(raw, "district", "districtName"),
         _first(raw, "businessArea", "businessDistrict"),
     ])
