@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.3.3
+version: 0.3.4
 ---
 
 # Job Agent
@@ -16,6 +16,7 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 - Never send before the user reviews `selected / review / rejected` and explicitly confirms.
 - `review` is excluded by default. Promote only IDs named by the user and always pass `--confirm-promote`.
 - Never automatically promote `rejected`.
+- Show `skipped_delivered` when present and never add those jobs back to the send list.
 - Keep the dedicated Job Agent Chrome window open.
 
 ## Setup
@@ -28,7 +29,7 @@ jobagent resume analyze --file <resume-path> \
   --target-cities <city1> <city2>
 ```
 
-One completed Discover covers one platform, processes at most 100 candidate jobs and costs 10 credits. Local browser failure occurs before charging; cloud decision failure after charging is refunded.
+One completed Discover covers one platform and processes at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as authoritative for future policy changes.
 
 ## Boss直聘
 

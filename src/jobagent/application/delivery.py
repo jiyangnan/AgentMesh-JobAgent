@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jobagent.infra.activity import active_command
-from jobagent.infra.audit import AuditLog
+from jobagent.infra.audit import AuditLog, boss_job_key
 from jobagent.infra.discovery_state import build_review, load_envelope
 from jobagent.infra.platform_lock import PlatformSessionLock
 from jobagent.infra.protocol import verify_stored_decision
@@ -41,17 +41,38 @@ def _append_boss_audit(attempts: list[Any]) -> None:
 def _boss_send(jobs: list[dict[str, Any]], *, dry_run: bool) -> list[Any]:
     from jobagent.domain.models import SendAttempt
 
+    delivered_keys = AuditLog().delivered_job_keys()
+    results: list[SendAttempt] = []
+
+    def already_delivered(job: dict[str, Any]) -> SendAttempt:
+        return SendAttempt(
+            job_url=str(job.get("url") or ""),
+            message=str(job.get("cloud_greeting") or ""),
+            delivered=False,
+            error="already_delivered",
+            steps=[{"step": "skip_boss_greet_send", "ok": True, "reason": "already_delivered"}],
+        )
+
+    actionable = [
+        job for job in jobs if boss_job_key(str(job.get("url") or "")) not in delivered_keys
+    ]
     if dry_run:
-        return [
-            SendAttempt(
-                job_url=str(job.get("url") or ""),
-                message=str(job.get("cloud_greeting") or ""),
-                delivered=False,
-                error="dry_run",
-                steps=[{"step": "plan_boss_greet_send", "ok": True}],
-            )
-            for job in jobs
-        ]
+        for job in jobs:
+            if boss_job_key(str(job.get("url") or "")) in delivered_keys:
+                results.append(already_delivered(job))
+            else:
+                results.append(
+                    SendAttempt(
+                        job_url=str(job.get("url") or ""),
+                        message=str(job.get("cloud_greeting") or ""),
+                        delivered=False,
+                        error="dry_run",
+                        steps=[{"step": "plan_boss_greet_send", "ok": True}],
+                    )
+                )
+        return results
+    if not actionable:
+        return [already_delivered(job) for job in jobs]
     from jobagent.drivers.boss import create_driver
     from jobagent.drivers.boss.cdp_driver import CDPBossDriver
     from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
@@ -63,14 +84,20 @@ def _boss_send(jobs: list[dict[str, Any]], *, dry_run: bool) -> list[Any]:
             "login_required",
             "请在已经打开的 Job Agent 浏览器中登录 Boss 直聘，完成后回复我“已登录”。",
         )
-    return [
-        execute_boss_greeting_flow(
+    for job in jobs:
+        key = boss_job_key(str(job.get("url") or ""))
+        if key in delivered_keys:
+            results.append(already_delivered(job))
+            continue
+        attempt = execute_boss_greeting_flow(
             driver,
             str(job.get("url") or ""),
             str(job.get("cloud_greeting") or ""),
         )
-        for job in jobs
-    ]
+        results.append(attempt)
+        if attempt.delivered and key:
+            delivered_keys.add(key)
+    return results
 
 
 def _check_apply_login(platform: str, job: dict[str, Any]) -> None:

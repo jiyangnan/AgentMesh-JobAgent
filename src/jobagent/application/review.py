@@ -4,8 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
+from jobagent.infra.audit import AuditLog, boss_job_key
 from jobagent.infra.discovery_state import build_review, load_envelope, save_review
 from jobagent.infra.protocol import verify_stored_decision
+
+
+def _exclude_delivered_boss_jobs(review: dict[str, Any]) -> None:
+    delivered_keys = AuditLog().delivered_job_keys()
+    if not delivered_keys:
+        review["skipped_delivered"] = []
+        return
+    send_candidates = list(review.get("send_candidates") or [])
+    skipped = [
+        item for item in send_candidates if boss_job_key(str(item.get("url") or "")) in delivered_keys
+    ]
+    review["send_candidates"] = [
+        item for item in send_candidates if boss_job_key(str(item.get("url") or "")) not in delivered_keys
+    ]
+    review["skipped_delivered"] = skipped
 
 
 def review_decision(
@@ -25,6 +41,7 @@ def review_decision(
         confirm_promote=confirm_promote,
     )
     if platform == "boss":
+        _exclude_delivered_boss_jobs(review)
         missing = [
             str(item.get("id"))
             for item in review["send_candidates"]
@@ -41,6 +58,8 @@ def review_decision(
         "review": manifest.get("review", []),
         "rejected": manifest.get("rejected", []),
         "promoted": review["user_overrides"],
+        "skipped_delivered": review.get("skipped_delivered", []),
+        "skipped_delivered_count": len(review.get("skipped_delivered", [])),
         "send_count": len(review["send_candidates"]),
         "review_file": str(path),
         "next_suggested": (

@@ -1,9 +1,18 @@
 from pathlib import Path
+import tomllib
 
 import pytest
 
+from jobagent import __version__
+
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_cli_version_matches_package_metadata():
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert __version__ == metadata["project"]["version"]
 
 
 @pytest.mark.parametrize("relative", ["scripts/install.sh", "scripts/install.ps1"])

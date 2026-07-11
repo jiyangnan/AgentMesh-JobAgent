@@ -199,6 +199,110 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
     assert reviewed["user_overrides"] == [{"job_id": "r", "from": "review", "to": "selected"}]
 
 
+def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
+    import jobagent.infra.audit as audit
+    import jobagent.infra.protocol as protocol
+    from jobagent.application.review import review_decision
+
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    delivered_url = "https://www.zhipin.com/job_detail/already.html?ka=search_list_jname_1"
+    pending_url = "https://www.zhipin.com/job_detail/pending.html"
+    manifest = _sign(
+        private,
+        {
+            "manifest_type": "decision_manifest",
+            "protocol_version": 1,
+            "manifest_id": "dm_boss_review",
+            "discover_id": "dis_boss_review",
+            "platform": "boss",
+            "candidate_digest": "sha256:" + "a" * 64,
+            "input_count": 2,
+            "deduplicated_count": 2,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": _future(24),
+            "selected": [
+                {
+                    "id": "already",
+                    "title": "Already delivered",
+                    "url": delivered_url,
+                    "classification": "selected",
+                    "greeting": "您好，已投递岗位。",
+                },
+                {
+                    "id": "pending",
+                    "title": "Pending",
+                    "url": pending_url,
+                    "classification": "selected",
+                    "greeting": "您好，新岗位。",
+                },
+            ],
+            "review": [],
+            "rejected": [],
+            "billing": {"action": "jobagent.discover", "credits": 0, "transaction_id": "1"},
+        },
+    )
+    source = tmp_path / "decision.json"
+    source.write_text(
+        json.dumps({"platform": "boss", "discover_id": "dis_boss_review", "manifest": manifest}),
+        encoding="utf-8",
+    )
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(
+        json.dumps([{"job_url": delivered_url.split("?", 1)[0], "delivered": True}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audit, "audit_log_path", lambda: audit_path)
+    output = tmp_path / "reviewed.json"
+
+    result = review_decision("boss", input_path=str(source), output_path=str(output))
+
+    reviewed = json.loads(output.read_text(encoding="utf-8"))
+    assert result["send_count"] == 1
+    assert result["skipped_delivered_count"] == 1
+    assert [item["id"] for item in reviewed["send_candidates"]] == ["pending"]
+    assert [item["id"] for item in reviewed["skipped_delivered"]] == ["already"]
+
+
+def test_boss_send_skips_previously_delivered_jobs_before_opening_browser(tmp_path, monkeypatch):
+    import jobagent.infra.audit as audit
+    from jobagent.application.delivery import _boss_send
+    from jobagent.domain.models import SendAttempt
+
+    delivered_url = "https://www.zhipin.com/job_detail/already.html"
+    pending_url = "https://www.zhipin.com/job_detail/pending.html"
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(
+        json.dumps([{"job_url": delivered_url, "delivered": True}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audit, "audit_log_path", lambda: audit_path)
+    driver = object()
+    opened: list[str] = []
+    monkeypatch.setattr("jobagent.drivers.boss.create_driver", lambda **_kwargs: driver)
+
+    def fake_send(_driver, url, message):
+        opened.append(url)
+        return SendAttempt(job_url=url, message=message, delivered=True)
+
+    monkeypatch.setattr(
+        "jobagent.platforms.boss.send_flow.execute_boss_greeting_flow",
+        fake_send,
+    )
+
+    attempts = _boss_send(
+        [
+            {"url": delivered_url, "cloud_greeting": "duplicate"},
+            {"url": pending_url, "cloud_greeting": "new"},
+        ],
+        dry_run=False,
+    )
+
+    assert opened == [pending_url]
+    assert [attempt.error for attempt in attempts] == ["already_delivered", ""]
+    assert attempts[1].delivered is True
+
+
 def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
     tmp_path, monkeypatch
 ):

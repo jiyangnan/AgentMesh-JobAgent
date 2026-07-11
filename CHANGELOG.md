@@ -2,6 +2,17 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.4] - 2026-07-11
+
+### Fixed
+
+- Boss review now excludes jobs with verified delivery in the local audit log.
+- Boss send rechecks the same audit history so stale or edited review files cannot trigger duplicate outreach.
+
+### Changed
+
+- Agent distribution assets now describe the current unlimited, 0-credit free-open policy.
+
 ## [0.3.3] - 2026-07-11
 
 ### Fixed
@@ -49,6 +60,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.4]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.4
 [0.3.3]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.3
 [0.3.2]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.2
 [0.3.1]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.1

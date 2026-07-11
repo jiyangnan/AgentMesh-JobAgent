@@ -106,6 +106,7 @@ jobagent 51job audit
 - `selected` jobs enter the default send list.
 - `review` jobs are excluded unless the user explicitly promotes their job IDs with `--promote ... --confirm-promote`.
 - `rejected` jobs are never automatically promoted.
+- Boss review excludes jobs already recorded as successfully delivered, and the send command checks the audit history again before opening any job page.
 - Every real greeting or application still requires `--confirm-send` or `--confirm-submit`.
 - Recruiting-platform browser actions run serially in the product order shown above.
 - If the CLI reports login, CAPTCHA, verification or resume-selection intervention, the Agent must stop and ask the user to complete it.

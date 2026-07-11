@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.3
+version: 0.3.4
 metadata:
   openclaw:
     emoji: "💼"
@@ -25,6 +25,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job serially. Never operate their shared browser concurrently.
 - Stop whenever `requires_user_action=true`; relay `user_prompt` exactly and wait.
 - Show `selected / review / rejected` before any real action.
+- Show `skipped_delivered` when present and never add those jobs back to the send list.
 - Never promote `review` without IDs chosen by the user and `--confirm-promote`. Never auto-promote `rejected`.
 - Real actions require `--confirm-send` or `--confirm-submit`.
 
@@ -48,7 +49,7 @@ jobagent doctor env
 jobagent resume analyze --file <resume-path> --target-role "<role>" --target-cities <cities>
 ```
 
-Each completed platform Discover costs 10 credits and accepts at most 100 candidate jobs. Browser failure before decision is not charged; server decision failure after charging is refunded.
+Each completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as authoritative for future policy changes.
 
 ## Platform Flow
 

@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from jobagent.infra.state import audit_log_path
+
+
+def boss_job_key(url: str) -> str:
+    """Return the stable Boss job id, falling back to a normalized URL."""
+    value = str(url or "").strip()
+    match = re.search(r"/job_detail/([^/?#]+)\.html", value)
+    if match:
+        return match.group(1)
+    return value.split("#", 1)[0].split("?", 1)[0].rstrip("/")
 
 
 class AuditLog:
@@ -28,6 +38,15 @@ class AuditLog:
         """Return the most recent N send records (newest first)."""
         records = self._load()
         return list(reversed(records[-n:]))
+
+    def delivered_job_keys(self) -> set[str]:
+        """Return stable identifiers for jobs with verified delivery."""
+        return {
+            key
+            for record in self._load()
+            if record.get("delivered")
+            if (key := boss_job_key(str(record.get("job_url") or "")))
+        }
 
     def summary(self) -> dict[str, Any]:
         """Return aggregate statistics over all send attempts."""

@@ -17,7 +17,7 @@ Before each platform, state:
 
 - Goal: complete one platform Discover and let the user decide what to send.
 - Actions: login check, Discover, signed review, explicit confirmation, send, audit.
-- Acceptance: valid signed decision; every candidate classified once; only confirmed jobs attempted; audit records the actual result.
+- Acceptance: valid signed decision; every candidate classified once; previously delivered jobs excluded; only confirmed jobs attempted; audit records the actual result.
 
 One completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as the authority for any future charge or refund policy.
 
@@ -85,7 +85,7 @@ jobagent boss discover
 jobagent boss greet preview
 ```
 
-Show the user the `selected`, `review` and `rejected` sections and each selected greeting. To include a review job, only use:
+Show the user the `selected`, `review`, `rejected` and `skipped_delivered` sections and each remaining selected greeting. `skipped_delivered` jobs are not sendable. To include a review job, only use:
 
 ```bash
 jobagent boss greet preview --promote <job-id> --confirm-promote
@@ -97,6 +97,8 @@ After the user explicitly approves the displayed send list:
 jobagent boss greet send --confirm-send
 jobagent boss audit
 ```
+
+The send command rechecks local delivery history. A stale or edited review file must not be used to contact a previously delivered Boss job again.
 
 ### 猎聘
 
