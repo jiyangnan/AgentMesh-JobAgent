@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.12] - 2026-07-11
+
+### Fixed
+
+- Liepin resume delivery now completes the live two-stage flow: open `发简历`, verify the default attachment selection, then click `立即投递`.
+- Liepin uses trusted browser mouse events for the React resume controls and verifies the resulting resume message/card before reporting delivery.
+- A delivered Liepin resume no longer also reports a stale resume-selection user action.
+
 ## [0.3.11] - 2026-07-11
 
 ### Changed
@@ -131,6 +139,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.12]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.12
 [0.3.11]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.11
 [0.3.10]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.10
 [0.3.9]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.9

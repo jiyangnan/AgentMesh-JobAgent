@@ -1,8 +1,4 @@
-"""Liepin manual apply-open flow.
-
-The beta implementation opens selected Liepin job pages for human review. It
-does not click apply buttons, send messages, or upload cookies.
-"""
+"""Liepin resume and personalized greeting delivery."""
 
 from __future__ import annotations
 
@@ -355,10 +351,27 @@ class LiepinApplySender:
                 }
             )
         else:
-            resume_action = _exec_liepin_js(driver, _liepin_apply_click_resume_script())
+            resume_action = _click_liepin_resume_action(driver)
             steps.append({"step": "click_liepin_resume_action", **resume_action})
             if resume_action.get("ok"):
-                state = _poll_liepin_state(driver, attempts=4, require_resume=True)
+                state = _poll_liepin_state(
+                    driver,
+                    attempts=4,
+                    require_resume=True,
+                    allow_resume_confirm=True,
+                )
+                if state.get("canConfirmResume"):
+                    steps.append({"step": "inspect_liepin_resume_dialog", **state})
+                    if state.get("resumeAttachmentSelected") is False:
+                        resume_confirm = {
+                            "ok": False,
+                            "error": "resume_attachment_not_selected",
+                        }
+                    else:
+                        resume_confirm = _click_liepin_resume_confirm(driver)
+                    steps.append({"step": "click_liepin_resume_confirm", **resume_confirm})
+                    if resume_confirm.get("ok"):
+                        state = _poll_liepin_state(driver, attempts=4, require_resume=True)
             resume_delivered = bool(state.get("resumeDelivered"))
             steps.append(
                 {
@@ -442,6 +455,7 @@ def _poll_liepin_state(
     attempts: int = 4,
     *,
     require_resume: bool = False,
+    allow_resume_confirm: bool = False,
     expected_message: str = "",
 ) -> dict[str, Any]:
     state: dict[str, Any] = {"ok": False, "error": "inspection_not_run"}
@@ -449,6 +463,8 @@ def _poll_liepin_state(
         time.sleep(1)
         state = _exec_liepin_js(driver, _liepin_apply_inspect_script())
         if require_resume and state.get("resumeDelivered"):
+            return state
+        if require_resume and allow_resume_confirm and state.get("canConfirmResume"):
             return state
         if expected_message and _liepin_greeting_delivery_detected(state, expected_message):
             return state
@@ -507,6 +523,38 @@ def _exec_liepin_js(driver: Any, script: str) -> dict[str, Any]:
     return result if isinstance(result, dict) else {"ok": False, "error": "unexpected_js_result"}
 
 
+def _click_liepin_resume_action(driver: Any) -> dict[str, Any]:
+    result = _exec_liepin_js(driver, _liepin_apply_click_resume_script())
+    return _click_liepin_result(driver, result)
+
+
+def _click_liepin_resume_confirm(driver: Any) -> dict[str, Any]:
+    result = _exec_liepin_js(driver, _liepin_apply_click_resume_confirm_script())
+    return _click_liepin_result(driver, result)
+
+
+def _click_liepin_result(driver: Any, result: dict[str, Any]) -> dict[str, Any]:
+    if not result.get("ok"):
+        return result
+    x = result.get("x")
+    y = result.get("y")
+    native_click = getattr(driver, "_click_at", None)
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return result
+    if not callable(native_click):
+        fallback = _exec_liepin_js(driver, _liepin_apply_dom_click_script(x, y))
+        return {**result, **fallback, "click_mode": "dom_fallback"}
+    try:
+        native_click(x, y)
+    except Exception as exc:
+        return {
+            **result,
+            "ok": False,
+            "error": f"resume_native_click_failed: {exc}",
+        }
+    return {**result, "ok": True, "click_mode": "native_mouse"}
+
+
 def _liepin_page_requires_login(state: dict[str, Any]) -> bool:
     if state.get("loginRequired") is True:
         return True
@@ -559,7 +607,11 @@ def _liepin_apply_inspect_script() -> str:
       const resumeDelivered = Boolean(
         document.querySelector('.im-ui-txt.send .im-ui-send-attachment-card')
       ) || outgoingMessages.some(message => /这是我的简历|简历已发送|已发送简历/.test(message));
-      const requiresResume = /请选择简历|上传简历|完善简历|创建简历|附件简历/.test(text) && !canConfirmResume;
+      const resumeAttachmentSelected = Boolean(document.querySelector(
+        'input[type="radio"]:checked,[role="radio"][aria-checked="true"],.ant-radio-checked'
+      ));
+      const requiresResume = /请选择简历|上传简历|完善简历|创建简历|附件简历/.test(text)
+        && !canConfirmResume && !resumeDelivered;
       const requiresCaptcha = /验证码登录|手机验证码|安全验证|滑块/.test(text);
       return JSON.stringify({
         ok: true,
@@ -569,6 +621,8 @@ def _liepin_apply_inspect_script() -> str:
         delivered,
         chatOpen: Boolean(editor),
         canSendResume,
+        canConfirmResume,
+        resumeAttachmentSelected,
         resumeDelivered,
         outgoingMessages,
         requires_user_action: requiresResume || requiresCaptcha,
@@ -681,10 +735,55 @@ def _liepin_apply_click_resume_script() -> str:
       for (const label of labels) {
         const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
         if (el) {
-          el.click();
-          return JSON.stringify({ok:true, clicked:label});
+          el.scrollIntoView({block:'center', inline:'center'});
+          const rect = el.getBoundingClientRect();
+          return JSON.stringify({
+            ok:true,
+            clicked:label,
+            x:rect.left + rect.width / 2,
+            y:rect.top + rect.height / 2
+          });
         }
       }
       return JSON.stringify({ok:false, error:'resume_action_not_found'});
+    })()
+    """
+
+
+def _liepin_apply_dom_click_script(x: float, y: float) -> str:
+    return f"""
+    (function(){{
+      const el = document.elementFromPoint({float(x)}, {float(y)});
+      if (!el) return JSON.stringify({{ok:false, error:'resume_action_not_found_at_point'}});
+      el.click();
+      return JSON.stringify({{ok:true}});
+    }})()
+    """
+
+
+def _liepin_apply_click_resume_confirm_script() -> str:
+    return r"""
+    (function(){
+      const labels = ['立即投递', '确认投递'];
+      function visible(el){
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
+      }
+      const all = Array.from(document.querySelectorAll('button,[role="button"],a'));
+      for (const label of labels) {
+        const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
+        if (el) {
+          el.scrollIntoView({block:'center', inline:'center'});
+          const rect = el.getBoundingClientRect();
+          return JSON.stringify({
+            ok:true,
+            clicked:label,
+            x:rect.left + rect.width / 2,
+            y:rect.top + rect.height / 2
+          });
+        }
+      }
+      return JSON.stringify({ok:false, error:'resume_confirm_button_not_found'});
     })()
     """

@@ -35,7 +35,76 @@ def test_liepin_scripts_use_live_resume_editor_send_and_transcript_selectors():
     assert "textarea.im-ui-textarea" in inspect
     assert ".im-ui-txt.send .text" in inspect
     assert ".action-resume" in _liepin_apply_click_resume_script()
+    assert "立即投递" in inspect
+    assert "!resumeDelivered" in inspect
     assert ".im-ui-basic-send-btn" in _liepin_apply_click_message_send_script()
+
+
+def test_liepin_resume_delivery_confirms_selected_attachment(monkeypatch, tmp_path):
+    monkeypatch.setattr("jobagent.platforms.liepin.apply.time.sleep", lambda _: None)
+
+    class TwoStageDriver:
+        def __init__(self):
+            self.dialog_open = False
+            self.resume_delivered = False
+            self.message = ""
+            self.message_sent = False
+            self.native_clicks = []
+
+        def open_url_in_new_tab(self, url: str, wait_seconds: int = 5):
+            return {"ok": True, "url": url}
+
+        def _click_at(self, x: float, y: float):
+            self.native_clicks.append((x, y))
+            if x == 100.0:
+                self.dialog_open = True
+            elif x == 200.0:
+                self.resume_delivered = True
+
+        def _exec_js(self, script: str):
+            if "resume_action_not_found" in script:
+                return {"ok": True, "clicked": "发简历", "x": 100.0, "y": 300.0}
+            if "resume_confirm_button_not_found" in script:
+                return {"ok": True, "clicked": "立即投递", "x": 200.0, "y": 400.0}
+            if "editor_not_found" in script:
+                encoded = script.split("const message = ", 1)[1].split(";", 1)[0].strip()
+                self.message = json.loads(encoded)
+                return {"ok": True, "filled": True}
+            if "message_send_button_not_found" in script:
+                self.message_sent = True
+                return {"ok": True, "clicked": "发送"}
+            return {
+                "ok": True,
+                "title": "岗位详情",
+                "loginRequired": False,
+                "chatOpen": True,
+                "canSendResume": not self.resume_delivered,
+                "canConfirmResume": self.dialog_open and not self.resume_delivered,
+                "resumeAttachmentSelected": self.dialog_open,
+                "resumeDelivered": self.resume_delivered,
+                "outgoingMessages": [self.message] if self.message_sent else [],
+                "requires_user_action": False,
+            }
+
+    driver = TwoStageDriver()
+    attempts = LiepinApplySender(
+        driver=driver,
+        audit_log=LiepinAuditLog(path=tmp_path / "audit.json"),
+    ).send_batch(
+        [{
+            "name": "AI产品经理",
+            "company": "Example",
+            "url": "https://www.liepin.com/job/2.shtml",
+            "cloud_greeting": "您好，我对这个岗位很感兴趣。",
+        }]
+    )
+
+    assert attempts[0].delivered is True
+    assert driver.native_clicks == [(100.0, 300.0), (200.0, 400.0)]
+    assert any(
+        step["step"] == "click_liepin_resume_confirm"
+        for step in attempts[0].steps
+    )
 
 
 def test_liepin_chat_only_job_verifies_resume_and_exact_signed_greeting(
