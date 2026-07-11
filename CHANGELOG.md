@@ -2,6 +2,24 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.6] - 2026-07-11
+
+### Added
+
+- `jobagent round status` persists the Boss -> Liepin -> Zhilian -> 51Job workflow and returns one machine-readable next action.
+- `jobagent round skip --platform <platform> --confirm-skip` records an explicit, round-local user decision.
+
+### Changed
+
+- Platform commands now return `workflow.continue_required`, `workflow.workflow_complete`, remaining platforms and `next_suggested`.
+- The CLI rejects out-of-order platform browser actions before opening a page.
+- A confirmed send covers the complete reviewed list by default, up to 100 jobs.
+
+### Fixed
+
+- Browser startup and navigation failures are no longer misreported as login-required user actions.
+- The official workflow no longer silently switches from the dedicated Job Agent browser to another Chrome profile.
+
 ## [0.3.5] - 2026-07-11
 
 ### Fixed
@@ -67,6 +85,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.6]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.6
 [0.3.5]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.5
 [0.3.4]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.4
 [0.3.3]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.3
