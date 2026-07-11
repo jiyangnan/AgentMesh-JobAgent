@@ -174,7 +174,7 @@ def collect_from_search_plan(
     driver=None,
 ) -> list[dict[str, Any]]:
     from jobagent.drivers.boss import create_driver
-    from jobagent.infra.exceptions import LoginRequiredError
+    from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
 
     platform = str(plan["platform"])
     candidate_limit = min(100, int(plan.get("candidate_limit", 100)))
@@ -215,6 +215,12 @@ def collect_from_search_plan(
                         return candidates
                 if page_delay > 0:
                     time.sleep(page_delay)
+    except UserActionRequiredError as exc:
+        raise CollectionError(
+            exc.code,
+            str(exc),
+            user_prompt=exc.user_prompt,
+        ) from exc
     except LoginRequiredError as exc:
         raise CollectionError(
             "login_required",

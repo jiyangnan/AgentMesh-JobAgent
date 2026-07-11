@@ -15,33 +15,20 @@ from urllib.parse import quote
 from jobagent.domain.models import Job
 from jobagent.drivers.boss import create_driver
 from jobagent.drivers.boss.base import BossActionDriver
-from jobagent.infra.exceptions import LoginRequiredError
+from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
 
 from .parser import boss_job_id, parse_boss_job
+from .selectors import build_boss_snapshot_script
 
 
 class BossDataDriver:
-    """Fetch job listings from Boss via browser-driven XHR."""
+    """Fetch job listings from the visible Boss search results page."""
 
     API_URL = "https://www.zhipin.com/wapi/zpgeek/search/joblist.json"
 
     def __init__(self, driver: BossActionDriver | None = None):
         self.driver = driver or create_driver()
         self._seen_ids: set[str] = set()
-
-    def _ensure_on_zhipin(self) -> None:
-        """Ensure the active Chrome tab is on zhipin.com before XHR."""
-        js = """
-        (function(){
-            if (location.hostname.includes('zhipin.com')) return JSON.stringify({ok:true, status:'already'});
-            location.href = 'https://www.zhipin.com/web/sou/?query=AI&city=101280600';
-            return JSON.stringify({ok:true, status:'navigating'});
-        })()
-        """
-        result = self.driver._exec_js(js)
-        data = self.driver._unwrap(result)
-        if data.get("status") == "navigating":
-            time.sleep(4)
 
     def _fetch_page(
         self,
@@ -50,35 +37,40 @@ class BossDataDriver:
         page: int = 1,
         page_size: int = 15,
     ) -> dict[str, Any]:
-        """Execute XHR in browser to fetch one page of job listings."""
-        self._ensure_on_zhipin()
-
+        """Open a real search page and extract its rendered job cards."""
         url = (
-            f"{self.API_URL}?scene=1&query={quote(query)}"
-            f"&city={city_code}&page={page}&pageSize={page_size}"
+            f"https://www.zhipin.com/web/geek/jobs?query={quote(query)}"
+            f"&city={quote(city_code)}&page={max(1, int(page))}"
         )
-        js = f'''
-        (function(){{
-            var r = new XMLHttpRequest();
-            r.open('GET', `{url}`, false);
-            r.withCredentials = true;
-            r.setRequestHeader('Accept', 'application/json');
-            r.send(null);
-            return r.responseText;
-        }})()
-        '''
-        result = self.driver._exec_js(js)
+        open_result = self.driver.open_url_in_new_tab(url, wait_seconds=6)
+        if not open_result.get("ok"):
+            error = str(open_result.get("error") or "open_url_failed")
+            if error == "verification_required":
+                raise UserActionRequiredError(
+                    "verification_required",
+                    "Boss requires a visible security verification before Discover can continue",
+                    "请在已经打开的 Boss 直聘页面完成安全验证，完成后回复我“已完成验证”。",
+                )
+            return {"ok": False, "error": error, "cards": []}
 
-        raw_text = result.get("raw", "")
-        if raw_text:
+        result = self.driver._exec_js(build_boss_snapshot_script(limit=page_size))
+        if isinstance(result, dict) and "raw" in result:
             try:
-                return json.loads(raw_text)
+                parsed = json.loads(result["raw"])
+                snapshot = parsed if isinstance(parsed, dict) else {}
             except (json.JSONDecodeError, TypeError):
-                return {}
-
-        if isinstance(result, dict) and "zpData" in result:
-            return result
-        return {}
+                snapshot = {}
+        else:
+            snapshot = result if isinstance(result, dict) else {}
+        if snapshot.get("loginRequired"):
+            raise LoginRequiredError()
+        if snapshot.get("verificationRequired"):
+            raise UserActionRequiredError(
+                "verification_required",
+                "Boss requires a visible security verification before Discover can continue",
+                "请在已经打开的 Boss 直聘页面完成安全验证，完成后回复我“已完成验证”。",
+            )
+        return snapshot
 
     def _parse_job(self, raw: dict[str, Any], city_name: str = "") -> Job:
         """Parse raw Boss API job dict to the standardized Job model."""
@@ -107,9 +99,9 @@ class BossDataDriver:
     ) -> list[Job]:
         """Fetch a single page of Boss jobs."""
         data = self._fetch_page(query, city_code, page, page_size)
-        if data.get("code") != 0:
+        if not data.get("ok"):
             return []
-        raw_jobs = data.get("zpData", {}).get("jobList", [])
+        raw_jobs = data.get("cards", [])
         self._check_data_quality(raw_jobs, page=page)
         return [
             self._parse_job(j, city_name)

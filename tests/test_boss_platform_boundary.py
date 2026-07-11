@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from jobagent.drivers.boss.data_driver import BossDataDriver as LegacyBossDataDriver
 from jobagent.domain.models import SendAttempt
+from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
 from jobagent.platforms.boss import BossDataDriver, boss_job_id, parse_boss_job
+from jobagent.platforms.boss.selectors import BOSS_SELECTOR_VERSION, build_boss_snapshot_script
 from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
 
 
@@ -29,6 +33,85 @@ def test_boss_parser_uses_platform_boundary_fixture():
 
 def test_legacy_boss_data_driver_import_still_points_to_platform_flow():
     assert LegacyBossDataDriver is BossDataDriver
+
+
+def test_boss_snapshot_targets_real_cards_and_decodes_salary_glyphs():
+    script = build_boss_snapshot_script(limit=7)
+
+    assert BOSS_SELECTOR_VERSION in script
+    assert ".job-card-box" in script
+    assert ".job-name[href*=\"job_detail\"]" in script
+    assert "'\\ue031':'0'" in script
+    assert "'\\ue03a':'9'" in script
+    assert "const limit = 7" in script
+
+
+class BossSearchDriver:
+    def __init__(self, snapshot=None, open_result=None):
+        self.snapshot = snapshot or {
+            "ok": True,
+            "loginRequired": False,
+            "verificationRequired": False,
+            "cards": [
+                {
+                    "encryptJobId": "dom-job-1",
+                    "jobName": "AI产品经理",
+                    "salaryDesc": "30-50K·16薪",
+                    "brandName": "Example AI",
+                    "cityName": "深圳",
+                    "areaDistrict": "南山区",
+                    "businessDistrict": "科技园",
+                    "jobExperience": "5-10年",
+                    "jobDegree": "本科",
+                    "jobUrl": "https://www.zhipin.com/job_detail/dom-job-1.html",
+                }
+            ],
+        }
+        self.open_result = open_result or {"ok": True}
+        self.opened = []
+
+    def open_url_in_new_tab(self, url, wait_seconds=5):
+        self.opened.append((url, wait_seconds))
+        return self.open_result
+
+    def _exec_js(self, _script):
+        return self.snapshot
+
+
+def test_boss_collect_reads_rendered_search_cards():
+    driver = BossSearchDriver()
+    jobs = BossDataDriver(driver=driver).fetch_jobs(
+        "AI产品经理",
+        "101280600",
+        city_name="深圳",
+        page=2,
+        page_size=15,
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].name == "AI产品经理"
+    assert jobs[0].salary == "30-50K·16薪"
+    assert jobs[0].company == "Example AI"
+    assert jobs[0].area == "南山区·科技园"
+    assert boss_job_id(jobs[0].raw_data) == "dom-job-1"
+    assert "page=2" in driver.opened[0][0]
+
+
+def test_boss_collect_preserves_login_intervention():
+    driver = BossSearchDriver(snapshot={"ok": True, "loginRequired": True, "cards": []})
+
+    with pytest.raises(LoginRequiredError):
+        BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
+
+
+def test_boss_collect_preserves_security_verification_intervention():
+    driver = BossSearchDriver(open_result={"ok": False, "error": "verification_required"})
+
+    with pytest.raises(UserActionRequiredError) as error:
+        BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
+
+    assert error.value.code == "verification_required"
+    assert "完成安全验证" in error.value.user_prompt
 
 
 class FlowDriver:

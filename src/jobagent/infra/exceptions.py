@@ -22,3 +22,12 @@ class LoginRequiredError(RuntimeError):
             "╚══════════════════════════════════════════════════════════════╝\n"
         )
         super().__init__(message or default)
+
+
+class UserActionRequiredError(RuntimeError):
+    """Raised when a platform needs a visible user action before continuing."""
+
+    def __init__(self, code: str, message: str, user_prompt: str):
+        self.code = code
+        self.user_prompt = user_prompt
+        super().__init__(message)
