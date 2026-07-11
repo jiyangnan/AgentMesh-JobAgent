@@ -34,10 +34,9 @@ def _add_review(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", "-o", help="Reviewed decision output path")
 
 
-def _add_send(parser: argparse.ArgumentParser, confirmation: str) -> None:
+def _add_send(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", "-i", help="Reviewed decision file; defaults to latest")
     parser.add_argument("--limit", type=int, default=100, help="Maximum jobs in this send batch")
-    parser.add_argument(confirmation, action="store_true", help="Explicitly confirm real platform actions")
     parser.add_argument("--dry-run", action="store_true", help="Plan without touching platform buttons")
     parser.add_argument("--continue-on-failure", action="store_true")
 
@@ -102,14 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
             preview = greet_sub.add_parser("preview")
             _add_review(preview)
             send = greet_sub.add_parser("send")
-            _add_send(send, "--confirm-send")
+            _add_send(send)
         else:
             apply = platform_sub.add_parser("apply")
             apply_sub = apply.add_subparsers(dest="apply_command", required=True)
             review = apply_sub.add_parser("review")
             _add_review(review)
             send = apply_sub.add_parser("send")
-            _add_send(send, "--confirm-submit")
+            _add_send(send)
         audit = platform_sub.add_parser("audit")
         audit.add_argument("--recent", "-n", type=int, default=20)
     return parser
@@ -344,7 +343,6 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
                 confirm_promote=args.confirm_promote,
                 output_path=args.output,
             )
-        confirmation = args.confirm_send
     else:
         if args.apply_command == "review":
             from jobagent.application.review import review_decision
@@ -357,14 +355,6 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
                 confirm_promote=args.confirm_promote,
                 output_path=args.output,
             )
-        confirmation = args.confirm_submit
-    if not confirmation and not args.dry_run:
-        return {
-            "ok": False,
-            "error": "user_confirmation_required",
-            "platform": platform,
-            "message": "Review the selected jobs and explicitly confirm the real send action.",
-        }
     assert_platform_turn(platform)
     from jobagent.application.delivery import send_reviewed
 

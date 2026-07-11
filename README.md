@@ -74,7 +74,7 @@ jobagent round skip --platform <platform> --confirm-skip
 jobagent boss login
 jobagent boss discover
 jobagent boss greet preview
-jobagent boss greet send --confirm-send
+jobagent boss greet send
 jobagent boss audit
 ```
 
@@ -86,7 +86,7 @@ Boss uses a personalized greeting. `greet preview` shows the signed decision and
 jobagent liepin login
 jobagent liepin discover
 jobagent liepin apply review
-jobagent liepin apply send --confirm-submit
+jobagent liepin apply send
 jobagent liepin audit
 ```
 
@@ -96,7 +96,7 @@ jobagent liepin audit
 jobagent zhilian login
 jobagent zhilian discover
 jobagent zhilian apply review
-jobagent zhilian apply send --confirm-submit
+jobagent zhilian apply send
 jobagent zhilian audit
 ```
 
@@ -106,7 +106,7 @@ jobagent zhilian audit
 jobagent 51job login
 jobagent 51job discover
 jobagent 51job apply review
-jobagent 51job apply send --confirm-submit
+jobagent 51job apply send
 jobagent 51job audit
 ```
 
@@ -114,21 +114,21 @@ jobagent 51job audit
 
 ## Review Rules
 
-- `selected` jobs enter the default send list.
+- `selected` jobs are delivered automatically after signed review; the Agent does not ask for another confirmation on each platform.
 - `review` jobs are excluded unless the user explicitly promotes their job IDs with `--promote ... --confirm-promote`.
 - `rejected` jobs are never automatically promoted.
 - Boss review excludes jobs already recorded as successfully delivered, and the send command checks the audit history again before opening any job page.
-- Every real greeting or application still requires `--confirm-send` or `--confirm-submit`.
+- Send commands intentionally have no per-platform confirmation flag.
 - Recruiting-platform browser actions run serially in the product order shown above.
 - Completing one platform is not completing the round. The Agent must follow `workflow.next_suggested` until `workflow.workflow_complete=true`.
-- One confirmed send covers the complete reviewed list, up to 100 jobs. The default send limit is 100.
+- One send covers the complete reviewed selected list, up to 100 jobs. The default send limit is 100.
 - If the CLI reports login, CAPTCHA, verification or resume-selection intervention, the Agent must stop and ask the user to complete it.
 
 Example review override:
 
 ```bash
 jobagent liepin apply review --promote <job-id> --confirm-promote
-jobagent liepin apply send --confirm-submit
+jobagent liepin apply send
 ```
 
 ## Signed Decisions

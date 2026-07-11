@@ -171,27 +171,12 @@ class LiepinApplyOpener:
 
 
 class LiepinApplySender:
-    """Send/apply to Liepin jobs with platform-owned page automation.
+    """Submit the account resume and require resume-specific evidence.
 
-    Liepin UX differs fundamentally from Boss直聘:
-      - **No greeting-based chat flow.** Liepin doesn't have a Boss-style
-        "打招呼 → 进聊天 → 发招呼语" loop. The only contact mechanism on
-        a Liepin job page is "立即投递" (submit resume). The "聊一聊"
-        button (when present) requires a pre-existing relationship and
-        isn't an outbound greeting channel.
-      - **Greeting is handoff-only.** ``liepin greet preview`` generates
-        a personalized greeting, but it is NOT auto-sent by this sender.
-        The greeting is emitted into the JSON ``handoff`` field for the
-        ``liepin apply open`` flow, where the human user manually copies
-        it into whatever channel they choose (manual 聊一聊, email, etc.).
-      - **This sender does ONE thing: click 立即投递 to submit the
-        resume that's bound to the user's Liepin account.** No message
-        is sent. The ``message`` parameter is accepted for API symmetry
-        with Boss but is not delivered to the recruiter.
-
-    The ``fill_liepin_message`` step in ``_drive_dialog`` will report
-    ``editor_not_found`` on every healthy Liepin job page — that is
-    expected behavior, not a bug.
+    Some Liepin jobs expose only a chat entry. Opening it may send a
+    platform-owned default message, which is never counted as resume
+    delivery. The sender continues to the explicit ``发简历`` action and
+    records success only after resume-specific delivery evidence appears.
     """
 
     def __init__(
@@ -301,12 +286,13 @@ class LiepinApplySender:
             attempt.steps = steps
             return attempt
 
-        click_entry = _exec_liepin_js(driver, _liepin_apply_click_entry_script())
-        steps.append({"step": "click_apply_or_contact_entry", **click_entry})
-        if not click_entry.get("ok"):
-            attempt.error = str(click_entry.get("error") or "apply_entry_not_found")
-            attempt.steps = steps
-            return attempt
+        if not inspect_before.get("canSendResume"):
+            click_entry = _exec_liepin_js(driver, _liepin_apply_click_entry_script())
+            steps.append({"step": "click_apply_or_contact_entry", **click_entry})
+            if not click_entry.get("ok"):
+                attempt.error = str(click_entry.get("error") or "apply_entry_not_found")
+                attempt.steps = steps
+                return attempt
 
         terminal = self._drive_dialog(driver, message=message, steps=steps)
         if terminal.get("delivered"):
@@ -333,9 +319,24 @@ class LiepinApplySender:
             if state.get("requires_user_action"):
                 return {"delivered": False, "error": state.get("user_action") or "user_action_required"}
 
-            if message.strip():
-                filled = _exec_liepin_js(driver, _liepin_apply_fill_message_script(message))
-                steps.append({"step": "fill_liepin_message", **filled})
+            if state.get("canSendResume"):
+                resume_action = _exec_liepin_js(driver, _liepin_apply_click_resume_script())
+                steps.append({"step": "click_liepin_resume_action", **resume_action})
+                if not resume_action.get("ok"):
+                    continue
+                time.sleep(1.5)
+                after_resume = _exec_liepin_js(driver, _liepin_apply_inspect_script())
+                steps.append({"step": "inspect_after_resume_action", **after_resume})
+                if _liepin_delivery_detected(after_resume):
+                    return {"delivered": True}
+                if _liepin_page_requires_login(after_resume):
+                    return {"delivered": False, "error": "login_required"}
+                if after_resume.get("requires_user_action"):
+                    return {
+                        "delivered": False,
+                        "error": after_resume.get("user_action") or "user_action_required",
+                    }
+                continue
 
             confirm = _exec_liepin_js(driver, _liepin_apply_click_confirm_script())
             steps.append({"step": "click_liepin_confirm", **confirm})
@@ -412,7 +413,7 @@ def _liepin_page_requires_login(state: dict[str, Any]) -> bool:
     text = f"{state.get('title') or ''}\n{state.get('bodySnippet') or ''}"
     return any(
         token in text
-        for token in ("登录/注册", "请登录", "扫码登录", "验证码登录", "手机验证码", "安全验证", "滑块")
+        for token in ("登录/注册", "扫码登录", "验证码登录", "手机验证码", "安全验证", "滑块")
     )
 
 
@@ -422,8 +423,8 @@ def _liepin_delivery_detected(state: dict[str, Any]) -> bool:
     text = f"{state.get('title') or ''}\n{state.get('bodySnippet') or ''}"
     return any(
         token in text
-        for token in ("投递成功", "发送成功", "已发送", "已投递", "已沟通", "继续沟通", "继续聊", "沟通中")
-    ) or ("未读" in text and "我对您在招" in text)
+        for token in ("投递成功", "简历发送成功", "简历已发送", "已投递")
+    )
 
 
 def _liepin_apply_inspect_script() -> str:
@@ -432,15 +433,17 @@ def _liepin_apply_inspect_script() -> str:
       const text = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
       const title = document.title || '';
       const href = location.href || '';
-      const loginRequired = /\/login|passport|account/.test(href) || /登录\/注册|请登录|扫码登录|验证码登录|手机验证码|安全验证|滑块/.test(title + '\n' + text.slice(0, 800));
-      const delivered = /投递成功|发送成功|已发送|已投递|已沟通|继续沟通|继续聊|沟通中/.test(text)
-        || (/未读/.test(text) && /我对您在招/.test(text));
+      const loginRequired = /\/login|passport|account/.test(href) || /登录\/注册|扫码登录|验证码登录|手机验证码|安全验证|滑块/.test(title + '\n' + text.slice(0, 800));
+      const delivered = /\/job\/apply\/success/.test(href)
+        || /投递成功/.test(title)
+        || /投递成功|简历发送成功|简历已发送|已投递/.test(text);
       const visibleButtons = Array.from(document.querySelectorAll('button,a')).filter(el => {
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
       }).map(el => (el.innerText || el.textContent || '').trim());
       const canConfirmResume = visibleButtons.some(t => /立即投递|确认投递|投递/.test(t));
+      const canSendResume = visibleButtons.some(t => /^(发简历|发送简历|投递简历)$/.test(t));
       const requiresResume = /请选择简历|上传简历|完善简历|创建简历|附件简历/.test(text) && !canConfirmResume;
       const requiresCaptcha = /验证码登录|手机验证码|安全验证|滑块/.test(text);
       return JSON.stringify({
@@ -449,6 +452,7 @@ def _liepin_apply_inspect_script() -> str:
         title,
         loginRequired,
         delivered,
+        canSendResume,
         requires_user_action: requiresResume || requiresCaptcha,
         user_action: requiresCaptcha ? 'captcha_required' : (requiresResume ? 'resume_selection_required' : ''),
         bodySnippet: text.slice(0, 1200)
@@ -538,12 +542,33 @@ def _liepin_apply_fill_message_script(message: str) -> str:
     """
 
 
+def _liepin_apply_click_resume_script() -> str:
+    return r"""
+    (function(){
+      const labels = ['发简历', '发送简历', '投递简历'];
+      function visible(el){
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
+      }
+      const all = Array.from(document.querySelectorAll('button,a'));
+      for (const label of labels) {
+        const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
+        if (el) {
+          el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+          return JSON.stringify({ok:true, clicked:label});
+        }
+      }
+      return JSON.stringify({ok:false, error:'resume_action_not_found'});
+    })()
+    """
+
+
 def _liepin_apply_click_confirm_script() -> str:
     return r"""
     (function(){
       const labels = [
-        '发送', '确认发送', '确认投递', '立即投递', '投递', '确认',
-        '继续沟通', '继续聊', '完成', '确定'
+        '确认投递', '立即投递', '投递', '确认'
       ];
       function visible(el){
         const style = window.getComputedStyle(el);
@@ -560,7 +585,7 @@ def _liepin_apply_click_confirm_script() -> str:
       }
       const fuzzy = all.find(node => {
         const t = (node.innerText || node.textContent || '').trim();
-        return visible(node) && /发送|确认|投递|继续沟通|继续聊|确定/.test(t) && !/取消|关闭|返回/.test(t);
+        return visible(node) && /确认投递|立即投递|投递/.test(t) && !/取消|关闭|返回/.test(t);
       });
       if (fuzzy) {
         const t = (fuzzy.innerText || fuzzy.textContent || '').trim();

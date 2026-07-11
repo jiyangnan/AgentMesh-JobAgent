@@ -57,6 +57,8 @@ def test_public_parser_exposes_only_v3_platform_commands():
         ["zhilian", "apply", "open"],
         ["51job", "rank", "--local"],
         ["resume", "analyze", "--file", "resume.pdf", "--local"],
+        ["boss", "greet", "send", "--confirm-send"],
+        ["liepin", "apply", "send", "--confirm-submit"],
     ):
         with pytest.raises(SystemExit):
             parser.parse_args(retired)
@@ -180,14 +182,27 @@ def test_browser_open_failure_is_not_misreported_as_login_required(guide_class):
     assert "requires_user_action" not in payload
 
 
-def test_send_requires_explicit_confirmation_before_loading_browser_state():
+def test_selected_send_runs_without_per_platform_confirmation(monkeypatch):
+    calls = []
+    monkeypatch.setattr("jobagent.infra.rounds.assert_platform_turn", lambda platform: None)
+    monkeypatch.setattr(
+        "jobagent.application.delivery.send_reviewed",
+        lambda platform, **kwargs: calls.append((platform, kwargs)) or {"ok": True},
+    )
     args = build_parser().parse_args(["liepin", "apply", "send"])
-    assert _dispatch(args) == {
-        "ok": False,
-        "error": "user_confirmation_required",
-        "platform": "liepin",
-        "message": "Review the selected jobs and explicitly confirm the real send action.",
-    }
+
+    assert _dispatch(args) == {"ok": True}
+    assert calls == [
+        (
+            "liepin",
+            {
+                "input_path": None,
+                "limit": 100,
+                "dry_run": False,
+                "stop_on_failure": True,
+            },
+        )
+    ]
 
 
 def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch):
@@ -329,7 +344,7 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
     )
     monkeypatch.setattr(
         "jobagent.application.review.rounds.round_status",
-        lambda: {"round_id": "round-1", "next_suggested": "jobagent liepin apply send --confirm-submit"},
+        lambda: {"round_id": "round-1", "next_suggested": "jobagent liepin apply send"},
     )
     result = review_decision(
         "liepin",

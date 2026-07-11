@@ -1,19 +1,19 @@
 ---
 name: job-agent
-description: AgentMesh Job Agent for resume-driven job discovery, review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.3.7
+description: AgentMesh Job Agent for resume-driven job discovery, review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
+version: 0.3.8
 ---
 
 # Job Agent
 
-Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platform login, review overrides and every real greeting/application.
+Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platform login and review overrides.
 
 ## Required Behavior
 
 - Never invent an AgentMesh API Key. Without one, ask the user to create it at `https://agentmesh360.com/app/` and wait.
 - Run platforms serially: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job.
 - When output contains `requires_user_action=true`, stop, relay `user_prompt` and wait for the user.
-- Never send before the user reviews `selected / review / rejected` and explicitly confirms.
+- Report `selected / review / rejected`, then automatically deliver signed `selected` jobs without asking again for each platform.
 - `review` is excluded by default. Promote only IDs named by the user and always pass `--confirm-promote`.
 - Never automatically promote `rejected`.
 - Show `skipped_delivered` when present and never add those jobs back to the send list.
@@ -48,10 +48,10 @@ jobagent boss discover
 jobagent boss greet preview
 ```
 
-Show the signed decision and greetings. After explicit approval:
+Report the signed decision and greetings, then continue automatically:
 
 ```bash
-jobagent boss greet send --confirm-send
+jobagent boss greet send
 jobagent boss audit
 ```
 
@@ -63,10 +63,8 @@ jobagent liepin discover
 jobagent liepin apply review
 ```
 
-After explicit approval:
-
 ```bash
-jobagent liepin apply send --confirm-submit
+jobagent liepin apply send
 jobagent liepin audit
 ```
 
@@ -78,10 +76,8 @@ jobagent zhilian discover
 jobagent zhilian apply review
 ```
 
-After explicit approval:
-
 ```bash
-jobagent zhilian apply send --confirm-submit
+jobagent zhilian apply send
 jobagent zhilian audit
 ```
 
@@ -93,10 +89,8 @@ jobagent 51job discover
 jobagent 51job apply review
 ```
 
-After explicit approval:
-
 ```bash
-jobagent 51job apply send --confirm-submit
+jobagent 51job apply send
 jobagent 51job audit
 ```
 

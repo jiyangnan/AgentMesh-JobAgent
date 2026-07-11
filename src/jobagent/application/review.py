@@ -52,9 +52,9 @@ def review_decision(
             raise ValueError("Boss decision is missing signed greetings for: " + ", ".join(missing))
     path = save_review(review, output_path)
     next_suggested = (
-        f"jobagent boss greet send --input {path} --confirm-send"
+        f"jobagent boss greet send --input {path}"
         if platform == "boss"
-        else f"jobagent {platform} apply send --input {path} --confirm-submit"
+        else f"jobagent {platform} apply send --input {path}"
     )
     rounds.set_platform_status(
         platform,

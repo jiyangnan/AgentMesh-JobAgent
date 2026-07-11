@@ -5,7 +5,7 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 ## Non-Negotiable Rules
 
 1. Never invent, infer or fabricate an AgentMesh API Key.
-2. Never send a greeting or submit a resume until the user has reviewed the decision and explicitly confirmed the real action.
+2. Starting a job-search round authorizes automatic delivery of every signed `selected` job. Do not ask for another confirmation before each platform or send command.
 3. Run recruiting platforms serially in this order: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job.
 4. When CLI output contains `requires_user_action=true`, stop immediately, relay `user_prompt` to the user and wait for their reply.
 5. Never treat `review` or `rejected` as automatically sendable. A `review` job needs an explicit user override; `rejected` remains excluded.
@@ -17,9 +17,9 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 
 Before each platform, state:
 
-- Goal: complete one platform Discover and let the user decide what to send.
-- Actions: login check, Discover, signed review, explicit confirmation, send, audit.
-- Acceptance: valid signed decision; every candidate classified once; previously delivered jobs excluded; only confirmed jobs attempted; audit records the actual result.
+- Goal: complete one platform Discover and automatically deliver its signed `selected` jobs.
+- Actions: login check, Discover, signed review, automatic selected delivery, audit.
+- Acceptance: valid signed decision; every candidate classified once; previously delivered jobs excluded; only `selected` jobs attempted; audit records the actual result.
 
 At the start of a round, run:
 
@@ -95,16 +95,14 @@ jobagent boss discover
 jobagent boss greet preview
 ```
 
-Show the user the `selected`, `review`, `rejected` and `skipped_delivered` sections and each remaining selected greeting. `skipped_delivered` jobs are not sendable. To include a review job, only use:
+Report the `selected`, `review`, `rejected` and `skipped_delivered` counts and continue with the signed `selected` list. `skipped_delivered` jobs are not sendable. Do not ask whether to send. To include a review job, the user must independently choose its ID and authorize:
 
 ```bash
 jobagent boss greet preview --promote <job-id> --confirm-promote
 ```
 
-After the user explicitly approves the displayed send list:
-
 ```bash
-jobagent boss greet send --confirm-send
+jobagent boss greet send
 jobagent boss audit
 ```
 
@@ -120,10 +118,8 @@ jobagent liepin discover
 jobagent liepin apply review
 ```
 
-After explicit approval:
-
 ```bash
-jobagent liepin apply send --confirm-submit
+jobagent liepin apply send
 jobagent liepin audit
 ```
 
@@ -135,10 +131,8 @@ jobagent zhilian discover
 jobagent zhilian apply review
 ```
 
-After explicit approval:
-
 ```bash
-jobagent zhilian apply send --confirm-submit
+jobagent zhilian apply send
 jobagent zhilian audit
 ```
 
@@ -150,10 +144,8 @@ jobagent 51job discover
 jobagent 51job apply review
 ```
 
-After explicit approval:
-
 ```bash
-jobagent 51job apply send --confirm-submit
+jobagent 51job apply send
 jobagent 51job audit
 ```
 
@@ -171,7 +163,7 @@ jobagent <platform> apply review \
 
 For Boss, use `greet preview` instead of `apply review`.
 
-Always show the resulting `send_count` and reviewed file before asking for send confirmation. Never add IDs that the user did not select.
+Report the resulting `send_count` and reviewed file, then continue automatically. Never add IDs that the user did not select.
 
 ## 6. User Intervention
 

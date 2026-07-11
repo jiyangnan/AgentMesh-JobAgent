@@ -10,6 +10,12 @@ from jobagent.infra.state import current_round_path, rounds_dir, save_json, load
 DEFAULT_PLATFORM_ORDER = ["boss", "liepin", "zhilian", "51job"]
 TERMINAL_PLATFORM_STATUSES = {"completed", "skipped_this_round"}
 ROUND_SCHEMA_VERSION = 2
+DELIVERY_POLICY = {
+    "selected": "auto",
+    "review": "explicit_override_only",
+    "rejected": "never",
+    "per_platform_confirmation": False,
+}
 
 
 class RoundOrderError(RuntimeError):
@@ -133,9 +139,9 @@ def _default_next_command(platform: str, status: str) -> str:
         )
     if status == "reviewed":
         return (
-            "jobagent boss greet send --confirm-send"
+            "jobagent boss greet send"
             if platform == "boss"
-            else f"jobagent {platform} apply send --confirm-submit"
+            else f"jobagent {platform} apply send"
         )
     if status == "sent":
         return f"jobagent {platform} audit"
@@ -171,6 +177,7 @@ def round_status() -> dict[str, Any]:
         "status": "completed" if workflow_complete else "active",
         "workflow_complete": workflow_complete,
         "continue_required": not workflow_complete,
+        "delivery_policy": dict(DELIVERY_POLICY),
         "platform_order": order,
         "platforms": platforms,
         "current_platform": current_platform,

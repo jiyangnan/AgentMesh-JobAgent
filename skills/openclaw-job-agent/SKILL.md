@@ -1,7 +1,7 @@
 ---
 name: job-agent
-description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.7
+description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
+version: 0.3.8
 metadata:
   openclaw:
     emoji: "💼"
@@ -17,17 +17,17 @@ metadata:
 
 # AgentMesh Job Agent
 
-Drive the official Job Agent CLI while keeping the user in control of credentials, login and every real delivery.
+Drive the official Job Agent CLI while keeping the user in control of credentials, login and review overrides.
 
 ## Safety Contract
 
 - Never invent an API Key. Ask the user to create one at `https://agentmesh360.com/app/` and wait.
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job serially. Never operate their shared browser concurrently.
 - Stop whenever `requires_user_action=true`; relay `user_prompt` exactly and wait.
-- Show `selected / review / rejected` before any real action.
+- Report `selected / review / rejected`, then automatically deliver the signed `selected` list without asking again.
 - Show `skipped_delivered` when present and never add those jobs back to the send list.
 - Never promote `review` without IDs chosen by the user and `--confirm-promote`. Never auto-promote `rejected`.
-- Real actions require `--confirm-send` or `--confirm-submit`.
+- Starting the round authorizes real actions for `selected`; send commands have no per-platform confirmation flag.
 - On Boss, a platform default introduction is not the reviewed greeting. Require the CLI's exact personalized-delivery verification.
 - Never stop after one platform. Follow `workflow.next_suggested` while `workflow.continue_required=true`; only `workflow.workflow_complete=true` ends the round.
 - Skip a platform only after explicit user approval with `jobagent round skip --platform <platform> --confirm-skip`.
@@ -68,7 +68,7 @@ Boss直聘:
 jobagent boss login --check
 jobagent boss discover
 jobagent boss greet preview
-jobagent boss greet send --confirm-send
+jobagent boss greet send
 jobagent boss audit
 ```
 
@@ -78,7 +78,7 @@ jobagent boss audit
 jobagent liepin login --check
 jobagent liepin discover
 jobagent liepin apply review
-jobagent liepin apply send --confirm-submit
+jobagent liepin apply send
 jobagent liepin audit
 ```
 
@@ -88,7 +88,7 @@ jobagent liepin audit
 jobagent zhilian login --check
 jobagent zhilian discover
 jobagent zhilian apply review
-jobagent zhilian apply send --confirm-submit
+jobagent zhilian apply send
 jobagent zhilian audit
 ```
 
@@ -98,11 +98,11 @@ jobagent zhilian audit
 jobagent 51job login --check
 jobagent 51job discover
 jobagent 51job apply review
-jobagent 51job apply send --confirm-submit
+jobagent 51job apply send
 jobagent 51job audit
 ```
 
-Do not run the send line until the user has explicitly approved the preceding review. 猎聘、智联和 51Job submit resumes and do not send Boss-style greetings. 51Job's web chat is QR-only.
+Run each send line automatically after review. Do not ask for per-platform approval. 猎聘、智联和 51Job submit resumes and do not send Boss-style greetings. 51Job's web chat is QR-only.
 
 ## Review Override
 

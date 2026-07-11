@@ -1,4 +1,4 @@
-"""Explicitly confirmed real delivery for signed, reviewed decisions."""
+"""Automatic real delivery for signed and reviewed selected decisions."""
 
 from __future__ import annotations
 
@@ -189,9 +189,9 @@ def send_reviewed(
         f"jobagent {platform} audit"
         if complete_batch
         else (
-            f"jobagent boss greet send --input {input_path} --limit 100 --confirm-send"
+            f"jobagent boss greet send --input {input_path} --limit 100"
             if platform == "boss"
-            else f"jobagent {platform} apply send --input {input_path} --limit 100 --confirm-submit"
+            else f"jobagent {platform} apply send --input {input_path} --limit 100"
         )
     )
     rounds.set_platform_status(

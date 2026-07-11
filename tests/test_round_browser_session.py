@@ -47,6 +47,40 @@ def test_round_workflow_continues_to_liepin_after_boss_completion(monkeypatch, t
     assert workflow["current_platform"] == "liepin"
     assert workflow["next_suggested"] == "jobagent liepin login --check"
     assert workflow["remaining_platforms"] == ["liepin", "zhilian", "51job"]
+    assert workflow["delivery_policy"] == {
+        "selected": "auto",
+        "review": "explicit_override_only",
+        "rejected": "never",
+        "per_platform_confirmation": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("boss", "jobagent boss greet send"),
+        ("liepin", "jobagent liepin apply send"),
+        ("zhilian", "jobagent zhilian apply send"),
+        ("51job", "jobagent 51job apply send"),
+    ],
+)
+def test_reviewed_platform_next_command_auto_sends_selected(
+    platform, expected, monkeypatch, tmp_path
+):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+    monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
+
+    rounds.ensure_current_round()
+    for preceding in rounds.DEFAULT_PLATFORM_ORDER:
+        if preceding == platform:
+            break
+        rounds.set_platform_status(preceding, "completed")
+    rounds.set_platform_status(platform, "reviewed")
+
+    assert rounds.round_status()["next_suggested"] == expected
 
 
 def test_round_workflow_completes_only_when_every_platform_is_terminal(monkeypatch, tmp_path):

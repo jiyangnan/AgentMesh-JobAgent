@@ -2,6 +2,20 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.8] - 2026-07-11
+
+### Changed
+
+- Starting a four-platform round now authorizes automatic delivery of every signed `selected` job; Agents no longer interrupt the user for per-platform send confirmation.
+- Send commands no longer accept `--confirm-send` or `--confirm-submit`.
+- Round status publishes a machine-readable delivery policy for `selected`, `review`, and `rejected` jobs.
+
+### Fixed
+
+- Liepin no longer treats a platform-owned default chat message or unread marker as resume delivery.
+- For Liepin jobs that expose only a chat entry, the client continues to the explicit `发简历` action and requires resume-specific success evidence.
+- Liepin's “请登录猎聘 APP 查看消息” prompt is no longer misreported as a logged-out web session.
+
 ## [0.3.7] - 2026-07-11
 
 ### Fixed
@@ -92,6 +106,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.8]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.8
 [0.3.7]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.7
 [0.3.6]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.6
 [0.3.5]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.5
