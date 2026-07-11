@@ -35,4 +35,4 @@ Whenever Job Agent's CLI surface changes (new commands, new flags), update [SKIL
 cp SKILL.md ~/.claude/skills/job-agent/SKILL.md
 ```
 
-The skill follows the signed `discover -> review -> confirmed send -> audit` product flow.
+The skill follows the signed `discover -> review -> automatic selected delivery -> audit` product flow.

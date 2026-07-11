@@ -4,6 +4,7 @@ import base64
 import json
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -203,6 +204,18 @@ def test_selected_send_runs_without_per_platform_confirmation(monkeypatch):
             },
         )
     ]
+
+
+def test_public_docs_do_not_restore_per_platform_send_confirmation():
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    claude_guide = (root / "skills/claude-code/README.md").read_text(encoding="utf-8")
+
+    assert "confirmed send" not in readme
+    assert "without the user's explicit confirmation" not in readme
+    assert readme.count("automatic selected delivery") == 4
+    assert "Starting a job-search round authorizes automatic delivery" in readme
+    assert "automatic selected delivery" in claude_guide
 
 
 def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch):

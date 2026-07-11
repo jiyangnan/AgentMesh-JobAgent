@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.14] - 2026-07-12
+
+### Fixed
+
+- Removed outdated per-platform confirmation wording from the public README and Claude Code distribution guide. Starting a round authorizes automatic delivery of signed `selected` jobs; `review` still requires explicit promotion and `rejected` is never sent.
+
 ## [0.3.13] - 2026-07-12
 
 ### Fixed
@@ -146,6 +152,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.14]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.14
 [0.3.13]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.13
 [0.3.12]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.12
 [0.3.11]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.11

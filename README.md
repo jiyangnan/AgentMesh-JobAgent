@@ -15,10 +15,10 @@ Each platform is isolated from the others. A page change on one platform does no
 
 ```text
 Resume profile
-  -> Boss Discover / review / confirmed send / audit
-  -> Liepin Discover / review / confirmed send / audit
-  -> Zhilian Discover / review / confirmed send / audit
-  -> 51Job Discover / review / confirmed send / audit
+  -> Boss Discover / signed review / automatic selected delivery / audit
+  -> Liepin Discover / signed review / automatic selected delivery / audit
+  -> Zhilian Discover / signed review / automatic selected delivery / audit
+  -> 51Job Discover / signed review / automatic selected delivery / audit
   -> completed round
 ```
 
@@ -155,7 +155,8 @@ The canonical agent workflow is in [docs/agent-onboarding.md](docs/agent-onboard
 ## Safety and Privacy
 
 - Never paste API Keys, browser cookies or complete resume text into issues.
-- Never send a greeting or application without the user's explicit confirmation.
+- Starting a job-search round authorizes automatic delivery of signed `selected` jobs; do not ask for another confirmation before each platform.
+- Never auto-promote `review` jobs or send `rejected` jobs.
 - Do not run shared browser actions in parallel.
 - Stop immediately when the CLI requests user intervention.
 - Use the platform normally and comply with its terms and applicable law.
