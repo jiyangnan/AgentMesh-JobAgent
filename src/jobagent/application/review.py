@@ -43,13 +43,16 @@ def review_decision(
     )
     if platform == "boss":
         _exclude_delivered_boss_jobs(review)
+    if platform in {"boss", "liepin"}:
         missing = [
             str(item.get("id"))
             for item in review["send_candidates"]
             if not str(item.get("cloud_greeting") or "").strip()
         ]
         if missing:
-            raise ValueError("Boss decision is missing signed greetings for: " + ", ".join(missing))
+            raise ValueError(
+                f"{platform} decision is missing signed greetings for: " + ", ".join(missing)
+            )
     path = save_review(review, output_path)
     next_suggested = (
         f"jobagent boss greet send --input {path}"

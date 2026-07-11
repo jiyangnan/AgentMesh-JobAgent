@@ -110,7 +110,7 @@ jobagent 51job apply send
 jobagent 51job audit
 ```
 
-猎聘、智联招聘和 51Job submit the resume associated with the user's platform account. They do not send a Boss-style greeting. On 51Job, the web chat entry remains a mobile QR handoff; Job Agent only uses the resume-submit action.
+猎聘 completes two verified actions for every selected job: it sends the resume associated with the user's platform account and then sends the signed personalized greeting generated from the resume profile and job. A platform-owned default introduction does not count as the personalized greeting. 智联招聘 and 51Job remain resume-submit workflows; on 51Job, the web chat entry is a mobile QR handoff.
 
 ## Review Rules
 

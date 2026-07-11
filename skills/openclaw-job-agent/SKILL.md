@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.10
+version: 0.3.11
 metadata:
   openclaw:
     emoji: "💼"
@@ -102,7 +102,7 @@ jobagent 51job apply send
 jobagent 51job audit
 ```
 
-Run each send line automatically after review. Do not ask for per-platform approval. 猎聘、智联和 51Job submit resumes and do not send Boss-style greetings. 51Job's web chat is QR-only.
+Run each send line automatically after review. Do not ask for per-platform approval. 猎聘 must verify both the account resume and the exact signed personalized greeting; a platform default introduction is not enough. 智联 and 51Job submit resumes only. 51Job's web chat is QR-only.
 
 ## Review Override
 

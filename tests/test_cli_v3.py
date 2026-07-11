@@ -319,8 +319,22 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
             "deduplicated_count": 3,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": _future(24),
-            "selected": [{"id": "s", "title": "Selected", "classification": "selected"}],
-            "review": [{"id": "r", "title": "Review", "classification": "review"}],
+            "selected": [
+                {
+                    "id": "s",
+                    "title": "Selected",
+                    "classification": "selected",
+                    "greeting": "您好，selected 个性化招呼语。",
+                }
+            ],
+            "review": [
+                {
+                    "id": "r",
+                    "title": "Review",
+                    "classification": "review",
+                    "greeting": "您好，review 个性化招呼语。",
+                }
+            ],
             "rejected": [{"id": "x", "title": "Rejected", "classification": "rejected"}],
             "billing": {"action": "jobagent.discover", "credits": 10, "transaction_id": "1"},
         },

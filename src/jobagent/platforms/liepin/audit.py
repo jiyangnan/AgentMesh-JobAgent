@@ -1,9 +1,4 @@
-"""Liepin platform event audit log.
-
-This log tracks Liepin beta actions that are not Boss send attempts, such as
-manual apply-open handoffs. It intentionally stays separate from the global
-greeting audit log so Boss delivery metrics remain clean.
-"""
+"""Liepin resume and personalized greeting audit log."""
 
 from __future__ import annotations
 
@@ -12,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from jobagent.infra.state import STATE_DIR, ensure_dirs
 
@@ -23,6 +19,14 @@ def _now_iso() -> str:
 def liepin_audit_log_path() -> Path:
     ensure_dirs()
     return STATE_DIR / "liepin_audit_log.json"
+
+
+def _job_url_key(url: str) -> str:
+    value = str(url or "").strip()
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
+    return value.rstrip("/")
 
 
 @dataclass(frozen=True)
@@ -65,13 +69,39 @@ class LiepinAuditLog:
         records = self._load()
         return list(reversed(records[-max(1, n):]))
 
+    def resume_delivered_apply_send_urls(self) -> set[str]:
+        records = self._load()
+        urls: set[str] = set()
+        for record in records:
+            if record.get("action") != "apply_send":
+                continue
+            evidence = record.get("evidence")
+            evidence = evidence if isinstance(evidence, dict) else {}
+            resume_delivered = (
+                record.get("status") == "delivered"
+                or evidence.get("resume_delivered") is True
+            )
+            if not resume_delivered:
+                continue
+            url = _job_url_key(str(record.get("job_url") or ""))
+            if url:
+                urls.add(url)
+        return urls
+
     def delivered_apply_send_urls(self) -> set[str]:
         records = self._load()
         urls: set[str] = set()
         for record in records:
             if record.get("action") != "apply_send" or record.get("status") != "delivered":
                 continue
-            url = str(record.get("job_url") or "").strip().rstrip("/")
+            evidence = record.get("evidence")
+            evidence = evidence if isinstance(evidence, dict) else {}
+            if not (
+                evidence.get("resume_delivered") is True
+                and evidence.get("greeting_delivered") is True
+            ):
+                continue
+            url = _job_url_key(str(record.get("job_url") or ""))
             if url:
                 urls.add(url)
         return urls

@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.3.10
+version: 0.3.11
 ---
 
 # Job Agent
@@ -94,7 +94,7 @@ jobagent 51job apply send
 jobagent 51job audit
 ```
 
-猎聘、智联和 51Job submit the account's resume; they do not send a Boss-style greeting. The 51Job web chat entry is a QR handoff and is not used by this flow.
+猎聘 must verify both the account resume and the exact signed personalized greeting. A platform default introduction is not the personalized greeting. 智联 and 51Job submit the account resume only; the 51Job web chat entry is a QR handoff and is not used by this flow.
 
 ## Review Override
 

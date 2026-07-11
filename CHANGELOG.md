@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.11] - 2026-07-11
+
+### Changed
+
+- Liepin selected jobs now require a signed personalized greeting in addition to the account resume.
+- Liepin delivery is complete only after the active chat verifies both the resume card/message and the exact signed greeting.
+- Resume-only audit history skips only the resume action; it no longer suppresses a missing personalized greeting.
+
+### Fixed
+
+- Liepin uses its live chat textarea and send button to deliver the personalized greeting after resume delivery.
+- Liepin delivery history uses canonical job URLs so changing search query parameters cannot cause duplicate composite delivery.
+
 ## [0.3.10] - 2026-07-11
 
 ### Fixed
@@ -118,6 +131,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.11]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.11
 [0.3.10]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.10
 [0.3.9]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.9
 [0.3.8]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.8

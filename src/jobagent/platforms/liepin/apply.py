@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from jobagent.domain.models import SendAttempt
 from jobagent.drivers.boss import create_driver
@@ -171,14 +172,13 @@ class LiepinApplyOpener:
 
 
 class LiepinApplySender:
-    """Submit the account resume and require resume-specific evidence.
+    """Deliver both the account resume and signed personalized greeting.
 
     Some Liepin jobs expose only a chat entry. Opening it may send a
-    platform-owned default message, which is never counted as resume
-    delivery. The sender continues to the explicit ``发简历`` action and
-    records success only after resume-specific delivery evidence appears.
+    platform-owned default message, which is never counted as the signed
+    personalized greeting. A job is complete only when the active chat
+    contains resume delivery evidence and the exact signed greeting.
     """
-
     def __init__(
         self,
         driver: Any | None = None,
@@ -200,10 +200,14 @@ class LiepinApplySender:
         selected = jobs[max(0, start): max(0, start) + max(1, limit)]
         attempts: list[SendAttempt] = []
         delivered_urls = self.audit_log.delivered_apply_send_urls() if skip_delivered else set()
+        resume_delivered_urls = (
+            self.audit_log.resume_delivered_apply_send_urls() if skip_delivered else set()
+        )
         for index, job in enumerate(selected, start=max(0, start)):
             message = str(job.get("cloud_greeting") or job.get("greeting") or "")
             url = str(job.get("url") or "").strip()
-            if skip_delivered and _normalize_liepin_url(url) in delivered_urls:
+            url_key = _normalize_liepin_url(url)
+            if skip_delivered and url_key in delivered_urls:
                 attempt = SendAttempt(job_url=url, message=message, delivered=False, error="already_delivered")
                 attempt.steps = [
                     {
@@ -216,13 +220,21 @@ class LiepinApplySender:
                 status = "skipped"
                 audit_message = "Skipped because this Liepin job URL was already delivered."
             else:
-                attempt = self._send_one(job, message, wait_seconds=wait_seconds, dry_run=dry_run)
+                attempt = self._send_one(
+                    job,
+                    message,
+                    wait_seconds=wait_seconds,
+                    dry_run=dry_run,
+                    resume_already_delivered=url_key in resume_delivered_urls,
+                )
                 status = "planned" if dry_run else ("delivered" if attempt.delivered else "failed")
                 audit_message = "dry_run" if dry_run else ("Delivered." if attempt.delivered else "Failed.")
                 if attempt.delivered:
-                    delivered_urls.add(_normalize_liepin_url(attempt.job_url))
+                    delivered_urls.add(url_key)
+                    resume_delivered_urls.add(url_key)
 
             attempts.append(attempt)
+            resume_delivered, greeting_delivered = _liepin_attempt_delivery_parts(attempt)
             self.audit_log.append(
                 LiepinAuditEvent(
                     action="apply_send",
@@ -238,6 +250,8 @@ class LiepinApplySender:
                         "greeting": message,
                         "score": job.get("score"),
                         "match_level": job.get("match_level") or job.get("recommendation") or job.get("cloud_recommendation"),
+                        "resume_delivered": resume_delivered,
+                        "greeting_delivered": greeting_delivered,
                         "steps": attempt.steps,
                     },
                 )
@@ -252,6 +266,7 @@ class LiepinApplySender:
         message: str,
         wait_seconds: int = 3,
         dry_run: bool = False,
+        resume_already_delivered: bool = False,
     ) -> SendAttempt:
         url = str(job.get("url") or "")
         attempt = SendAttempt(job_url=url, message=message, delivered=False)
@@ -263,6 +278,10 @@ class LiepinApplySender:
         if dry_run:
             attempt.error = "dry_run"
             attempt.steps = [{"step": "plan_liepin_apply_send", "ok": True, "url": url}]
+            return attempt
+        if not message.strip():
+            attempt.error = "missing_signed_greeting"
+            attempt.steps = [{"step": "validate_liepin_greeting", "ok": False}]
             return attempt
 
         driver = self.driver or create_driver(platform="liepin")
@@ -281,20 +300,33 @@ class LiepinApplySender:
             attempt.error = "login_required"
             attempt.steps = steps
             return attempt
-        if _liepin_delivery_detected(inspect_before):
-            attempt.delivered = True
+        if not inspect_before.get("chatOpen"):
+            click_entry = _exec_liepin_js(driver, _liepin_apply_click_chat_script())
+            steps.append({"step": "click_liepin_chat_entry", **click_entry})
+            if not click_entry.get("ok"):
+                attempt.error = str(click_entry.get("error") or "chat_entry_not_found")
+                attempt.steps = steps
+                return attempt
+            time.sleep(1.5)
+
+        chat_state = _exec_liepin_js(driver, _liepin_apply_inspect_script())
+        steps.append({"step": "inspect_liepin_chat", **chat_state})
+        if _liepin_page_requires_login(chat_state):
+            attempt.error = "login_required"
+            attempt.steps = steps
+            return attempt
+        if not chat_state.get("chatOpen"):
+            attempt.error = "chat_editor_not_found"
             attempt.steps = steps
             return attempt
 
-        if not inspect_before.get("canSendResume"):
-            click_entry = _exec_liepin_js(driver, _liepin_apply_click_entry_script())
-            steps.append({"step": "click_apply_or_contact_entry", **click_entry})
-            if not click_entry.get("ok"):
-                attempt.error = str(click_entry.get("error") or "apply_entry_not_found")
-                attempt.steps = steps
-                return attempt
-
-        terminal = self._drive_dialog(driver, message=message, steps=steps)
+        terminal = self._drive_dialog(
+            driver,
+            message=message,
+            steps=steps,
+            state=chat_state,
+            resume_already_delivered=resume_already_delivered,
+        )
         if terminal.get("delivered"):
             attempt.delivered = True
         else:
@@ -307,51 +339,70 @@ class LiepinApplySender:
         driver: Any,
         message: str,
         steps: list[dict[str, Any]],
+        state: dict[str, Any],
+        resume_already_delivered: bool,
     ) -> dict[str, Any]:
-        for _ in range(6):
-            time.sleep(1)
-            state = _exec_liepin_js(driver, _liepin_apply_inspect_script())
-            steps.append({"step": "inspect_apply_state", **state})
-            if _liepin_page_requires_login(state):
-                return {"delivered": False, "error": "login_required"}
-            if _liepin_delivery_detected(state):
-                return {"delivered": True}
-            if state.get("requires_user_action"):
-                return {"delivered": False, "error": state.get("user_action") or "user_action_required"}
+        resume_delivered = bool(resume_already_delivered or state.get("resumeDelivered"))
+        greeting_delivered = _liepin_greeting_delivery_detected(state, message)
 
-            if state.get("canSendResume"):
-                resume_action = _exec_liepin_js(driver, _liepin_apply_click_resume_script())
-                steps.append({"step": "click_liepin_resume_action", **resume_action})
-                if not resume_action.get("ok"):
-                    continue
-                time.sleep(1.5)
-                after_resume = _exec_liepin_js(driver, _liepin_apply_inspect_script())
-                steps.append({"step": "inspect_after_resume_action", **after_resume})
-                if _liepin_delivery_detected(after_resume):
-                    return {"delivered": True}
-                if _liepin_page_requires_login(after_resume):
-                    return {"delivered": False, "error": "login_required"}
-                if after_resume.get("requires_user_action"):
-                    return {
-                        "delivered": False,
-                        "error": after_resume.get("user_action") or "user_action_required",
-                    }
-                continue
+        if resume_delivered:
+            steps.append(
+                {
+                    "step": "resume_already_delivered",
+                    "ok": True,
+                    "delivered": True,
+                    "source": "audit" if resume_already_delivered else "chat_transcript",
+                }
+            )
+        else:
+            resume_action = _exec_liepin_js(driver, _liepin_apply_click_resume_script())
+            steps.append({"step": "click_liepin_resume_action", **resume_action})
+            if resume_action.get("ok"):
+                state = _poll_liepin_state(driver, attempts=4, require_resume=True)
+            resume_delivered = bool(state.get("resumeDelivered"))
+            steps.append(
+                {
+                    "step": "verify_liepin_resume_delivery",
+                    **state,
+                    "delivered": resume_delivered,
+                }
+            )
 
-            confirm = _exec_liepin_js(driver, _liepin_apply_click_confirm_script())
-            steps.append({"step": "click_liepin_confirm", **confirm})
-            if not confirm.get("ok"):
-                continue
+        if greeting_delivered:
+            steps.append(
+                {
+                    "step": "verify_liepin_personalized_greeting",
+                    "ok": True,
+                    "delivered": True,
+                    "pre_existing": True,
+                }
+            )
+        else:
+            fill = _exec_liepin_js(driver, _liepin_apply_fill_message_script(message))
+            steps.append({"step": "fill_liepin_personalized_greeting", **fill})
+            if fill.get("ok") and fill.get("filled"):
+                send = _exec_liepin_js(driver, _liepin_apply_click_message_send_script())
+            else:
+                send = {"ok": False, "error": "message_editor_not_found"}
+            steps.append({"step": "click_liepin_message_send", **send})
+            if send.get("ok"):
+                state = _poll_liepin_state(driver, attempts=4, expected_message=message)
+            greeting_delivered = _liepin_greeting_delivery_detected(state, message)
+            steps.append(
+                {
+                    "step": "verify_liepin_personalized_greeting",
+                    **state,
+                    "delivered": greeting_delivered,
+                }
+            )
 
-            time.sleep(1.5)
-            after = _exec_liepin_js(driver, _liepin_apply_inspect_script())
-            steps.append({"step": "inspect_after_confirm", **after})
-            if _liepin_delivery_detected(after):
-                return {"delivered": True}
-            if after.get("requires_user_action"):
-                return {"delivered": False, "error": after.get("user_action") or "user_action_required"}
-
-        return {"delivered": False, "error": "delivery_not_verified"}
+        if resume_delivered and greeting_delivered:
+            return {"delivered": True}
+        if not resume_delivered and not greeting_delivered:
+            return {"delivered": False, "error": "resume_and_greeting_delivery_not_verified"}
+        if not resume_delivered:
+            return {"delivered": False, "error": "resume_delivery_not_verified"}
+        return {"delivered": False, "error": "greeting_delivery_not_verified"}
 
 
 def _handoff_evidence(job: dict[str, Any]) -> dict[str, Any]:
@@ -365,7 +416,56 @@ def _handoff_evidence(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_liepin_url(url: str) -> str:
-    return str(url or "").strip().rstrip("/")
+    value = str(url or "").strip()
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
+    return value.rstrip("/")
+
+
+def _normalized_message(value: object) -> str:
+    return "".join(str(value or "").split())
+
+
+def _liepin_greeting_delivery_detected(state: dict[str, Any], message: str) -> bool:
+    expected = _normalized_message(message)
+    if not expected:
+        return False
+    outgoing = state.get("outgoingMessages")
+    if not isinstance(outgoing, list):
+        return False
+    return any(_normalized_message(item) == expected for item in outgoing)
+
+
+def _poll_liepin_state(
+    driver: Any,
+    attempts: int = 4,
+    *,
+    require_resume: bool = False,
+    expected_message: str = "",
+) -> dict[str, Any]:
+    state: dict[str, Any] = {"ok": False, "error": "inspection_not_run"}
+    for _ in range(max(1, attempts)):
+        time.sleep(1)
+        state = _exec_liepin_js(driver, _liepin_apply_inspect_script())
+        if require_resume and state.get("resumeDelivered"):
+            return state
+        if expected_message and _liepin_greeting_delivery_detected(state, expected_message):
+            return state
+        if not require_resume and not expected_message:
+            return state
+    return state
+
+
+def _liepin_attempt_delivery_parts(attempt: SendAttempt) -> tuple[bool, bool]:
+    resume_delivered = False
+    greeting_delivered = False
+    for step in attempt.steps:
+        if step.get("step") in {"resume_already_delivered", "verify_liepin_resume_delivery"}:
+            resume_delivered = resume_delivered or step.get("delivered") is True
+        if step.get("step") == "verify_liepin_personalized_greeting":
+            greeting_delivered = greeting_delivered or step.get("delivered") is True
+    return resume_delivered, greeting_delivered
 
 
 def _handoff_item(
@@ -446,6 +546,19 @@ def _liepin_apply_inspect_script() -> str:
       }).map(el => (el.innerText || el.textContent || '').trim());
       const canConfirmResume = visibleButtons.some(t => /立即投递|确认投递|投递/.test(t));
       const canSendResume = visibleButtons.some(t => /^(发简历|发送简历|投递简历)$/.test(t));
+      const editor = Array.from(document.querySelectorAll(
+        'textarea.im-ui-textarea,textarea,[contenteditable="true"]'
+      )).find(el => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
+      });
+      const outgoingMessages = Array.from(document.querySelectorAll('.im-ui-txt.send .text'))
+        .map(el => (el.innerText || el.textContent || '').trim())
+        .filter(Boolean);
+      const resumeDelivered = Boolean(
+        document.querySelector('.im-ui-txt.send .im-ui-send-attachment-card')
+      ) || outgoingMessages.some(message => /这是我的简历|简历已发送|已发送简历/.test(message));
       const requiresResume = /请选择简历|上传简历|完善简历|创建简历|附件简历/.test(text) && !canConfirmResume;
       const requiresCaptcha = /验证码登录|手机验证码|安全验证|滑块/.test(text);
       return JSON.stringify({
@@ -454,7 +567,10 @@ def _liepin_apply_inspect_script() -> str:
         title,
         loginRequired,
         delivered,
+        chatOpen: Boolean(editor),
         canSendResume,
+        resumeDelivered,
+        outgoingMessages,
         requires_user_action: requiresResume || requiresCaptcha,
         user_action: requiresCaptcha ? 'captcha_required' : (requiresResume ? 'resume_selection_required' : ''),
         bodySnippet: text.slice(0, 1200)
@@ -463,46 +579,24 @@ def _liepin_apply_inspect_script() -> str:
     """
 
 
-def _liepin_apply_click_entry_script() -> str:
-    """Return JS that clicks the primary apply/contact entry button.
-
-    Label order matters: 立即投递 variants come FIRST because Liepin only
-    supports resume submission (no Boss-style greeting chat). 聊一聊 /
-    立即沟通 are listed only as last-resort fallbacks for edge cases
-    where a job page shows only a chat entry (rare); they are NOT used
-    for sending greetings automatically.
-    """
+def _liepin_apply_click_chat_script() -> str:
     return r"""
     (function(){
-      const labels = [
-        '投简历', '投递简历', '立即投递', '申请职位', '应聘职位',
-        '我要应聘', '立即沟通', '继续沟通', '继续聊', '聊一聊', '沟通'
-      ];
+      const labels = ['继续聊', '聊一聊', '立即沟通', '继续沟通', '沟通'];
       function visible(el){
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
       }
-      const all = Array.from(document.querySelectorAll(
-        'button,a,[role="button"],.im-ui-action-button,.action-resume'
-      ));
+      const all = Array.from(document.querySelectorAll('button,a,[role="button"]'));
       for (const label of labels) {
         const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
         if (el) {
-          el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+          el.click();
           return JSON.stringify({ok:true, clicked:label});
         }
       }
-      const fuzzy = all.find(node => {
-        const t = (node.innerText || node.textContent || '').trim();
-        return visible(node) && /立即沟通|投递|应聘|沟通|继续聊|聊一聊/.test(t) && !/已投递|已沟通|取消|关闭/.test(t);
-      });
-      if (fuzzy) {
-        const t = (fuzzy.innerText || fuzzy.textContent || '').trim();
-        fuzzy.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
-        return JSON.stringify({ok:true, clicked:t.slice(0,40), fuzzy:true});
-      }
-      return JSON.stringify({ok:false, error:'apply_entry_not_found'});
+      return JSON.stringify({ok:false, error:'chat_entry_not_found'});
     })()
     """
 
@@ -534,7 +628,11 @@ def _liepin_apply_fill_message_script(message: str) -> str:
       if (!editor) return JSON.stringify({{ok:true, filled:false, reason:'editor_not_found'}});
       editor.focus();
       if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {{
-        editor.value = message;
+        const prototype = editor.tagName === 'TEXTAREA'
+          ? window.HTMLTextAreaElement.prototype
+          : window.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+        setter.call(editor, message);
       }} else {{
         editor.innerText = message;
         editor.textContent = message;
@@ -543,6 +641,28 @@ def _liepin_apply_fill_message_script(message: str) -> str:
       editor.dispatchEvent(new Event('change', {{bubbles:true}}));
       return JSON.stringify({{ok:true, filled:true, tag:editor.tagName, len:message.length}});
     }})()
+    """
+
+
+def _liepin_apply_click_message_send_script() -> str:
+    return r"""
+    (function(){
+      const buttons = Array.from(document.querySelectorAll(
+        'button.im-ui-basic-send-btn,button'
+      ));
+      const button = buttons.find(el => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        const text = (el.innerText || el.textContent || '').trim();
+        return text === '发送' && !el.disabled && style.display !== 'none'
+          && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
+      });
+      if (!button) {
+        return JSON.stringify({ok:false, error:'message_send_button_not_found'});
+      }
+      button.click();
+      return JSON.stringify({ok:true, clicked:'发送'});
+    })()
     """
 
 
@@ -561,43 +681,10 @@ def _liepin_apply_click_resume_script() -> str:
       for (const label of labels) {
         const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
         if (el) {
-          el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+          el.click();
           return JSON.stringify({ok:true, clicked:label});
         }
       }
       return JSON.stringify({ok:false, error:'resume_action_not_found'});
-    })()
-    """
-
-
-def _liepin_apply_click_confirm_script() -> str:
-    return r"""
-    (function(){
-      const labels = [
-        '确认投递', '立即投递', '投递', '确认'
-      ];
-      function visible(el){
-        const style = window.getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
-      }
-      const all = Array.from(document.querySelectorAll('button,a'));
-      for (const label of labels) {
-        const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
-        if (el) {
-          el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
-          return JSON.stringify({ok:true, clicked:label});
-        }
-      }
-      const fuzzy = all.find(node => {
-        const t = (node.innerText || node.textContent || '').trim();
-        return visible(node) && /确认投递|立即投递|投递/.test(t) && !/取消|关闭|返回/.test(t);
-      });
-      if (fuzzy) {
-        const t = (fuzzy.innerText || fuzzy.textContent || '').trim();
-        fuzzy.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
-        return JSON.stringify({ok:true, clicked:t.slice(0,40), fuzzy:true});
-      }
-      return JSON.stringify({ok:false, error:'confirm_button_not_found'});
     })()
     """

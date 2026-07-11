@@ -149,7 +149,7 @@ jobagent 51job apply send
 jobagent 51job audit
 ```
 
-猎聘、智联和 51Job send the resume attached to the user's platform account. Do not describe their action as sending a greeting. The 51Job web chat entry is a QR handoff and is not part of the send flow.
+猎聘 must deliver both the account resume and the signed personalized greeting for each selected job. Verify the resume card/message and the exact greeting separately; the platform's default introduction is not the personalized greeting. 智联和 51Job only submit the account resume. The 51Job web chat entry is a QR handoff and is not part of the send flow.
 
 ## 5. Handling Review Jobs
 
