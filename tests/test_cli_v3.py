@@ -223,7 +223,7 @@ def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
         },
     )
     assert updates.verify_release_manifest(manifest)["latest_client_version"] == "0.4.0"
-    monkeypatch.setattr(updates, "fetch_release_manifest", lambda: manifest)
+    monkeypatch.setattr(updates, "fetch_release_manifest", lambda **_kwargs: manifest)
     monkeypatch.setattr(updates, "_package_root", lambda: tmp_path)
     result = updates.check_for_update(auto_apply=True)
     assert result["status"] == "update_available"
@@ -243,3 +243,19 @@ def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
     )
     with pytest.raises(Exception, match="protocol version mismatch"):
         updates.verify_release_manifest(incompatible)
+
+
+def test_explicit_update_check_bypasses_manifest_cache(monkeypatch):
+    import jobagent.infra.release_update as updates
+
+    calls = []
+
+    def check_for_update(**kwargs):
+        calls.append(kwargs)
+        return {"status": "current"}
+
+    monkeypatch.setattr(updates, "check_for_update", check_for_update)
+    args = build_parser().parse_args(["update", "check"])
+
+    assert _dispatch(args) == {"status": "current"}
+    assert calls == [{"auto_apply": False, "force": True}]

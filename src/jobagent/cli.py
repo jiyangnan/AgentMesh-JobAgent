@@ -255,7 +255,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "update":
         from jobagent.infra.release_update import check_for_update
 
-        return check_for_update(auto_apply=False)
+        return check_for_update(auto_apply=False, force=True)
     if args.command == "support":
         from jobagent.infra.support import support_star_payload
 

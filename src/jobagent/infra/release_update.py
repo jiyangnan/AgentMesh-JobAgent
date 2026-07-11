@@ -29,7 +29,7 @@ OFFICIAL_REPO_URLS = {
     "https://github.com/jiyangnan/AgentMesh-JobAgent.git",
     "git@github.com:jiyangnan/AgentMesh-JobAgent.git",
 }
-CACHE_TTL_SECONDS = 6 * 60 * 60
+CACHE_TTL_SECONDS = 5 * 60
 
 
 class UpdateError(RuntimeError):
@@ -179,8 +179,8 @@ def apply_managed_update(manifest: dict[str, Any], root: Path | None = None) -> 
     return str(manifest["latest_client_version"])
 
 
-def check_for_update(*, auto_apply: bool = True) -> dict[str, Any]:
-    manifest = fetch_release_manifest()
+def check_for_update(*, auto_apply: bool = True, force: bool = False) -> dict[str, Any]:
+    manifest = fetch_release_manifest(force=force)
     if manifest is None:
         return {"status": "unavailable", "current_version": __version__}
     latest = str(manifest["latest_client_version"])

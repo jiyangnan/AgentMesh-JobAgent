@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.3] - 2026-07-11
+
+### Fixed
+
+- `jobagent update check` now bypasses the local manifest cache and immediately verifies the latest signed release policy.
+- Automatic checks use a five-minute cache instead of delaying release discovery for up to six hours.
+
 ## [0.3.2] - 2026-07-11
 
 ### Fixed
@@ -42,6 +49,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.3]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.3
 [0.3.2]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.2
 [0.3.1]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.1
 [0.3.0]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.0
