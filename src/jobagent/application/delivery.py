@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from jobagent.infra import rounds
 from jobagent.infra.activity import active_command
 from jobagent.infra.audit import AuditLog, boss_job_key
 from jobagent.infra.discovery_state import build_review, load_envelope
@@ -161,7 +162,8 @@ def send_reviewed(
     stop_on_failure: bool = True,
 ) -> dict[str, Any]:
     reviewed = _load_reviewed(platform, input_path)
-    jobs = list(reviewed.get("send_candidates") or [])[: max(1, min(100, limit))]
+    all_jobs = list(reviewed.get("send_candidates") or [])
+    jobs = all_jobs[: max(1, min(100, limit))]
     if not jobs:
         raise ValueError("The reviewed decision contains no send candidates")
     with active_command(f"jobagent {platform} send"):
@@ -182,6 +184,34 @@ def send_reviewed(
         delivered=delivered,
         dry_run=dry_run,
     )
+    complete_batch = failed == 0 and len(jobs) == len(all_jobs)
+    next_suggested = (
+        f"jobagent {platform} audit"
+        if complete_batch
+        else (
+            f"jobagent boss greet send --input {input_path} --limit 100 --confirm-send"
+            if platform == "boss"
+            else f"jobagent {platform} apply send --input {input_path} --limit 100 --confirm-submit"
+        )
+    )
+    rounds.set_platform_status(
+        platform,
+        "sent" if complete_batch else "reviewed",
+        command=(
+            "jobagent boss greet send"
+            if platform == "boss"
+            else f"jobagent {platform} apply send"
+        ),
+        evidence={
+            "discover_id": reviewed["discover_id"],
+            "attempted": len(attempts),
+            "delivered": delivered,
+            "failed": failed,
+            "skipped": skipped,
+            "reviewed_count": len(all_jobs),
+        },
+        next_suggested=next_suggested,
+    )
     return {
         "ok": failed == 0,
         "platform": platform,
@@ -192,15 +222,15 @@ def send_reviewed(
         "skipped": skipped,
         "dry_run": dry_run,
         "attempts": [attempt.to_dict() for attempt in attempts],
-        "next_suggested": f"jobagent {platform} audit",
+        "next_suggested": next_suggested,
+        "workflow": rounds.round_status(),
     }
 
 
 def audit_platform(platform: str, recent: int = 20) -> dict[str, Any]:
     if platform == "boss":
         log = AuditLog()
-        return {"platform": platform, "summary": log.summary(), "recent": log.list_recent(recent)}
-    if platform == "liepin":
+    elif platform == "liepin":
         from jobagent.platforms.liepin.audit import LiepinAuditLog
 
         log = LiepinAuditLog()
@@ -214,4 +244,11 @@ def audit_platform(platform: str, recent: int = 20) -> dict[str, Any]:
         log = Job51AuditLog()
     else:
         raise ValueError(f"Unsupported audit platform: {platform}")
-    return {"platform": platform, "summary": log.summary(), "recent": log.list_recent(recent)}
+    workflow = rounds.complete_platform_after_audit(platform)
+    return {
+        "platform": platform,
+        "summary": log.summary(),
+        "recent": log.list_recent(recent),
+        "workflow": workflow,
+        "next_suggested": workflow.get("next_suggested"),
+    }

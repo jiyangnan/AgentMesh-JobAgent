@@ -10,7 +10,7 @@ def create_driver(prefer: str = "auto", platform: str = "boss") -> BossActionDri
 
     Args:
         prefer: 'cdp' | 'applescript' | 'auto'.
-            'auto' tries CDP first, then AppleScript on macOS.
+            'auto' uses the dedicated CDP browser. AppleScript is explicit only.
         platform: preferred CDP tab namespace: 'boss' | 'liepin' | 'zhilian'.
 
     Returns:
@@ -31,14 +31,5 @@ def create_driver(prefer: str = "auto", platform: str = "boss") -> BossActionDri
         from .cdp_driver import CDPBossDriver
         return CDPBossDriver(platform=platform)
 
-    # auto: CDP first (cross-platform), AppleScript fallback on macOS
-    try:
-        from .cdp_driver import CDPBossDriver
-        return CDPBossDriver(platform=platform)
-    except Exception:
-        if sys.platform == "darwin":
-            from .applescript_driver import AppleScriptBossDriver
-            return AppleScriptBossDriver()
-        raise RuntimeError(
-            "无法启动浏览器驱动。请确保 Google Chrome 已安装。"
-        )
+    from .cdp_driver import CDPBossDriver
+    return CDPBossDriver(platform=platform)

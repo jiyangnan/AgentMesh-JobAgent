@@ -56,7 +56,7 @@ class ZhilianSessionGuide:
             return ZhilianSessionStatus(
                 ok=False,
                 logged_in=False,
-                login_required=True,
+                login_required=False,
                 url=url,
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
@@ -69,7 +69,7 @@ class ZhilianSessionGuide:
             return ZhilianSessionStatus(
                 ok=False,
                 logged_in=False,
-                login_required=True,
+                login_required=False,
                 url=ZHILIAN_LOGIN_URL,
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
@@ -84,6 +84,8 @@ class ZhilianSessionGuide:
     ) -> ZhilianSessionStatus:
         status = self.open_login(wait_seconds=wait_seconds)
         if status.logged_in:
+            return status
+        if not status.ok and not status.login_required:
             return status
 
         deadline = time.time() + timeout

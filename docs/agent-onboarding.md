@@ -10,6 +10,8 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 4. When CLI output contains `requires_user_action=true`, stop immediately, relay `user_prompt` to the user and wait for their reply.
 5. Never treat `review` or `rejected` as automatically sendable. A `review` job needs an explicit user override; `rejected` remains excluded.
 6. Do not close the dedicated Job Agent Chrome window during a workflow.
+7. Do not stop after one platform. Read the `workflow` object after every command and continue while `workflow.continue_required=true`.
+8. Report the overall round complete only when `workflow.workflow_complete=true`. Skipping a platform requires the user's explicit approval and `jobagent round skip --platform <platform> --confirm-skip`.
 
 ## Goal, Actions and Acceptance
 
@@ -18,6 +20,14 @@ Before each platform, state:
 - Goal: complete one platform Discover and let the user decide what to send.
 - Actions: login check, Discover, signed review, explicit confirmation, send, audit.
 - Acceptance: valid signed decision; every candidate classified once; previously delivered jobs excluded; only confirmed jobs attempted; audit records the actual result.
+
+At the start of a round, run:
+
+```bash
+jobagent round status
+```
+
+The CLI persists the four-platform order and returns one `next_suggested` command. Follow it after each platform audit. A platform-level success is an intermediate milestone, not completion of the user's overall job-search round.
 
 One completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as the authority for any future charge or refund policy.
 
@@ -97,6 +107,8 @@ After the user explicitly approves the displayed send list:
 jobagent boss greet send --confirm-send
 jobagent boss audit
 ```
+
+After audit, inspect `workflow`. When it points to `jobagent liepin login --check`, continue immediately unless user intervention is required.
 
 The send command rechecks local delivery history. A stale or edited review file must not be used to contact a previously delivered Boss job again. If Boss automatically sends its own default introduction while opening a new conversation, that event alone is not successful personalized delivery; the CLI must continue and verify the reviewed greeting itself.
 
@@ -196,5 +208,6 @@ Report:
 - Attempted, delivered, failed and skipped counts.
 - Any user intervention or unresolved platform issue.
 - Audit command/result.
+- Round ID, remaining platforms and final `workflow.workflow_complete` value.
 
-Do not report success based only on a click. Use the CLI's delivered result and audit record.
+Do not report success based only on a click. Use the CLI's delivered result and audit record. Do not report the overall task complete while `workflow.continue_required=true`.

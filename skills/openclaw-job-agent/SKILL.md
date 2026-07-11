@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.5
+version: 0.3.6
 metadata:
   openclaw:
     emoji: "💼"
@@ -29,6 +29,8 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - Never promote `review` without IDs chosen by the user and `--confirm-promote`. Never auto-promote `rejected`.
 - Real actions require `--confirm-send` or `--confirm-submit`.
 - On Boss, a platform default introduction is not the reviewed greeting. Require the CLI's exact personalized-delivery verification.
+- Never stop after one platform. Follow `workflow.next_suggested` while `workflow.continue_required=true`; only `workflow.workflow_complete=true` ends the round.
+- Skip a platform only after explicit user approval with `jobagent round skip --platform <platform> --confirm-skip`.
 
 ## Install and Profile
 
@@ -53,6 +55,12 @@ jobagent resume analyze --file <resume-path> --target-role "<role>" --target-cit
 Each completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as authoritative for future policy changes.
 
 ## Platform Flow
+
+```bash
+jobagent round status
+```
+
+After every command, read the returned `workflow` object. Each audit must advance to the next platform until the four-platform round is complete.
 
 Boss直聘:
 
@@ -106,4 +114,4 @@ For Boss use `greet preview` in place of `apply review`.
 
 ## Completion Report
 
-Include platform, Discover ID, category counts, credits, explicit overrides, attempted/delivered/failed/skipped counts and audit evidence. Relay the optional one-time GitHub star prompt only if the CLI emits it.
+Include round ID, platform, Discover ID, category counts, credits, explicit overrides, attempted/delivered/failed/skipped counts, audit evidence and remaining platforms. Never report overall completion unless `workflow.workflow_complete=true`. Relay the optional one-time GitHub star prompt only if the CLI emits it.

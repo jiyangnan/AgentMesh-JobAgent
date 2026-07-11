@@ -36,7 +36,7 @@ def _add_review(parser: argparse.ArgumentParser) -> None:
 
 def _add_send(parser: argparse.ArgumentParser, confirmation: str) -> None:
     parser.add_argument("--input", "-i", help="Reviewed decision file; defaults to latest")
-    parser.add_argument("--limit", type=int, default=20, help="Maximum jobs in this send batch")
+    parser.add_argument("--limit", type=int, default=100, help="Maximum jobs in this send batch")
     parser.add_argument(confirmation, action="store_true", help="Explicitly confirm real platform actions")
     parser.add_argument("--dry-run", action="store_true", help="Plan without touching platform buttons")
     parser.add_argument("--continue-on-failure", action="store_true")
@@ -76,6 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     support = sub.add_parser("support", help="Voluntary project support")
     support.add_subparsers(dest="support_command", required=True).add_parser("star")
+
+    delivery_round = sub.add_parser("round", help="View or update the multi-platform round")
+    round_sub = delivery_round.add_subparsers(dest="round_command", required=True)
+    round_sub.add_parser("status")
+    round_skip = round_sub.add_parser("skip")
+    round_skip.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
+    round_skip.add_argument("--confirm-skip", action="store_true")
 
     for platform, display in (
         ("boss", "Boss直聘"),
@@ -171,6 +178,31 @@ def _resume_analyze(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _with_login_workflow(platform: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from jobagent.infra import rounds
+
+    logged_in = bool(payload.get("ok") and payload.get("logged_in"))
+    next_suggested = (
+        f"jobagent {platform} discover"
+        if logged_in
+        else f"jobagent {platform} login --check"
+    )
+    rounds.set_platform_status(
+        platform,
+        "login_verified" if logged_in else "blocked",
+        command=f"jobagent {platform} login",
+        evidence={
+            "logged_in": logged_in,
+            "requires_user_action": bool(payload.get("requires_user_action")),
+            "error": payload.get("error"),
+        },
+        next_suggested=next_suggested,
+    )
+    payload["next_suggested"] = next_suggested
+    payload["workflow"] = rounds.round_status()
+    return payload
+
+
 def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
     if platform == "boss":
         from jobagent.drivers.boss import create_driver
@@ -181,21 +213,30 @@ def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
             result = driver.open_url_in_new_tab(
                 "https://www.zhipin.com/web/user/?ka=header-login", wait_seconds=2
             )
-            return {"platform": platform, **result}
+            return _with_login_workflow(platform, {"platform": platform, **result})
         if driver.check_login_status():
-            return {"ok": True, "platform": platform, "logged_in": True}
+            return _with_login_workflow(
+                platform,
+                {"ok": True, "platform": platform, "logged_in": True},
+            )
         if args.wait:
             logged_in = driver.ensure_logged_in(timeout=args.timeout)
-            return {"ok": logged_in, "platform": platform, "logged_in": logged_in}
+            return _with_login_workflow(
+                platform,
+                {"ok": logged_in, "platform": platform, "logged_in": logged_in},
+            )
         driver.open_url_in_new_tab("https://www.zhipin.com/web/user/?ka=header-login", wait_seconds=2)
-        return {
-            "ok": False,
-            "platform": platform,
-            "logged_in": False,
-            "requires_user_action": True,
-            "user_action": "login_boss",
-            "user_prompt": "请在已经打开的 Job Agent 浏览器中登录 Boss 直聘，完成后回复我“已登录”。",
-        }
+        return _with_login_workflow(
+            platform,
+            {
+                "ok": False,
+                "platform": platform,
+                "logged_in": False,
+                "requires_user_action": True,
+                "user_action": "login_boss",
+                "user_prompt": "请在已经打开的 Job Agent 浏览器中登录 Boss 直聘，完成后回复我“已登录”。",
+            },
+        )
 
     if platform == "liepin":
         from jobagent.platforms.liepin.session import LiepinSessionGuide
@@ -215,7 +256,7 @@ def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
         status = guide.wait_for_login(timeout=args.timeout)
     else:
         status = guide.open_login()
-    return status.to_dict()
+    return _with_login_workflow(platform, status.to_dict())
 
 
 def _maybe_update(args: argparse.Namespace) -> None:
@@ -260,22 +301,42 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         from jobagent.infra.support import support_star_payload
 
         return support_star_payload()
+    if args.command == "round":
+        from jobagent.infra.rounds import round_status, set_platform_status
+
+        if args.round_command == "status":
+            return {"ok": True, "workflow": round_status()}
+        if not args.confirm_skip:
+            return {
+                "ok": False,
+                "error": "user_confirmation_required",
+                "platform": args.platform,
+                "message": "Explicitly confirm skipping this platform for the current round.",
+            }
+        set_platform_status(args.platform, "skipped_this_round", command="jobagent round skip")
+        return {"ok": True, "platform": args.platform, "workflow": round_status()}
 
     platform = args.command
+    from jobagent.infra.rounds import assert_platform_turn
+
     if args.platform_command == "login":
+        assert_platform_turn(platform)
         return _login(platform, args)
     if args.platform_command == "discover":
         from jobagent.application.discover import run_discover
 
+        assert_platform_turn(platform)
         return run_discover(platform, wait_seconds=args.wait_seconds, page_delay=args.page_delay)
     if args.platform_command == "audit":
         from jobagent.application.delivery import audit_platform
 
+        assert_platform_turn(platform)
         return audit_platform(platform, recent=args.recent)
     if platform == "boss" and args.platform_command == "greet":
         if args.greet_command == "preview":
             from jobagent.application.review import review_decision
 
+            assert_platform_turn(platform)
             return review_decision(
                 platform,
                 input_path=args.input,
@@ -288,6 +349,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         if args.apply_command == "review":
             from jobagent.application.review import review_decision
 
+            assert_platform_turn(platform)
             return review_decision(
                 platform,
                 input_path=args.input,
@@ -303,6 +365,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             "platform": platform,
             "message": "Review the selected jobs and explicitly confirm the real send action.",
         }
+    assert_platform_turn(platform)
     from jobagent.application.delivery import send_reviewed
 
     return send_reviewed(
@@ -329,6 +392,7 @@ def main() -> None:
     except Exception as exc:
         from jobagent.infra.cloud_client import CloudError
         from jobagent.infra.platform_lock import PlatformLockError
+        from jobagent.infra.rounds import RoundOrderError
         from jobagent.infra.protocol import ProtocolError
         from jobagent.platforms.discovery import CollectionError
 
@@ -353,6 +417,8 @@ def main() -> None:
                 "user_prompt": exc.prompt,
             }
         elif isinstance(exc, PlatformLockError):
+            payload = exc.payload
+        elif isinstance(exc, RoundOrderError):
             payload = exc.payload
         elif isinstance(exc, CloudError):
             payload = {

@@ -9,7 +9,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from jobagent.cli import _dispatch, build_parser
+from jobagent.cli import _dispatch, _login, build_parser
 from jobagent.infra.protocol import canonical_json_bytes, candidate_digest, digest_payload
 
 
@@ -40,7 +40,12 @@ def _future(hours=1):
 
 def test_public_parser_exposes_only_v3_platform_commands():
     parser = build_parser()
+    assert parser.parse_args(["round", "status"]).round_command == "status"
+    assert parser.parse_args(
+        ["round", "skip", "--platform", "liepin", "--confirm-skip"]
+    ).confirm_skip is True
     assert parser.parse_args(["boss", "discover"]).platform_command == "discover"
+    assert parser.parse_args(["boss", "greet", "send", "--dry-run"]).limit == 100
     assert parser.parse_args(["liepin", "apply", "review"]).apply_command == "review"
     assert parser.parse_args(["zhilian", "apply", "send", "--dry-run"]).dry_run is True
     assert parser.parse_args(["51job", "audit"]).platform_command == "audit"
@@ -55,6 +60,124 @@ def test_public_parser_exposes_only_v3_platform_commands():
     ):
         with pytest.raises(SystemExit):
             parser.parse_args(retired)
+
+
+def test_round_skip_requires_explicit_confirmation(monkeypatch):
+    args = build_parser().parse_args(["round", "skip", "--platform", "liepin"])
+
+    assert _dispatch(args) == {
+        "ok": False,
+        "error": "user_confirmation_required",
+        "platform": "liepin",
+        "message": "Explicitly confirm skipping this platform for the current round.",
+    }
+
+
+def test_round_skip_updates_only_current_round(monkeypatch):
+    updates: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.set_platform_status",
+        lambda platform, status, **_kwargs: updates.append((platform, status)),
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.round_status",
+        lambda: {"round_id": "round-1", "current_platform": "zhilian"},
+    )
+    args = build_parser().parse_args(
+        ["round", "skip", "--platform", "liepin", "--confirm-skip"]
+    )
+
+    result = _dispatch(args)
+
+    assert updates == [("liepin", "skipped_this_round")]
+    assert result["ok"] is True
+    assert result["workflow"]["current_platform"] == "zhilian"
+
+
+def test_dispatch_checks_round_order_before_opening_platform_browser(monkeypatch):
+    from jobagent.infra.rounds import RoundOrderError
+
+    opened = False
+
+    def fail_order(_platform):
+        raise RoundOrderError(
+            {
+                "ok": False,
+                "error": "platform_out_of_order",
+                "current_platform": "boss",
+            }
+        )
+
+    def fake_login(_platform, _args):
+        nonlocal opened
+        opened = True
+        return {"ok": True}
+
+    monkeypatch.setattr("jobagent.infra.rounds.assert_platform_turn", fail_order)
+    monkeypatch.setattr("jobagent.cli._login", fake_login)
+    args = build_parser().parse_args(["liepin", "login", "--check"])
+
+    with pytest.raises(RoundOrderError):
+        _dispatch(args)
+
+    assert opened is False
+
+
+def test_successful_login_check_advances_round_to_discover(monkeypatch):
+    from jobagent.platforms.liepin.session import LiepinSessionGuide, LiepinSessionStatus
+
+    statuses: list[tuple[str, str]] = []
+    monkeypatch.setattr(LiepinSessionGuide, "__init__", lambda self: None)
+    monkeypatch.setattr(
+        LiepinSessionGuide,
+        "check",
+        lambda self: LiepinSessionStatus(ok=True, logged_in=True, login_required=False),
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.set_platform_status",
+        lambda platform, status, **_kwargs: statuses.append((platform, status)),
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.round_status",
+        lambda: {"round_id": "round-1", "next_suggested": "jobagent liepin discover"},
+    )
+    args = build_parser().parse_args(["liepin", "login", "--check"])
+
+    result = _login("liepin", args)
+
+    assert statuses == [("liepin", "login_verified")]
+    assert result["workflow"]["next_suggested"] == "jobagent liepin discover"
+
+
+@pytest.mark.parametrize(
+    "guide_class",
+    [
+        pytest.param(
+            __import__("jobagent.platforms.liepin.session", fromlist=["LiepinSessionGuide"]).LiepinSessionGuide,
+            id="liepin",
+        ),
+        pytest.param(
+            __import__("jobagent.platforms.zhilian.session", fromlist=["ZhilianSessionGuide"]).ZhilianSessionGuide,
+            id="zhilian",
+        ),
+        pytest.param(
+            __import__("jobagent.platforms.job51.session", fromlist=["Job51SessionGuide"]).Job51SessionGuide,
+            id="51job",
+        ),
+    ],
+)
+def test_browser_open_failure_is_not_misreported_as_login_required(guide_class):
+    class OpenFailureDriver:
+        def open_url_in_new_tab(self, _url, wait_seconds=5):
+            return {"ok": False, "error": "browser_start_failed"}
+
+    status = guide_class(driver=OpenFailureDriver()).check(wait_seconds=0)
+    payload = status.to_dict()
+
+    assert status.ok is False
+    assert status.login_required is False
+    assert payload["error"] == "browser_start_failed"
+    assert "requires_user_action" not in payload
 
 
 def test_send_requires_explicit_confirmation_before_loading_browser_state():
@@ -135,6 +258,17 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(application, "collect_from_search_plan", lambda *_args, **_kwargs: candidates)
     monkeypatch.setattr(application, "active_command", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext())
+    statuses: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        application.rounds,
+        "set_platform_status",
+        lambda platform, status, **_kwargs: statuses.append((platform, status)),
+    )
+    monkeypatch.setattr(
+        application.rounds,
+        "round_status",
+        lambda: {"round_id": "round-1", "next_suggested": "jobagent 51job apply review"},
+    )
     output = tmp_path / "decision.json"
 
     def save(payload):
@@ -144,6 +278,8 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(application, "save_manifest", save)
     result = application.run_discover("51job", page_delay=0)
     assert result["selected"] == 1 and result["credits"] == 10
+    assert statuses == [("51job", "discovered")]
+    assert result["workflow"]["round_id"] == "round-1"
     persisted = json.loads(output.read_text(encoding="utf-8"))
     assert "candidates" not in persisted
     assert persisted["manifest"]["candidate_digest"] == candidate_digest(candidates)
@@ -186,6 +322,15 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
             "liepin", input_path=str(source), promoted_ids=["x"], confirm_promote=True
         )
     output = tmp_path / "reviewed.json"
+    statuses: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "jobagent.application.review.rounds.set_platform_status",
+        lambda platform, status, **_kwargs: statuses.append((platform, status)),
+    )
+    monkeypatch.setattr(
+        "jobagent.application.review.rounds.round_status",
+        lambda: {"round_id": "round-1", "next_suggested": "jobagent liepin apply send --confirm-submit"},
+    )
     result = review_decision(
         "liepin",
         input_path=str(source),
@@ -197,6 +342,63 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
     assert result["send_count"] == 2
     assert [item["id"] for item in reviewed["send_candidates"]] == ["s", "r"]
     assert reviewed["user_overrides"] == [{"job_id": "r", "from": "review", "to": "selected"}]
+    assert statuses == [("liepin", "reviewed")]
+    assert result["workflow"]["round_id"] == "round-1"
+
+
+def test_send_marks_platform_sent_and_audit_advances_to_next_platform(monkeypatch):
+    import jobagent.application.delivery as delivery
+    from jobagent.domain.models import SendAttempt
+
+    reviewed = {
+        "discover_id": "dis_boss",
+        "send_candidates": [
+            {"url": "https://www.zhipin.com/job_detail/1.html", "cloud_greeting": "您好"}
+        ],
+    }
+    statuses: list[tuple[str, str]] = []
+    monkeypatch.setattr(delivery, "_load_reviewed", lambda *_args, **_kwargs: reviewed)
+    monkeypatch.setattr(
+        delivery,
+        "_boss_send",
+        lambda *_args, **_kwargs: [
+            SendAttempt(
+                job_url=reviewed["send_candidates"][0]["url"],
+                message="您好",
+                delivered=True,
+            )
+        ],
+    )
+    monkeypatch.setattr(delivery, "_append_boss_audit", lambda _attempts: None)
+    monkeypatch.setattr(delivery, "active_command", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(delivery, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(delivery, "print_first_delivery_star_prompt_once", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        delivery.rounds,
+        "set_platform_status",
+        lambda platform, status, **_kwargs: statuses.append((platform, status)),
+    )
+    monkeypatch.setattr(
+        delivery.rounds,
+        "round_status",
+        lambda: {"round_id": "round-1", "next_suggested": "jobagent boss audit"},
+    )
+
+    sent = delivery.send_reviewed("boss", limit=100)
+
+    assert statuses == [("boss", "sent")]
+    assert sent["workflow"]["next_suggested"] == "jobagent boss audit"
+
+    monkeypatch.setattr(delivery, "AuditLog", lambda: type("Log", (), {"summary": lambda self: {}, "list_recent": lambda self, _n: []})())
+    monkeypatch.setattr(
+        delivery.rounds,
+        "complete_platform_after_audit",
+        lambda platform: {"round_id": "round-1", "current_platform": "liepin", "next_suggested": "jobagent liepin login --check"},
+    )
+    audited = delivery.audit_platform("boss")
+
+    assert audited["workflow"]["current_platform"] == "liepin"
+    assert audited["next_suggested"] == "jobagent liepin login --check"
 
 
 def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
@@ -253,6 +455,14 @@ def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(audit, "audit_log_path", lambda: audit_path)
+    monkeypatch.setattr(
+        "jobagent.application.review.rounds.set_platform_status",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "jobagent.application.review.rounds.round_status",
+        lambda: {"round_id": "round-1"},
+    )
     output = tmp_path / "reviewed.json"
 
     result = review_decision("boss", input_path=str(source), output_path=str(output))

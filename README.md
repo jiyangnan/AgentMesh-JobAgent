@@ -15,12 +15,11 @@ Each platform is isolated from the others. A page change on one platform does no
 
 ```text
 Resume profile
-  -> platform Discover
-  -> signed selected / review / rejected decision
-  -> user review
-  -> explicit confirmation
-  -> greeting or resume submission
-  -> local audit
+  -> Boss Discover / review / confirmed send / audit
+  -> Liepin Discover / review / confirmed send / audit
+  -> Zhilian Discover / review / confirmed send / audit
+  -> 51Job Discover / review / confirmed send / audit
+  -> completed round
 ```
 
 One completed Discover covers one platform and processes up to 100 deduplicated candidate jobs. AgentMesh 360 is currently in free-open mode, so every account has unlimited access and a completed Discover deducts 0 credits. If paid mode is introduced later, the signed cloud response remains the authority for any charge or refund.
@@ -56,6 +55,18 @@ jobagent resume analyze --file ~/Downloads/resume.pdf \
 The resume original and recruiting-site cookies remain on the user's machine. The profile and candidate job fields needed for Discover are sent to the Job Agent cloud service for decision.
 
 ## Platform Commands
+
+Start by reading the persisted round state:
+
+```bash
+jobagent round status
+```
+
+Every platform command returns a `workflow` object. A platform audit does not end the overall task while `workflow.continue_required=true`; the Agent must run `workflow.next_suggested` and continue to the next platform. The overall task is complete only when `workflow.workflow_complete=true`. A platform may be skipped for the current round only after the user explicitly approves:
+
+```bash
+jobagent round skip --platform <platform> --confirm-skip
+```
 
 ### Boss直聘
 
@@ -109,6 +120,8 @@ jobagent 51job audit
 - Boss review excludes jobs already recorded as successfully delivered, and the send command checks the audit history again before opening any job page.
 - Every real greeting or application still requires `--confirm-send` or `--confirm-submit`.
 - Recruiting-platform browser actions run serially in the product order shown above.
+- Completing one platform is not completing the round. The Agent must follow `workflow.next_suggested` until `workflow.workflow_complete=true`.
+- One confirmed send covers the complete reviewed list, up to 100 jobs. The default send limit is 100.
 - If the CLI reports login, CAPTCHA, verification or resume-selection intervention, the Agent must stop and ask the user to complete it.
 
 Example review override:

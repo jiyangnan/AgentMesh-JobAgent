@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from jobagent.infra import rounds
 from jobagent.infra.audit import AuditLog, boss_job_key
 from jobagent.infra.discovery_state import build_review, load_envelope, save_review
 from jobagent.infra.protocol import verify_stored_decision
@@ -50,6 +51,22 @@ def review_decision(
         if missing:
             raise ValueError("Boss decision is missing signed greetings for: " + ", ".join(missing))
     path = save_review(review, output_path)
+    next_suggested = (
+        f"jobagent boss greet send --input {path} --confirm-send"
+        if platform == "boss"
+        else f"jobagent {platform} apply send --input {path} --confirm-submit"
+    )
+    rounds.set_platform_status(
+        platform,
+        "reviewed",
+        command=(
+            "jobagent boss greet preview"
+            if platform == "boss"
+            else f"jobagent {platform} apply review"
+        ),
+        evidence={"discover_id": manifest["discover_id"], "send_count": len(review["send_candidates"])},
+        next_suggested=next_suggested,
+    )
     return {
         "ok": True,
         "platform": platform,
@@ -62,9 +79,6 @@ def review_decision(
         "skipped_delivered_count": len(review.get("skipped_delivered", [])),
         "send_count": len(review["send_candidates"]),
         "review_file": str(path),
-        "next_suggested": (
-            f"jobagent boss greet send --input {path} --confirm-send"
-            if platform == "boss"
-            else f"jobagent {platform} apply send --input {path} --confirm-submit"
-        ),
+        "next_suggested": next_suggested,
+        "workflow": rounds.round_status(),
     }

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from jobagent.drivers.boss.cdp_driver import CDPBossDriver
+from jobagent.drivers.boss import create_driver
 from jobagent.infra import platform_lock, platform_tabs, rounds
 
 
@@ -28,6 +29,142 @@ def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tm
     assert "enabled" not in updated["platforms"]["liepin"]
     assert json.loads(current_path.read_text(encoding="utf-8"))["round_id"] == "round-1"
     assert (rounds_path / "round-1.json").exists()
+
+
+def test_round_workflow_continues_to_liepin_after_boss_completion(monkeypatch, tmp_path):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+    monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
+
+    rounds.ensure_current_round()
+    rounds.set_platform_status("boss", "completed", command="jobagent boss audit")
+    workflow = rounds.round_status()
+
+    assert workflow["workflow_complete"] is False
+    assert workflow["continue_required"] is True
+    assert workflow["current_platform"] == "liepin"
+    assert workflow["next_suggested"] == "jobagent liepin login --check"
+    assert workflow["remaining_platforms"] == ["liepin", "zhilian", "51job"]
+
+
+def test_round_workflow_completes_only_when_every_platform_is_terminal(monkeypatch, tmp_path):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+    monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
+
+    rounds.ensure_current_round()
+    rounds.set_platform_status("boss", "completed")
+    rounds.set_platform_status("liepin", "skipped_this_round")
+    rounds.set_platform_status("zhilian", "completed")
+    rounds.set_platform_status("51job", "completed")
+    workflow = rounds.round_status()
+
+    assert workflow["workflow_complete"] is True
+    assert workflow["continue_required"] is False
+    assert workflow["current_platform"] is None
+    assert workflow["next_suggested"] is None
+    assert json.loads(current_path.read_text(encoding="utf-8"))["status"] == "completed"
+
+
+def test_audit_only_advances_a_sent_platform(monkeypatch, tmp_path):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+    monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
+
+    rounds.ensure_current_round()
+    unchanged = rounds.complete_platform_after_audit("boss")
+    assert unchanged["platforms"]["boss"]["status"] == "pending"
+
+    rounds.set_platform_status(
+        "boss",
+        "sent",
+        command="jobagent boss greet send",
+        next_suggested="jobagent boss audit",
+    )
+    advanced = rounds.complete_platform_after_audit("boss")
+
+    assert advanced["platforms"]["boss"]["status"] == "completed"
+    assert advanced["current_platform"] == "liepin"
+    assert advanced["next_suggested"] == "jobagent liepin login --check"
+
+
+def test_legacy_round_is_migrated_to_four_platform_pending_state(monkeypatch, tmp_path):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    current_path.write_text(
+        json.dumps(
+            {
+                "round_id": "legacy-round",
+                "status": "active",
+                "platform_order": ["boss", "liepin", "zhilian"],
+                "platforms": {
+                    "boss": {"status": "active"},
+                    "liepin": {"status": "active"},
+                    "zhilian": {"status": "active"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+
+    workflow = rounds.round_status()
+
+    assert workflow["platform_order"] == ["boss", "liepin", "zhilian", "51job"]
+    assert workflow["remaining_platforms"] == ["boss", "liepin", "zhilian", "51job"]
+    assert all(item["status"] == "pending" for item in workflow["platforms"].values())
+    assert json.loads(current_path.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_auto_driver_reports_cdp_failure_without_switching_browser_profiles(monkeypatch):
+    fallback_used = False
+
+    class FailingCDPDriver:
+        def __init__(self, platform="boss"):
+            raise RuntimeError("cdp_start_failed")
+
+    class UnexpectedAppleScriptDriver:
+        def __init__(self):
+            nonlocal fallback_used
+            fallback_used = True
+
+    monkeypatch.setattr("jobagent.drivers.boss.cdp_driver.CDPBossDriver", FailingCDPDriver)
+    monkeypatch.setattr(
+        "jobagent.drivers.boss.applescript_driver.AppleScriptBossDriver",
+        UnexpectedAppleScriptDriver,
+    )
+
+    with pytest.raises(RuntimeError, match="cdp_start_failed"):
+        create_driver(platform="liepin")
+
+    assert fallback_used is False
+
+
+def test_round_rejects_platforms_that_are_not_current(monkeypatch, tmp_path):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+    monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
+
+    rounds.ensure_current_round()
+
+    with pytest.raises(rounds.RoundOrderError) as exc:
+        rounds.assert_platform_turn("liepin")
+
+    assert exc.value.payload["error"] == "platform_out_of_order"
+    assert exc.value.payload["current_platform"] == "boss"
+    assert exc.value.payload["next_suggested"] == "jobagent boss login --check"
+
+    rounds.set_platform_status("boss", "completed")
+    rounds.assert_platform_turn("liepin")
 
 
 def test_platform_session_lock_rejects_live_busy_lock(monkeypatch, tmp_path):

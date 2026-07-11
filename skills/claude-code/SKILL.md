@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.3.5
+version: 0.3.6
 ---
 
 # Job Agent
@@ -19,6 +19,8 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 - Show `skipped_delivered` when present and never add those jobs back to the send list.
 - Keep the dedicated Job Agent Chrome window open.
 - On Boss, do not report success from the platform's default introduction; require verification of the reviewed personalized greeting.
+- Never stop after one platform. Follow `workflow.next_suggested` while `workflow.continue_required=true`; only `workflow.workflow_complete=true` ends the round.
+- Skip a platform only after explicit user approval with `jobagent round skip --platform <platform> --confirm-skip`.
 
 ## Setup
 
@@ -33,6 +35,12 @@ jobagent resume analyze --file <resume-path> \
 One completed Discover covers one platform and processes at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as authoritative for future policy changes.
 
 ## Boss直聘
+
+Start the four-platform round with:
+
+```bash
+jobagent round status
+```
 
 ```bash
 jobagent boss login --check
@@ -106,6 +114,6 @@ For Boss, replace `apply review` with `greet preview`.
 
 ## Completion
 
-Report the platform, Discover ID, candidate/category counts, credits, user overrides, attempted/delivered/failed/skipped counts, user interventions and audit result. Do not infer delivery from a button click alone.
+Report the round ID, platform, Discover ID, candidate/category counts, credits, user overrides, attempted/delivered/failed/skipped counts, user interventions, audit result and remaining platforms. Do not infer delivery from a button click alone, and do not report overall completion unless `workflow.workflow_complete=true`.
 
 Canonical guide: `docs/agent-onboarding.md`.

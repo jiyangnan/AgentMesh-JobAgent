@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from jobagent.infra import cloud_client
+from jobagent.infra import cloud_client, rounds
 from jobagent.infra.activity import active_command
 from jobagent.infra.discovery_state import save_manifest
 from jobagent.infra.platform_lock import PlatformSessionLock
@@ -48,6 +48,18 @@ def run_discover(
         jobs=candidates,
     )
     path = save_manifest(manifest)
+    next_suggested = (
+        f"jobagent boss greet preview --input {path}"
+        if platform == "boss"
+        else f"jobagent {platform} apply review --input {path}"
+    )
+    rounds.set_platform_status(
+        platform,
+        "discovered",
+        command=f"jobagent {platform} discover",
+        evidence={"discover_id": verified_manifest["discover_id"]},
+        next_suggested=next_suggested,
+    )
     return {
         "ok": True,
         "platform": platform,
@@ -59,9 +71,6 @@ def run_discover(
         "rejected": len(verified_manifest.get("rejected", [])),
         "credits": verified_manifest.get("billing", {}).get("credits"),
         "decision_file": str(path),
-        "next_suggested": (
-            f"jobagent boss greet preview --input {path}"
-            if platform == "boss"
-            else f"jobagent {platform} apply review --input {path}"
-        ),
+        "next_suggested": next_suggested,
+        "workflow": rounds.round_status(),
     }

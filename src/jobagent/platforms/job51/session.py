@@ -51,7 +51,7 @@ class Job51SessionGuide:
             return Job51SessionStatus(
                 ok=False,
                 logged_in=False,
-                login_required=True,
+                login_required=False,
                 url=url,
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
@@ -64,7 +64,7 @@ class Job51SessionGuide:
             return Job51SessionStatus(
                 ok=False,
                 logged_in=False,
-                login_required=True,
+                login_required=False,
                 url=JOB51_SEARCH_URL,
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
@@ -74,6 +74,8 @@ class Job51SessionGuide:
     def wait_for_login(self, timeout: int = 300, poll_interval: int = 3, wait_seconds: int = 3) -> Job51SessionStatus:
         status = self.open_login(wait_seconds=wait_seconds)
         if status.logged_in:
+            return status
+        if not status.ok and not status.login_required:
             return status
         deadline = time.time() + timeout
         last = status

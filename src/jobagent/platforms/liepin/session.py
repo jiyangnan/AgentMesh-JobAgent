@@ -52,7 +52,7 @@ class LiepinSessionGuide:
             return LiepinSessionStatus(
                 ok=False,
                 logged_in=False,
-                login_required=True,
+                login_required=False,
                 url=url,
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
@@ -66,7 +66,7 @@ class LiepinSessionGuide:
             return LiepinSessionStatus(
                 ok=False,
                 logged_in=False,
-                login_required=True,
+                login_required=False,
                 url=LIEPIN_LOGIN_URL,
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
@@ -82,6 +82,8 @@ class LiepinSessionGuide:
         """Open login page and poll until the current page no longer requires login."""
         status = self.open_login(wait_seconds=wait_seconds)
         if status.logged_in:
+            return status
+        if not status.ok and not status.login_required:
             return status
 
         deadline = time.time() + timeout
