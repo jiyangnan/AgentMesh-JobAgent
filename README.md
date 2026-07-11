@@ -67,7 +67,7 @@ jobagent boss greet send --confirm-send
 jobagent boss audit
 ```
 
-Boss uses a personalized greeting. `greet preview` shows the signed decision and greeting before any real send.
+Boss uses a personalized greeting. `greet preview` shows the signed decision and greeting before any real send. A platform-generated default introduction may establish the conversation, but it does not count as delivery until the reviewed personalized greeting is also verified in the chat.
 
 ### 猎聘
 

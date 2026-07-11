@@ -41,16 +41,20 @@ def execute_boss_greeting_flow(
         return attempt
     if chat_click.get("autoSent"):
         if chat_click.get("platformDefaultSent"):
-            attempt.delivered = True
+            steps.append(
+                {
+                    "step": "platform_default_does_not_complete_custom_greeting",
+                    "ok": True,
+                }
+            )
+        else:
+            verify_result = driver.verify_delivery(message)
+            steps.append({"step": "verify_auto_sent", **verify_result})
+            attempt.delivered = bool(verify_result.get("delivered"))
+            if not attempt.delivered:
+                attempt.error = "auto_sent_not_verified"
             attempt.steps = steps
             return attempt
-        verify_result = driver.verify_delivery(message)
-        steps.append({"step": "verify_auto_sent", **verify_result})
-        attempt.delivered = bool(verify_result.get("delivered"))
-        if not attempt.delivered:
-            attempt.error = "auto_sent_not_verified"
-        attempt.steps = steps
-        return attempt
 
     editor_result = driver.inspect_chat_editor()
     steps.append({"step": "inspect_chat_editor", **editor_result})

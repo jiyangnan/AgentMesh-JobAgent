@@ -20,6 +20,41 @@ def boss_job_key(url: str) -> str:
     return value.split("#", 1)[0].split("?", 1)[0].rstrip("/")
 
 
+def _verified_personalized_delivery(record: dict[str, Any]) -> bool:
+    if not record.get("delivered"):
+        return False
+    steps = record.get("steps") if isinstance(record.get("steps"), list) else []
+    has_platform_default = any(
+        isinstance(step, dict) and step.get("platformDefaultSent") for step in steps
+    )
+    if not has_platform_default:
+        return True
+    personalized_verify_steps = {
+        "verify_auto_sent",
+        "verify_pre_existing_delivery",
+        "verify_delivery",
+        "retry_verify_delivery",
+        "recover_draft_delivery",
+    }
+    return any(
+        isinstance(step, dict)
+        and step.get("step") in personalized_verify_steps
+        and step.get("delivered")
+        for step in steps
+    )
+
+
+def _normalized_record(record: dict[str, Any]) -> dict[str, Any]:
+    if not record.get("delivered") or _verified_personalized_delivery(record):
+        return dict(record)
+    return {
+        **record,
+        "delivered": False,
+        "platform_default_delivered": True,
+        "error": "platform_default_only",
+    }
+
+
 class AuditLog:
     """Read-only interface over the greeting audit log."""
 
@@ -36,7 +71,7 @@ class AuditLog:
 
     def list_recent(self, n: int = 20) -> list[dict[str, Any]]:
         """Return the most recent N send records (newest first)."""
-        records = self._load()
+        records = [_normalized_record(record) for record in self._load()]
         return list(reversed(records[-n:]))
 
     def delivered_job_keys(self) -> set[str]:
@@ -44,13 +79,13 @@ class AuditLog:
         return {
             key
             for record in self._load()
-            if record.get("delivered")
+            if _verified_personalized_delivery(record)
             if (key := boss_job_key(str(record.get("job_url") or "")))
         }
 
     def summary(self) -> dict[str, Any]:
         """Return aggregate statistics over all send attempts."""
-        records = self._load()
+        records = [_normalized_record(record) for record in self._load()]
         total = len(records)
         delivered = sum(1 for r in records if r.get("delivered"))
         failed = total - delivered
@@ -83,6 +118,6 @@ class AuditLog:
 
     def latest_failed(self, n: int = 10) -> list[dict[str, Any]]:
         """Return the most recent failed attempts."""
-        records = self._load()
+        records = [_normalized_record(record) for record in self._load()]
         failed = [r for r in records if not r.get("delivered")]
         return list(reversed(failed[-n:]))

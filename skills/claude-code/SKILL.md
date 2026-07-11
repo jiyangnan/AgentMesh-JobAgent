@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.3.4
+version: 0.3.5
 ---
 
 # Job Agent
@@ -18,6 +18,7 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 - Never automatically promote `rejected`.
 - Show `skipped_delivered` when present and never add those jobs back to the send list.
 - Keep the dedicated Job Agent Chrome window open.
+- On Boss, do not report success from the platform's default introduction; require verification of the reviewed personalized greeting.
 
 ## Setup
 

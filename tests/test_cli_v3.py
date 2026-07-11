@@ -303,6 +303,48 @@ def test_boss_send_skips_previously_delivered_jobs_before_opening_browser(tmp_pa
     assert attempts[1].delivered is True
 
 
+def test_boss_audit_does_not_treat_platform_default_only_as_personalized_delivery(tmp_path):
+    from jobagent.infra.audit import AuditLog
+
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(
+        json.dumps(
+            [
+                {
+                    "job_url": "https://www.zhipin.com/job_detail/default-only.html",
+                    "delivered": True,
+                    "steps": [
+                        {
+                            "step": "platform_default_sent",
+                            "platformDefaultSent": True,
+                            "delivered": True,
+                        }
+                    ],
+                },
+                {
+                    "job_url": "https://www.zhipin.com/job_detail/custom.html",
+                    "delivered": True,
+                    "steps": [
+                        {
+                            "step": "platform_default_sent",
+                            "platformDefaultSent": True,
+                            "delivered": True,
+                        },
+                        {"step": "verify_delivery", "delivered": True},
+                    ],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    log = AuditLog(path=audit_path)
+
+    assert log.delivered_job_keys() == {"custom"}
+    assert log.summary()["delivered"] == 1
+    assert log.summary()["error_breakdown"] == {"platform_default_only": 1}
+    assert log.list_recent(2)[1]["error"] == "platform_default_only"
+
+
 def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
     tmp_path, monkeypatch
 ):

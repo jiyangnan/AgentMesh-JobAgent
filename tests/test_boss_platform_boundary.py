@@ -240,8 +240,8 @@ def test_boss_send_flow_skips_duplicate_when_already_delivered():
     ]
 
 
-def test_boss_send_flow_accepts_platform_default_sent_dialog():
-    driver = PlatformDefaultSentDriver(delivered=False)
+def test_boss_send_flow_continues_after_platform_default_sent_dialog():
+    driver = PlatformDefaultSentDriver(delivered_sequence=[False, True])
 
     attempt = execute_boss_greeting_flow(
         driver,
@@ -254,8 +254,14 @@ def test_boss_send_flow_accepts_platform_default_sent_dialog():
     assert driver.calls == [
         "open_url_in_new_tab",
         "click_chat_entry",
+        "inspect_chat_editor",
+        "verify_delivery",
+        "fill_chat_message",
+        "click_send",
+        "verify_delivery",
     ]
-    assert attempt.steps[-1]["platformDefaultSent"] is True
+    assert attempt.steps[1]["platformDefaultSent"] is True
+    assert attempt.steps[2]["step"] == "platform_default_does_not_complete_custom_greeting"
 
 
 def test_boss_send_flow_verifies_before_failing_missing_editor():

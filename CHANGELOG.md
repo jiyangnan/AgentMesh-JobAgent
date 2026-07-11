@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.5] - 2026-07-11
+
+### Fixed
+
+- Boss no longer treats the platform's automatic default introduction as delivery of the reviewed personalized greeting.
+- After the default introduction establishes a conversation, the send flow continues into the editor and verifies the exact reviewed greeting.
+
 ## [0.3.4] - 2026-07-11
 
 ### Fixed
@@ -60,6 +67,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.5]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.5
 [0.3.4]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.4
 [0.3.3]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.3
 [0.3.2]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.2

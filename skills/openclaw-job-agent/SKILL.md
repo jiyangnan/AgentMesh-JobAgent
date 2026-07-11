@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and confirmed delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.4
+version: 0.3.5
 metadata:
   openclaw:
     emoji: "💼"
@@ -28,6 +28,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - Show `skipped_delivered` when present and never add those jobs back to the send list.
 - Never promote `review` without IDs chosen by the user and `--confirm-promote`. Never auto-promote `rejected`.
 - Real actions require `--confirm-send` or `--confirm-submit`.
+- On Boss, a platform default introduction is not the reviewed greeting. Require the CLI's exact personalized-delivery verification.
 
 ## Install and Profile
 

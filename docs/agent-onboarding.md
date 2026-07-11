@@ -98,7 +98,7 @@ jobagent boss greet send --confirm-send
 jobagent boss audit
 ```
 
-The send command rechecks local delivery history. A stale or edited review file must not be used to contact a previously delivered Boss job again.
+The send command rechecks local delivery history. A stale or edited review file must not be used to contact a previously delivered Boss job again. If Boss automatically sends its own default introduction while opening a new conversation, that event alone is not successful personalized delivery; the CLI must continue and verify the reviewed greeting itself.
 
 ### 猎聘
 
