@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.10] - 2026-07-11
+
+### Fixed
+
+- Liepin chat-only jobs now recognize and click the live `.action-resume` container used by the `发简历` action.
+
 ## [0.3.9] - 2026-07-11
 
 ### Fixed
@@ -112,6 +118,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.10]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.10
 [0.3.9]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.9
 [0.3.8]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.8
 [0.3.7]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.7

@@ -437,7 +437,9 @@ def _liepin_apply_inspect_script() -> str:
       const delivered = /\/job\/apply\/success/.test(href)
         || /投递成功/.test(title)
         || /投递成功|简历发送成功|简历已发送|已投递/.test(text);
-      const visibleButtons = Array.from(document.querySelectorAll('button,a')).filter(el => {
+      const visibleButtons = Array.from(document.querySelectorAll(
+        'button,a,[role="button"],.im-ui-action-button,.action-resume'
+      )).filter(el => {
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
@@ -481,7 +483,9 @@ def _liepin_apply_click_entry_script() -> str:
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
       }
-      const all = Array.from(document.querySelectorAll('button,a'));
+      const all = Array.from(document.querySelectorAll(
+        'button,a,[role="button"],.im-ui-action-button,.action-resume'
+      ));
       for (const label of labels) {
         const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
         if (el) {
@@ -551,7 +555,9 @@ def _liepin_apply_click_resume_script() -> str:
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
       }
-      const all = Array.from(document.querySelectorAll('button,a'));
+      const all = Array.from(document.querySelectorAll(
+        'button,a,[role="button"],.im-ui-action-button,.action-resume'
+      ));
       for (const label of labels) {
         const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
         if (el) {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from jobagent.platforms.liepin.apply import (
     LiepinApplySender,
+    _liepin_apply_click_resume_script,
+    _liepin_apply_inspect_script,
     _liepin_delivery_detected,
     _liepin_page_requires_login,
 )
@@ -22,6 +24,11 @@ def test_liepin_default_chat_is_not_resume_delivery():
 
     assert _liepin_delivery_detected(state) is False
     assert _liepin_page_requires_login(state) is False
+
+
+def test_liepin_resume_scripts_include_live_chat_action_container():
+    assert ".action-resume" in _liepin_apply_inspect_script()
+    assert ".action-resume" in _liepin_apply_click_resume_script()
 
 
 def test_liepin_chat_only_job_continues_to_send_resume(monkeypatch, tmp_path):
