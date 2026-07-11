@@ -1,4 +1,4 @@
-"""Job Agent 0.3.0 public command surface."""
+"""Job Agent 0.3 public command surface."""
 
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 #
 # Usage (recommended one-liner; open PowerShell as a normal user):
 #
-#   irm https://raw.githubusercontent.com/jiyangnan/job-agent/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.ps1 | iex
 #
 # Or, if you've already cloned the repo:
 #
@@ -19,7 +19,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$RepoUrl     = $env:JOBAGENT_REPO_URL    ; if (-not $RepoUrl)     { $RepoUrl     = "https://github.com/jiyangnan/job-agent.git" }
+$RepoUrl     = $env:JOBAGENT_REPO_URL    ; if (-not $RepoUrl)     { $RepoUrl     = "https://github.com/jiyangnan/AgentMesh-JobAgent.git" }
 $InstallDir  = $env:JOBAGENT_INSTALL_DIR ; if (-not $InstallDir)  { $InstallDir  = Join-Path $env:USERPROFILE ".job-agent" }
 $BinDir      = Join-Path $InstallDir "bin"
 
@@ -57,7 +57,7 @@ $chromePaths = @(
 $chromeFound = $false
 foreach ($p in $chromePaths) { if (Test-Path $p) { $chromeFound = $true; break } }
 if ($chromeFound) { Ok "Chrome installed" }
-else { Warn "Google Chrome not found. Install from https://www.google.com/chrome/ before running 'jobagent login'." }
+else { Warn "Google Chrome not found. Install it before running a platform login command." }
 
 # 2. Clone or update repo
 if (Test-Path (Join-Path $InstallDir ".git")) {
@@ -123,10 +123,10 @@ Write-Host "=========================================="
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host ""
-Write-Host "1. Get your license key from the project maintainer."
+Write-Host "1. Create an account and API Key at https://agentmesh360.com/app/."
 Write-Host ""
 Write-Host "2. Open a NEW PowerShell window (so PATH refreshes), then:"
-Write-Host "     jobagent init --key <jba_live_xxx>"
+Write-Host "     jobagent init --key <your_api_key>"
 Write-Host ""
 Write-Host "3. Verify environment:"
 Write-Host "     jobagent doctor env"

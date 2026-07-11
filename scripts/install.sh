@@ -2,7 +2,7 @@
 # Job Agent CLI installer.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/jiyangnan/job-agent/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.sh | bash
 #
 # Or, if you've already cloned the repo:
 #   bash scripts/install.sh
@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-REPO_URL="${JOBAGENT_REPO_URL:-https://github.com/jiyangnan/job-agent.git}"
+REPO_URL="${JOBAGENT_REPO_URL:-https://github.com/jiyangnan/AgentMesh-JobAgent.git}"
 INSTALL_DIR="${JOBAGENT_INSTALL_DIR:-$HOME/.local/share/job-agent}"
 BIN_DIR="${JOBAGENT_BIN_DIR:-$HOME/.local/bin}"
 
@@ -42,14 +42,14 @@ case "$(uname -s)" in
         if [ -d "/Applications/Google Chrome.app" ]; then
             ok "Chrome installed"
         else
-            info "⚠️  Google Chrome not found. Install from https://www.google.com/chrome/ before running 'jobagent login'."
+            info "⚠️  Google Chrome not found. Install it before running a platform login command."
         fi
         ;;
     Linux)
         if command -v google-chrome >/dev/null || command -v google-chrome-stable >/dev/null; then
             ok "Chrome installed"
         else
-            info "⚠️  Google Chrome not found. Install before running 'jobagent login'."
+            info "⚠️  Google Chrome not found. Install it before running a platform login command."
         fi
         ;;
 esac
@@ -118,10 +118,10 @@ cat <<EOF
 
 Next steps:
 
-1. Get your license key from the project maintainer.
+1. Create an account and API Key at https://agentmesh360.com/app/.
 
 2. Initialize:
-     jobagent init --key <jba_live_xxx>
+     jobagent init --key <your_api_key>
 
 3. Verify environment:
      jobagent doctor env
