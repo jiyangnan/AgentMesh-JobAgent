@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.13] - 2026-07-12
+
+### Fixed
+
+- 51Job retries a missing search-result card by searching for the reviewed job title while preserving the original area filter.
+- 51Job requests resume intervention only when a visible resume-selection dialog is present, avoiding false positives from unrelated page text.
+
 ## [0.3.12] - 2026-07-11
 
 ### Fixed
@@ -139,6 +146,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.13]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.13
 [0.3.12]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.12
 [0.3.11]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.11
 [0.3.10]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.10

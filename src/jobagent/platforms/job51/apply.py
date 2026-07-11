@@ -6,7 +6,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urldefrag
+from urllib.parse import parse_qsl, urlencode, urldefrag, urlsplit, urlunsplit
 
 from jobagent.domain.models import SendAttempt
 from jobagent.drivers.boss import create_driver
@@ -216,6 +216,31 @@ class Job51ApplySender:
             steps.append({"step": "job51_greeting_not_supported", "ok": True, "reason": "job51_chat_is_qr_only"})
         click_result = _exec_job51_js(driver, _job51_apply_click_script(job_id))
         steps.append({"step": "click_51job_apply", **click_result})
+        if not click_result.get("ok") and click_result.get("error") == "job51_card_not_found":
+            recovery_url = _job51_recovery_url(job)
+            if recovery_url and recovery_url != url:
+                recovery_open = driver.open_url_in_new_tab(recovery_url, wait_seconds=wait_seconds)
+                steps.append({"step": "open_51job_recovery_url", **recovery_open})
+                if not recovery_open.get("ok"):
+                    attempt.error = str(recovery_open.get("error") or "open_51job_recovery_url_failed")
+                    attempt.steps = steps
+                    return attempt
+                recovery_state = _exec_job51_js(driver, _job51_apply_inspect_script(job_id))
+                steps.append({"step": "inspect_before_recovery_apply", **recovery_state})
+                if _job51_page_requires_login(recovery_state):
+                    attempt.error = "login_required"
+                    attempt.steps = steps
+                    return attempt
+                if recovery_state.get("requires_user_action"):
+                    attempt.error = str(recovery_state.get("user_action") or "user_action_required")
+                    attempt.steps = steps
+                    return attempt
+                if _job51_delivery_detected(recovery_state):
+                    attempt.delivered = True
+                    attempt.steps = steps
+                    return attempt
+                click_result = _exec_job51_js(driver, _job51_apply_click_script(job_id))
+                steps.append({"step": "click_51job_apply_recovery", **click_result})
         if not click_result.get("ok"):
             attempt.error = str(click_result.get("error") or "job51_apply_button_not_found")
             attempt.steps = steps
@@ -274,6 +299,18 @@ def _job51_open_url(job: dict[str, Any]) -> str:
     return base or url
 
 
+def _job51_recovery_url(job: dict[str, Any]) -> str:
+    title = str(job.get("name") or job.get("title") or "").strip()
+    base_url = _job51_open_url(job)
+    if not title or not base_url:
+        return ""
+    parts = urlsplit(base_url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["keyword"] = title
+    query.pop("pageNum", None)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
 def _exec_job51_js(driver: Any, script: str) -> dict[str, Any]:
     if not hasattr(driver, "_exec_js"):
         return {"ok": False, "error": "driver_js_not_supported"}
@@ -310,9 +347,18 @@ def _job51_apply_inspect_script(job_id: str = "") -> str:
       const href = location.href || '';
       const title = document.title || '';
       const bodyText = clean(document.body && (document.body.innerText || document.body.textContent));
+      function visible(el) {{
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 8 && rect.height > 8;
+      }}
       const loginRequired = /passport|login/.test(href) || (/登录[/]注册|请登录|扫码登录|验证码登录/.test(bodyText.slice(0, 1000)) && !document.querySelector('.joblist-item'));
       const delivered = /投递成功|已投递|简历投递成功|申请成功/.test(bodyText);
-      const requiresResume = /请选择简历|上传简历|完善简历|创建简历|附件简历/.test(bodyText) && !delivered;
+      const visibleDialogs = Array.from(document.querySelectorAll('[role="dialog"], .el-dialog, .ant-modal, .dialog, .modal'))
+        .filter(visible);
+      const resumeDialogText = clean(visibleDialogs.map((node) => node.innerText || node.textContent).join(' '));
+      const requiresResume = /请选择简历|上传简历|完善简历|创建简历|选择附件简历/.test(resumeDialogText) && !delivered;
       const requiresCaptcha = /验证码登录|手机验证码|安全验证|滑块|Security Verification|check the box below/.test(title + '\\n' + bodyText);
       return JSON.stringify({{
         ok: true,
