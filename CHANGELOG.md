@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.9] - 2026-07-11
+
+### Fixed
+
+- Active rounds created by older clients automatically remove retired send-confirmation flags from persisted `next_suggested` commands.
+
 ## [0.3.8] - 2026-07-11
 
 ### Changed
@@ -106,6 +112,7 @@ All notable public Job Agent client changes are documented here.
 - The former multi-step job processing command surface.
 - Legacy client behavior and compatibility commands.
 
+[0.3.9]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.9
 [0.3.8]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.8
 [0.3.7]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.7
 [0.3.6]: https://github.com/jiyangnan/AgentMesh-JobAgent/releases/tag/v0.3.6

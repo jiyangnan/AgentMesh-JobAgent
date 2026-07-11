@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.8
+version: 0.3.9
 metadata:
   openclaw:
     emoji: "💼"

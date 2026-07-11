@@ -83,6 +83,35 @@ def test_reviewed_platform_next_command_auto_sends_selected(
     assert rounds.round_status()["next_suggested"] == expected
 
 
+def test_legacy_confirmation_flag_is_removed_from_persisted_next_command(
+    monkeypatch, tmp_path
+):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+    monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
+
+    rounds.ensure_current_round()
+    rounds.set_platform_status("boss", "completed")
+    rounds.set_platform_status(
+        "liepin",
+        "reviewed",
+        next_suggested=(
+            "jobagent liepin apply send --input /tmp/review.json "
+            "--limit 100 --confirm-submit"
+        ),
+    )
+
+    workflow = rounds.round_status()
+
+    assert workflow["next_suggested"] == (
+        "jobagent liepin apply send --input /tmp/review.json --limit 100"
+    )
+    persisted = json.loads(current_path.read_text(encoding="utf-8"))
+    assert "--confirm-submit" not in persisted["platforms"]["liepin"]["next_suggested"]
+
+
 def test_round_workflow_completes_only_when_every_platform_is_terminal(monkeypatch, tmp_path):
     current_path = tmp_path / "current_round.json"
     rounds_path = tmp_path / "rounds"

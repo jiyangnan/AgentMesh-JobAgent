@@ -148,6 +148,15 @@ def _default_next_command(platform: str, status: str) -> str:
     return f"jobagent {platform} login --check"
 
 
+def _migrate_next_command(command: str | None) -> str | None:
+    if not command:
+        return command
+    migrated = command
+    for retired_flag in (" --confirm-send", " --confirm-submit"):
+        migrated = migrated.replace(retired_flag, "")
+    return migrated
+
+
 def round_status() -> dict[str, Any]:
     """Return machine-readable progress for the current multi-platform round."""
     state = load_json(current_round_path()) or ensure_current_round()
@@ -168,7 +177,12 @@ def round_status() -> dict[str, Any]:
     next_suggested = None
     if current_platform:
         item = platforms.get(current_platform, {})
-        next_suggested = item.get("next_suggested") or _default_next_command(
+        stored_next = item.get("next_suggested")
+        migrated_next = _migrate_next_command(stored_next)
+        if migrated_next != stored_next:
+            item["next_suggested"] = migrated_next
+            save_round(state)
+        next_suggested = migrated_next or _default_next_command(
             current_platform,
             str(item.get("status") or "pending"),
         )
