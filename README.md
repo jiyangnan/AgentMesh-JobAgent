@@ -23,7 +23,7 @@ Resume profile
   -> local audit
 ```
 
-One completed Discover covers one platform, processes up to 100 deduplicated candidate jobs and costs a fixed 10 credits. The number of selected jobs does not change that price. Browser/login failure before cloud decision is not charged; cloud decision failure after charging is refunded.
+One completed Discover covers one platform and processes up to 100 deduplicated candidate jobs. AgentMesh 360 is currently in free-open mode, so every account has unlimited access and a completed Discover deducts 0 credits. If paid mode is introduced later, the signed cloud response remains the authority for any charge or refund.
 
 Job Agent uses an AgentMesh API Key. Create one from the [AgentMesh 360 account center](https://agentmesh360.com/app/).
 

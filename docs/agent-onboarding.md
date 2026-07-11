@@ -19,7 +19,7 @@ Before each platform, state:
 - Actions: login check, Discover, signed review, explicit confirmation, send, audit.
 - Acceptance: valid signed decision; every candidate classified once; only confirmed jobs attempted; audit records the actual result.
 
-One completed platform Discover costs 10 credits and accepts at most 100 candidate jobs. Failure during local browser work occurs before charging. If cloud decision fails after charging, the service refunds the transaction.
+One completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as the authority for any future charge or refund policy.
 
 ## 1. Install
 
