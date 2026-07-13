@@ -8,7 +8,7 @@ import pytest
 
 from jobagent.drivers.boss.cdp_driver import CDPBossDriver
 from jobagent.drivers.boss import create_driver
-from jobagent.infra import platform_lock, platform_tabs, rounds
+from jobagent.infra import activity, platform_lock, platform_tabs, rounds
 
 
 def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tmp_path):
@@ -22,6 +22,14 @@ def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tm
 
     assert state["round_id"] == "round-1"
     assert state["platforms"]["boss"]["status"] == "pending"
+
+    workflow = rounds.round_status()
+    assert workflow["execution_policy"] == {
+        "mode": "vertical_end_to_end",
+        "prelogin_future_platforms": False,
+        "advance_only_after": "audit",
+        "stages": ["login", "discover", "review", "send", "audit"],
+    }
 
     updated = rounds.set_platform_status("liepin", "skipped_this_round", command="test")
 
@@ -225,6 +233,8 @@ def test_round_rejects_platforms_that_are_not_current(monkeypatch, tmp_path):
     assert exc.value.payload["error"] == "platform_out_of_order"
     assert exc.value.payload["current_platform"] == "boss"
     assert exc.value.payload["next_suggested"] == "jobagent boss login --check"
+    assert "Do not pre-login" in exc.value.payload["message"]
+    assert exc.value.payload["execution_policy"]["prelogin_future_platforms"] is False
 
     rounds.set_platform_status("boss", "completed")
     rounds.assert_platform_turn("liepin")
@@ -265,6 +275,32 @@ def test_platform_session_lock_cleans_stale_lock(monkeypatch, tmp_path):
 
     assert not lock_path.exists()
     assert statuses == [("zhilian", "active")]
+
+
+def test_dead_activity_lock_is_reclaimed(monkeypatch, tmp_path):
+    lock_path = tmp_path / "activity.lock"
+    lock_path.write_text(
+        json.dumps({"pid": 999999, "command": "jobagent boss discover"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(activity, "activity_lock_path", lambda: lock_path)
+    monkeypatch.setattr(activity, "_pid_alive", lambda _pid: False)
+
+    assert activity.activity_lock_active() is False
+    assert not lock_path.exists()
+
+
+def test_live_activity_lock_is_preserved(monkeypatch, tmp_path):
+    lock_path = tmp_path / "activity.lock"
+    lock_path.write_text(
+        json.dumps({"pid": 42, "command": "jobagent boss discover"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(activity, "activity_lock_path", lambda: lock_path)
+    monkeypatch.setattr(activity, "_pid_alive", lambda _pid: True)
+
+    assert activity.activity_lock_active() is True
+    assert lock_path.exists()
 
 
 def test_platform_tab_registry_reuses_existing_domain_target(monkeypatch, tmp_path):

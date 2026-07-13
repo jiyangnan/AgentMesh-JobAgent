@@ -35,14 +35,20 @@ class CDPBossDriver(BossActionDriver):
         self.cdp = CDPClient()
         self._ensure_connected()
 
-    def _ensure_connected(self, platform: str | None = None, initial_url: str | None = None) -> None:
+    def _ensure_connected(
+        self,
+        platform: str | None = None,
+        initial_url: str | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
         """Ensure Chrome is running and CDP WebSocket is connected."""
         current_platform = getattr(self, "current_platform", "")
         default_platform = getattr(self, "platform", "boss")
         target_platform = platform or current_platform or default_platform or "boss"
-        if self.cdp.connected and not hasattr(self, "manager"):
+        if self.cdp.connected and not hasattr(self, "manager") and not force:
             return
-        if self.cdp.connected and current_platform == target_platform:
+        if self.cdp.connected and current_platform == target_platform and not force:
             return
         self.manager.ensure_running()
         target = ensure_platform_tab(
@@ -55,7 +61,21 @@ class CDPBossDriver(BossActionDriver):
         self.current_platform = target_platform
 
     def _ensure_connected_for_url(self, url: str) -> None:
-        self._ensure_connected(platform=platform_for_url(url) or self.platform, initial_url=url)
+        target_platform = platform_for_url(url) or self.platform
+        if self.cdp.connected:
+            try:
+                result = self.cdp.evaluate("location.href")
+                current_url = str(result.get("result", {}).get("value") or "")
+            except Exception:
+                current_url = ""
+            if platform_for_url(current_url) == target_platform:
+                self.current_platform = target_platform
+                return
+        self._ensure_connected(
+            platform=target_platform,
+            initial_url=url,
+            force=True,
+        )
 
     def _exec_js(self, js_code: str, timeout: int = 30) -> dict[str, Any]:
         """AppleScript-driver compatible JavaScript evaluator.
@@ -906,6 +926,15 @@ class CDPBossDriver(BossActionDriver):
         self.cdp.send("Page.navigate", {
             "url": "https://www.zhipin.com/web/user/?ka=header-login"
         })
+        time.sleep(0.5)
+        try:
+            self.cdp.send("Page.bringToFront")
+            self.cdp.evaluate(
+                "(function(){if(!document.title.startsWith('[Job Agent] '))"
+                "document.title='[Job Agent] '+document.title;return document.title})()"
+            )
+        except Exception:
+            pass
 
         # Notify the caller (agent) that Chrome is open and waiting
         if callable(on_waiting):
@@ -914,11 +943,6 @@ class CDPBossDriver(BossActionDriver):
         start = time.time()
         while time.time() - start < timeout:
             if self.check_login_status():
-                # Navigate to home page for subsequent operations
-                try:
-                    self.cdp.send("Page.navigate", {"url": "https://www.zhipin.com/"})
-                except Exception:
-                    pass
                 return True
             time.sleep(poll_interval)
 

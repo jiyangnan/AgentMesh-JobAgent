@@ -6,7 +6,7 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 
 1. Never invent, infer or fabricate an AgentMesh API Key.
 2. Starting a job-search round authorizes automatic delivery of every signed `selected` job. Do not ask for another confirmation before each platform or send command.
-3. Run recruiting platforms serially in this order: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job.
+3. Run recruiting platforms as complete vertical chains in this order: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> send -> audit` chain and complete its audit before logging in to the next platform.
 4. When CLI output contains `requires_user_action=true`, stop immediately, relay `user_prompt` to the user and wait for their reply.
 5. Never treat `review` or `rejected` as automatically sendable. A `review` job needs an explicit user override; `rejected` remains excluded.
 6. Do not close the dedicated Job Agent Chrome window during a workflow.
@@ -28,6 +28,8 @@ jobagent round status
 ```
 
 The CLI persists the four-platform order and returns one `next_suggested` command. Follow it after each platform audit. A platform-level success is an intermediate milestone, not completion of the user's overall job-search round.
+
+Do not collect logins as a separate setup phase. At round start, log in to Boss only. Do not open or request the Liepin login until Boss audit has advanced `workflow.current_platform` to `liepin`; apply the same rule to Zhilian and 51Job.
 
 One completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as the authority for any future charge or refund policy.
 
@@ -53,6 +55,16 @@ Verify:
 jobagent --version
 jobagent doctor env
 ```
+
+For an existing installation that has just updated, run:
+
+```bash
+jobagent upgrade-check
+```
+
+The CLI automatically migrates compatible state and clears only rebuildable runtime caches. Do not delete `~/.jobagent` or the Job Agent Chrome profile: API Keys, site login cookies, profiles, audits and user preferences must survive upgrades.
+
+Do not start a platform while `upgrade-check` returns `ok=false` or a command returns `client_upgrade_required`. Relay all conflicts, run the first `next_suggested` recovery action, and repeat `upgrade-check` until all persisted state is compatible.
 
 ## 2. Configure API Key
 

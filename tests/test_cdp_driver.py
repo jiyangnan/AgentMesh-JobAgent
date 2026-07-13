@@ -12,7 +12,7 @@ class FakeCDP:
         self.js_calls: list[str] = []
         self.send_calls: list[tuple[str, dict | None]] = []
 
-    def evaluate(self, js_code: str, timeout: int = 30):
+    def evaluate(self, js_code: str, timeout: int = 30, **_kwargs):
         self.js_calls.append(js_code)
         value = self.values.pop(0) if self.values else self.last_value
         self.last_value = value
@@ -70,6 +70,59 @@ def test_exec_js_surfaces_cdp_errors():
     driver.cdp = BrokenCDP()
 
     assert driver._exec_js("1") == {"ok": False, "error": "boom"}
+
+
+def test_target_domain_check_forces_reconnect_from_about_blank(monkeypatch):
+    driver = make_driver("about:blank")
+    driver.platform = "boss"
+    driver.current_platform = "boss"
+    driver.manager = object()
+    calls = []
+
+    def fake_ensure_connected(platform=None, initial_url=None, force=False):
+        calls.append((platform, initial_url, force))
+
+    monkeypatch.setattr(driver, "_ensure_connected", fake_ensure_connected)
+
+    driver._ensure_connected_for_url("https://www.zhipin.com/wapi/zpuser/wap/getUserInfo.json")
+
+    assert calls == [
+        (
+            "boss",
+            "https://www.zhipin.com/wapi/zpuser/wap/getUserInfo.json",
+            True,
+        )
+    ]
+
+
+def test_target_domain_check_keeps_existing_matching_tab(monkeypatch):
+    driver = make_driver("https://www.zhipin.com/web/geek/jobs")
+    driver.platform = "boss"
+    driver.current_platform = "boss"
+    driver.manager = object()
+    calls = []
+    monkeypatch.setattr(driver, "_ensure_connected", lambda **kwargs: calls.append(kwargs))
+
+    driver._ensure_connected_for_url("https://www.zhipin.com/wapi/zpuser/wap/getUserInfo.json")
+
+    assert calls == []
+
+
+def test_login_wait_is_passive_after_opening_login_page_once(monkeypatch):
+    driver = make_driver("{}")
+    driver.platform = "boss"
+    driver.current_platform = "boss"
+    driver.manager = object()
+    states = iter([False, True])
+    monkeypatch.setattr(driver, "check_login_status", lambda: next(states))
+    monkeypatch.setattr(driver, "_ensure_connected", lambda **_kwargs: None)
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+
+    assert driver.ensure_logged_in(timeout=1, poll_interval=0) is True
+
+    navigations = [params["url"] for method, params in driver.cdp.send_calls if method == "Page.navigate"]
+    assert navigations == ["https://www.zhipin.com/web/user/?ka=header-login"]
+    assert any("[Job Agent]" in script for script in driver.cdp.js_calls)
 
 
 def test_click_chat_entry_no_popup_is_not_auto_sent(monkeypatch):

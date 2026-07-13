@@ -17,7 +17,6 @@ from jobagent import __version__
 from jobagent.infra.cloud_client import PROTOCOL_VERSION
 from jobagent.infra.protocol import RELEASE_SIGNING_PUBLIC_KEY, ProtocolError, verify_signed_payload
 from jobagent.infra.state import (
-    activity_lock_path,
     load_json,
     release_cache_path,
     save_json,
@@ -34,6 +33,27 @@ CACHE_TTL_SECONDS = 5 * 60
 
 class UpdateError(RuntimeError):
     pass
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _update_lock_pid(path: Path) -> int:
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, TypeError, ValueError):
+        return 0
 
 
 def _version(value: str) -> tuple[int, int, int]:
@@ -117,10 +137,17 @@ def _run(root: Path, *args: str) -> str:
 @contextmanager
 def _update_lock():
     path = update_lock_path()
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        raise UpdateError("another Job Agent update is already running") from exc
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except FileExistsError as exc:
+            if _pid_alive(_update_lock_pid(path)):
+                raise UpdateError("another Job Agent update is already running") from exc
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
     try:
         os.write(fd, str(os.getpid()).encode("ascii"))
         os.close(fd)
@@ -149,7 +176,9 @@ def apply_managed_update(manifest: dict[str, Any], root: Path | None = None) -> 
     metadata = _install_metadata(root)
     if metadata is None:
         raise UpdateError("source checkout is not an official managed install")
-    if activity_lock_path().exists():
+    from jobagent.infra.activity import activity_lock_active
+
+    if activity_lock_active():
         raise UpdateError("a Job Agent action is active; update deferred")
     with _update_lock():
         origin = _run(root, "git", "remote", "get-url", "origin")

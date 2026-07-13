@@ -16,6 +16,12 @@ DELIVERY_POLICY = {
     "rejected": "never",
     "per_platform_confirmation": False,
 }
+ROUND_EXECUTION_POLICY = {
+    "mode": "vertical_end_to_end",
+    "prelogin_future_platforms": False,
+    "advance_only_after": "audit",
+    "stages": ["login", "discover", "review", "send", "audit"],
+}
 
 
 class RoundOrderError(RuntimeError):
@@ -67,7 +73,16 @@ def ensure_current_round() -> dict[str, Any]:
 def _migrate_round(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("schema_version") == ROUND_SCHEMA_VERSION:
         return state
-    migrated = {
+    migrated = migrate_round_payload(state)
+    save_round(migrated)
+    return migrated
+
+
+def migrate_round_payload(state: dict[str, Any]) -> dict[str, Any]:
+    """Return a current-schema round without reading or writing global state."""
+    if state.get("schema_version") == ROUND_SCHEMA_VERSION:
+        return dict(state)
+    return {
         "schema_version": ROUND_SCHEMA_VERSION,
         "round_id": state.get("round_id") or new_round_id(),
         "status": "active",
@@ -81,8 +96,6 @@ def _migrate_round(state: dict[str, Any]) -> dict[str, Any]:
             "reason": "reset_legacy_ambiguous_platform_statuses",
         },
     }
-    save_round(migrated)
-    return migrated
 
 
 def save_round(state: dict[str, Any]) -> None:
@@ -192,6 +205,10 @@ def round_status() -> dict[str, Any]:
         "workflow_complete": workflow_complete,
         "continue_required": not workflow_complete,
         "delivery_policy": dict(DELIVERY_POLICY),
+        "execution_policy": {
+            **ROUND_EXECUTION_POLICY,
+            "stages": list(ROUND_EXECUTION_POLICY["stages"]),
+        },
         "platform_order": order,
         "platforms": platforms,
         "current_platform": current_platform,
@@ -228,10 +245,14 @@ def assert_platform_turn(platform: str) -> dict[str, Any]:
             {
                 "ok": False,
                 "error": "platform_out_of_order",
-                "message": "Complete or explicitly skip the current platform before continuing.",
+                "message": (
+                    "Do not pre-login future platforms. Complete the current platform through "
+                    "audit, or explicitly skip it, before continuing."
+                ),
                 "requested_platform": platform,
                 "current_platform": current_platform,
                 "next_suggested": workflow.get("next_suggested"),
+                "execution_policy": workflow.get("execution_policy"),
                 "workflow": workflow,
             }
         )

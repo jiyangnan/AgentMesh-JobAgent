@@ -30,6 +30,7 @@ def _request(
     body: dict[str, Any] | None = None,
     *,
     require_auth: bool = True,
+    api_key: str | None = None,
     timeout: int = 180,
 ) -> dict[str, Any]:
     headers = {
@@ -39,7 +40,7 @@ def _request(
         "X-JobAgent-Protocol-Version": str(PROTOCOL_VERSION),
     }
     if require_auth:
-        key = load_api_key()
+        key = api_key or load_api_key()
         if not key:
             raise NotConfiguredError(
                 "AgentMesh API Key is required. Run `jobagent init --key <your_api_key>`."
@@ -84,8 +85,8 @@ def health() -> dict[str, Any]:
     return _request("GET", "/v1/health", require_auth=False, timeout=15)
 
 
-def me() -> dict[str, Any]:
-    return _request("GET", "/v1/me", timeout=20)
+def me(*, api_key: str | None = None) -> dict[str, Any]:
+    return _request("GET", "/v1/me", api_key=api_key, timeout=20)
 
 
 def resume_analyze(

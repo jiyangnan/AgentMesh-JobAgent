@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.3.14
+version: 0.3.15
 ---
 
 # Job Agent
@@ -11,7 +11,7 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 ## Required Behavior
 
 - Never invent an AgentMesh API Key. Without one, ask the user to create it at `https://agentmesh360.com/app/` and wait.
-- Run platforms serially: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job.
+- Run platforms as complete vertical chains: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> send -> audit` chain and complete its audit before logging in to the next platform.
 - When output contains `requires_user_action=true`, stop, relay `user_prompt` and wait for the user.
 - Report `selected / review / rejected`, then automatically deliver signed `selected` jobs without asking again for each platform.
 - `review` is excluded by default. Promote only IDs named by the user and always pass `--confirm-promote`.
@@ -21,6 +21,7 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 - On Boss, do not report success from the platform's default introduction; require verification of the reviewed personalized greeting.
 - Never stop after one platform. Follow `workflow.next_suggested` while `workflow.continue_required=true`; only `workflow.workflow_complete=true` ends the round.
 - Skip a platform only after explicit user approval with `jobagent round skip --platform <platform> --confirm-skip`.
+- After an existing installation updates, run `jobagent upgrade-check` and resolve its `next_suggested` action before opening a platform. Never delete `~/.jobagent` or the Job Agent Chrome profile as a general fix; preserve credentials, login cookies, profiles, audits and preferences.
 
 ## Setup
 

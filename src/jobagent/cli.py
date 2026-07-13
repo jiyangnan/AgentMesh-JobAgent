@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--key", required=True)
     init.add_argument("--no-verify", action="store_true")
 
+    sub.add_parser("upgrade-check", help="Check saved state after a Job Agent upgrade")
+
     doctor = sub.add_parser("doctor", help="Check the local and cloud environment")
     doctor.add_subparsers(dest="doctor_command", required=True).add_parser("env")
 
@@ -118,10 +120,19 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
     from jobagent.infra import cloud_client
     from jobagent.infra.credentials import save_api_key
 
+    if args.key.strip().startswith("jba_live_"):
+        raise ValueError(
+            "This retired license is not an AgentMesh360 API key. "
+            "Create a current API key in your AgentMesh360 account, then run "
+            "`jobagent init --key <your_api_key>`."
+        )
+    account = None
+    if not args.no_verify:
+        account = cloud_client.me(api_key=args.key.strip())
     path = save_api_key(args.key)
     payload: dict[str, Any] = {"ok": True, "credentials_path": str(path)}
-    if not args.no_verify:
-        payload["account"] = cloud_client.me()
+    if account is not None:
+        payload["account"] = account
     payload["next_suggested"] = "jobagent resume analyze --file <resume>"
     return payload
 
@@ -138,8 +149,25 @@ def _doctor_env() -> dict[str, Any]:
         cloud = cloud_client.health()
     except Exception as exc:
         cloud = {"ok": False, "error": str(exc)}
+    key_valid = False
+    key_error: str | None = None
+    if key_present:
+        key = str(load_api_key() or "")
+        if key.startswith("jba_live_"):
+            key_error = "retired_license_key"
+        elif cloud.get("status") == "ok":
+            try:
+                cloud_client.me()
+                key_valid = True
+            except cloud_client.CloudError as exc:
+                key_error = exc.code or "api_key_verification_failed"
     return {
-        "ok": bool(shutil.which("python3") and key_present and cloud.get("status") == "ok"),
+        "ok": bool(
+            shutil.which("python3")
+            and key_present
+            and key_valid
+            and cloud.get("status") == "ok"
+        ),
         "python": sys.version.split()[0],
         "chrome": bool(
             Path("/Applications/Google Chrome.app").exists()
@@ -147,6 +175,11 @@ def _doctor_env() -> dict[str, Any]:
             or shutil.which("google-chrome-stable")
         ),
         "api_key_configured": key_present,
+        "api_key_valid": key_valid,
+        "api_key_error": key_error,
+        "api_key_action": (
+            None if key_valid else "jobagent init --key <your_api_key>"
+        ),
         "cloud": cloud,
     }
 
@@ -167,7 +200,9 @@ def _resume_analyze(args: argparse.Namespace) -> dict[str, Any]:
         if value
     }
     response = cloud_client.resume_analyze(text, source.name, hints or None)
-    profile = response["profile"]
+    from jobagent.infra.profile_contract import stamp_profile
+
+    profile = stamp_profile(response["profile"])
     output = Path(args.output).expanduser() if args.output else profile_path()
     save_json(output, profile)
     return {
@@ -219,7 +254,17 @@ def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
                 {"ok": True, "platform": platform, "logged_in": True},
             )
         if args.wait:
-            logged_in = driver.ensure_logged_in(timeout=args.timeout)
+            from jobagent.infra.diagnostics import emit_stage
+
+            logged_in = driver.ensure_logged_in(
+                timeout=args.timeout,
+                on_waiting=lambda _visible: emit_stage(
+                    "login_waiting",
+                    platform="boss",
+                    browser="Job Agent dedicated Chrome",
+                    user_prompt="请在标题含 [Job Agent] 的浏览器窗口中登录 Boss 直聘。",
+                ),
+            )
             return _with_login_workflow(
                 platform,
                 {"ok": logged_in, "platform": platform, "logged_in": logged_in},
@@ -273,9 +318,29 @@ def _maybe_update(args: argparse.Namespace) -> None:
         _print(result, stream=sys.stderr)
 
 
+def _prepare_client_upgrade(args: argparse.Namespace) -> dict[str, Any]:
+    from jobagent.infra.client_upgrade import (
+        enforce_upgrade_for_command,
+        run_client_upgrade,
+    )
+
+    report = run_client_upgrade()
+    setattr(args, "_client_upgrade_report", report)
+    command = args.command
+    if command == "round":
+        command = f"round-{args.round_command}"
+    return enforce_upgrade_for_command(command, report)
+
+
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "init":
         return _init(args)
+    if args.command == "upgrade-check":
+        from jobagent.infra.upgrade_readiness import run_upgrade_check
+
+        return run_upgrade_check(
+            client_state=getattr(args, "_client_upgrade_report", None),
+        )
     if args.command == "doctor":
         return _doctor_env()
     if args.command == "resume":
@@ -372,6 +437,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         _maybe_update(args)
+        _prepare_client_upgrade(args)
         result = _dispatch(args)
         _print(result)
         if result.get("ok") is False:
@@ -381,6 +447,7 @@ def main() -> None:
         raise SystemExit(130) from None
     except Exception as exc:
         from jobagent.infra.cloud_client import CloudError
+        from jobagent.infra.client_upgrade import UpgradeCompatibilityError
         from jobagent.infra.platform_lock import PlatformLockError
         from jobagent.infra.rounds import RoundOrderError
         from jobagent.infra.protocol import ProtocolError
@@ -390,7 +457,9 @@ def main() -> None:
             from jobagent.application.delivery import UserInterventionRequired
         except ImportError:
             UserInterventionRequired = ()  # type: ignore[assignment,misc]
-        if isinstance(exc, CollectionError):
+        if isinstance(exc, UpgradeCompatibilityError):
+            payload = exc.payload
+        elif isinstance(exc, CollectionError):
             payload = {
                 "ok": False,
                 "error": exc.code,
@@ -420,7 +489,15 @@ def main() -> None:
         elif isinstance(exc, ProtocolError):
             payload = {"ok": False, "error": "protocol_verification_failed", "message": str(exc)}
         else:
-            payload = {"ok": False, "error": type(exc).__name__, "message": str(exc)}
+            from jobagent.infra.diagnostics import write_exception_log
+
+            log_path = write_exception_log(exc, command=" ".join(sys.argv))
+            payload = {
+                "ok": False,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "diagnostic_log": str(log_path),
+            }
         _print(payload, stream=sys.stderr)
         raise SystemExit(2) from exc
 

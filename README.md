@@ -52,6 +52,10 @@ jobagent resume analyze --file ~/Downloads/resume.pdf \
   --target-cities 深圳 北京
 ```
 
+After an existing installation updates, Job Agent automatically clears rebuildable runtime caches and migrates compatible saved state before any platform command. API Keys, recruiting-site login cookies, resume profiles, audit history and user preferences are preserved. Run `jobagent upgrade-check`; if it returns `ok=false`, follow `next_suggested` and repeat the check before opening a platform.
+
+Do not delete `~/.jobagent` or the Job Agent Chrome profile as a general upgrade fix. When the CLI returns `client_upgrade_required`, relay every reported conflict and use its recovery command instead.
+
 The resume original and recruiting-site cookies remain on the user's machine. The profile and candidate job fields needed for Discover are sent to the Job Agent cloud service for decision.
 
 ## Platform Commands
@@ -120,6 +124,7 @@ jobagent 51job audit
 - Boss review excludes jobs already recorded as successfully delivered, and the send command checks the audit history again before opening any job page.
 - Send commands intentionally have no per-platform confirmation flag.
 - Recruiting-platform browser actions run serially in the product order shown above.
+- Never pre-login future platforms. Enter only the current platform, finish its `login -> discover -> review -> send -> audit` chain, and complete its audit before logging in to the next platform.
 - Completing one platform is not completing the round. The Agent must follow `workflow.next_suggested` until `workflow.workflow_complete=true`.
 - One send covers the complete reviewed selected list, up to 100 jobs. The default send limit is 100.
 - If the CLI reports login, CAPTCHA, verification or resume-selection intervention, the Agent must stop and ask the user to complete it.

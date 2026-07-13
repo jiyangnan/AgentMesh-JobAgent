@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,6 +42,7 @@ def _future(hours=1):
 
 def test_public_parser_exposes_only_v3_platform_commands():
     parser = build_parser()
+    assert parser.parse_args(["upgrade-check"]).command == "upgrade-check"
     assert parser.parse_args(["round", "status"]).round_command == "status"
     assert parser.parse_args(
         ["round", "skip", "--platform", "liepin", "--confirm-skip"]
@@ -63,6 +65,142 @@ def test_public_parser_exposes_only_v3_platform_commands():
     ):
         with pytest.raises(SystemExit):
             parser.parse_args(retired)
+
+
+def test_discover_rejects_incompatible_profile_before_cloud(tmp_path, monkeypatch):
+    import jobagent.application.discover as application
+
+    old_profile = {
+        "hardSkills": {"tools": ["JIRA"]},
+        "career": {
+            "careerTrend": "upward",
+            "stability": {"avgTenure": ""},
+        },
+        "preferences": {
+            "targetRoles": [
+                {"title": "AI产品经理", "confidence": 0.98, "priority": 1}
+            ]
+        },
+        "qualitySignals": {
+            "language": "zh-CN",
+            "structureScore": 1.0,
+        },
+    }
+    monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(application, "load_json", lambda _path: old_profile)
+
+    def unexpected_cloud_call(**_kwargs):
+        pytest.fail("incompatible profile reached the cloud")
+
+    monkeypatch.setattr(application.cloud_client, "discovery_start", unexpected_cloud_call)
+
+    with pytest.raises(ValueError, match="resume analyze"):
+        application.run_discover("boss")
+
+
+def test_resume_analyze_stamps_profile_schema_version(tmp_path, monkeypatch):
+    from jobagent import cli
+
+    source = tmp_path / "resume.txt"
+    source.write_text("A sufficiently long resume body for schema testing.", encoding="utf-8")
+    output = tmp_path / "profile.json"
+    monkeypatch.setattr("jobagent.domain.resume_parser.ResumeParser.parse", lambda self, path: source.read_text())
+    monkeypatch.setattr(
+        cli,
+        "_resume_analyze",
+        cli._resume_analyze,
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.cloud_client.resume_analyze",
+        lambda *_args, **_kwargs: {
+            "profile": {"preferences": {"targetRoles": [{"title": "AI产品经理"}]}}
+        },
+    )
+    args = build_parser().parse_args(
+        ["resume", "analyze", "--file", str(source), "--output", str(output)]
+    )
+
+    cli._resume_analyze(args)
+
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["schema_version"] >= 1
+
+
+def test_init_rejects_legacy_license_key_without_overwriting_credentials(monkeypatch):
+    from jobagent import cli
+
+    saved = []
+    monkeypatch.setattr("jobagent.infra.credentials.save_api_key", saved.append)
+    args = build_parser().parse_args(["init", "--key", "jba_live_old_key"])
+
+    with pytest.raises(ValueError, match="API key"):
+        cli._init(args)
+
+    assert saved == []
+
+
+def test_init_verifies_new_api_key_before_saving(monkeypatch):
+    from jobagent import cli
+
+    calls = []
+    monkeypatch.setattr(
+        "jobagent.infra.cloud_client.me",
+        lambda *, api_key=None: calls.append(("verify", api_key)) or {"account": {"id": 1}},
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.credentials.save_api_key",
+        lambda key: calls.append(("save", key)) or Path("/tmp/credentials"),
+    )
+    args = build_parser().parse_args(["init", "--key", "jobagent_live_new"])
+
+    result = cli._init(args)
+
+    assert calls == [
+        ("verify", "jobagent_live_new"),
+        ("save", "jobagent_live_new"),
+    ]
+    assert result["account"]["account"]["id"] == 1
+
+
+def test_upgrade_check_reports_legacy_key_and_profile_together(tmp_path, monkeypatch):
+    from jobagent.infra import upgrade_readiness
+
+    profile = tmp_path / "profile.json"
+    profile.write_text(
+        json.dumps({"hardSkills": {"tools": ["JIRA"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(upgrade_readiness, "load_api_key", lambda: "jba_live_old")
+    monkeypatch.setattr(upgrade_readiness, "profile_path", lambda: profile)
+
+    result = upgrade_readiness.run_upgrade_check()
+
+    assert result["ok"] is False
+    assert [check["error"] for check in result["checks"][:2]] == [
+        "retired_license_key",
+        "profile_incompatible",
+    ]
+    assert "jobagent init --key" in result["next_suggested"]
+
+
+def test_doctor_env_verifies_current_api_key(monkeypatch):
+    from jobagent import cli
+    from jobagent.infra.cloud_client import CloudError
+
+    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: "jobagent_live_bad")
+    monkeypatch.setattr("jobagent.infra.cloud_client.health", lambda: {"status": "ok"})
+    monkeypatch.setattr(
+        "jobagent.infra.cloud_client.me",
+        lambda: (_ for _ in ()).throw(CloudError("invalid", status=401, code="invalid_api_key")),
+    )
+
+    result = cli._doctor_env()
+
+    assert result["ok"] is False
+    assert result["api_key_configured"] is True
+    assert result["api_key_valid"] is False
+    assert result["api_key_error"] == "invalid_api_key"
+    assert "jobagent init --key" in result["api_key_action"]
 
 
 def test_round_skip_requires_explicit_confirmation(monkeypatch):
@@ -218,7 +356,21 @@ def test_public_docs_do_not_restore_per_platform_send_confirmation():
     assert "automatic selected delivery" in claude_guide
 
 
-def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch):
+def test_public_agent_docs_forbid_batch_login_and_require_vertical_completion():
+    root = Path(__file__).resolve().parents[1]
+    docs = [
+        (root / "README.md").read_text(encoding="utf-8"),
+        (root / "docs/agent-onboarding.md").read_text(encoding="utf-8"),
+        (root / "skills/claude-code/SKILL.md").read_text(encoding="utf-8"),
+        (root / "skills/openclaw-job-agent/SKILL.md").read_text(encoding="utf-8"),
+    ]
+
+    for text in docs:
+        assert "Never pre-login future platforms" in text
+        assert "complete its audit before logging in to the next platform" in text
+
+
+def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch, capsys):
     import jobagent.application.discover as application
     import jobagent.infra.protocol as protocol
 
@@ -311,6 +463,64 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     persisted = json.loads(output.read_text(encoding="utf-8"))
     assert "candidates" not in persisted
     assert persisted["manifest"]["candidate_digest"] == candidate_digest(candidates)
+    progress = capsys.readouterr().err
+    assert '"stage": "search_plan_requested"' in progress
+    assert '"stage": "browser_collection_started"' in progress
+    assert '"stage": "cloud_decision_requested"' in progress
+
+
+def test_unexpected_cli_error_writes_diagnostic_log(tmp_path, monkeypatch, capsys):
+    from jobagent import cli
+    from jobagent.infra import diagnostics
+
+    monkeypatch.setattr(diagnostics, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(cli, "_maybe_update", lambda _args: None)
+    monkeypatch.setattr(cli, "_prepare_client_upgrade", lambda _args: None)
+    monkeypatch.setattr(cli, "_dispatch", lambda _args: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr("sys.argv", ["jobagent", "profile", "show"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().err)
+    log_path = Path(payload["diagnostic_log"])
+    assert log_path.exists()
+    assert "RuntimeError: boom" in log_path.read_text(encoding="utf-8")
+
+
+def test_cli_blocks_platform_dispatch_when_upgrade_requires_recovery(monkeypatch, capsys):
+    from jobagent import cli
+    from jobagent.infra.client_upgrade import UpgradeCompatibilityError
+
+    dispatched = []
+    monkeypatch.setattr(cli, "_maybe_update", lambda _args: None)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_client_upgrade",
+        lambda _args: (_ for _ in ()).throw(
+            UpgradeCompatibilityError(
+                {
+                    "ok": False,
+                    "error": "client_upgrade_required",
+                    "conflicts": [{"code": "retired_api_key"}],
+                    "next_suggested": "jobagent init --key <your_api_key>",
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(cli, "_dispatch", lambda args: dispatched.append(args))
+    monkeypatch.setattr("sys.argv", ["jobagent", "boss", "discover"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    assert dispatched == []
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["error"] == "client_upgrade_required"
+    assert payload["next_suggested"] == "jobagent init --key <your_api_key>"
+    assert "diagnostic_log" not in payload
 
 
 def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp_path, monkeypatch):
@@ -657,3 +867,23 @@ def test_explicit_update_check_bypasses_manifest_cache(monkeypatch):
 
     assert _dispatch(args) == {"status": "current"}
     assert calls == [{"auto_apply": False, "force": True}]
+
+
+def test_update_lock_reclaims_dead_owner_but_blocks_live_owner(tmp_path, monkeypatch):
+    import jobagent.infra.release_update as updates
+
+    lock = tmp_path / "update.lock"
+    monkeypatch.setattr(updates, "update_lock_path", lambda: lock)
+    lock.write_text("999999", encoding="utf-8")
+    monkeypatch.setattr(updates, "_pid_alive", lambda _pid: False)
+
+    with updates._update_lock():
+        assert lock.read_text(encoding="utf-8") == str(os.getpid())
+    assert not lock.exists()
+
+    lock.write_text("42", encoding="utf-8")
+    monkeypatch.setattr(updates, "_pid_alive", lambda pid: pid == 42)
+    with pytest.raises(updates.UpdateError, match="already running"):
+        with updates._update_lock():
+            pass
+    assert lock.read_text(encoding="utf-8") == "42"

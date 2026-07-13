@@ -9,7 +9,6 @@ from jobagent.drivers.boss.data_driver import BossDataDriver as LegacyBossDataDr
 from jobagent.domain.models import SendAttempt
 from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
 from jobagent.platforms.boss import BossDataDriver, boss_job_id, parse_boss_job
-from jobagent.platforms.boss.selectors import BOSS_SELECTOR_VERSION, build_boss_snapshot_script
 from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
 
 
@@ -35,26 +34,13 @@ def test_legacy_boss_data_driver_import_still_points_to_platform_flow():
     assert LegacyBossDataDriver is BossDataDriver
 
 
-def test_boss_snapshot_targets_real_cards_and_decodes_salary_glyphs():
-    script = build_boss_snapshot_script(limit=7)
-
-    assert BOSS_SELECTOR_VERSION in script
-    assert ".job-card-box" in script
-    assert ".job-name[href*=\"job_detail\"]" in script
-    assert "'\\ue031':'0'" in script
-    assert "'\\ue03a':'9'" in script
-    assert "const limit = 7" in script
-
-
 class BossSearchDriver:
-    def __init__(self, snapshot=None, open_result=None):
-        self.snapshot = snapshot or {
-            "ok": True,
-            "loginRequired": False,
-            "verificationRequired": False,
-            "cards": [
+    def __init__(self, response=None):
+        self.response = response or {
+            "code": 0,
+            "zpData": {"jobList": [
                 {
-                    "encryptJobId": "dom-job-1",
+                    "encryptJobId": "api-job-1",
                     "jobName": "AI产品经理",
                     "salaryDesc": "30-50K·16薪",
                     "brandName": "Example AI",
@@ -63,22 +49,18 @@ class BossSearchDriver:
                     "businessDistrict": "科技园",
                     "jobExperience": "5-10年",
                     "jobDegree": "本科",
-                    "jobUrl": "https://www.zhipin.com/job_detail/dom-job-1.html",
+                    "jobUrl": "https://www.zhipin.com/job_detail/api-job-1.html",
                 }
-            ],
+            ]},
         }
-        self.open_result = open_result or {"ok": True}
-        self.opened = []
+        self.api_calls = []
 
-    def open_url_in_new_tab(self, url, wait_seconds=5):
-        self.opened.append((url, wait_seconds))
-        return self.open_result
-
-    def _exec_js(self, _script):
-        return self.snapshot
+    def api_fetch(self, url):
+        self.api_calls.append(url)
+        return self.response
 
 
-def test_boss_collect_reads_rendered_search_cards():
+def test_boss_collect_queries_browser_api_without_opening_search_page():
     driver = BossSearchDriver()
     jobs = BossDataDriver(driver=driver).fetch_jobs(
         "AI产品经理",
@@ -93,25 +75,36 @@ def test_boss_collect_reads_rendered_search_cards():
     assert jobs[0].salary == "30-50K·16薪"
     assert jobs[0].company == "Example AI"
     assert jobs[0].area == "南山区·科技园"
-    assert boss_job_id(jobs[0].raw_data) == "dom-job-1"
-    assert "page=2" in driver.opened[0][0]
+    assert boss_job_id(jobs[0].raw_data) == "api-job-1"
+    assert len(driver.api_calls) == 1
+    assert driver.api_calls[0].startswith(BossDataDriver.API_URL)
+    assert "query=AI%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86" in driver.api_calls[0]
+    assert "city=101280600" in driver.api_calls[0]
+    assert "page=2" in driver.api_calls[0]
 
 
 def test_boss_collect_preserves_login_intervention():
-    driver = BossSearchDriver(snapshot={"ok": True, "loginRequired": True, "cards": []})
+    driver = BossSearchDriver(response={"code": 1, "message": "请先登录"})
 
     with pytest.raises(LoginRequiredError):
         BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
 
 
 def test_boss_collect_preserves_security_verification_intervention():
-    driver = BossSearchDriver(open_result={"ok": False, "error": "verification_required"})
+    driver = BossSearchDriver(response={"code": 37, "message": "请完成安全验证"})
 
     with pytest.raises(UserActionRequiredError) as error:
         BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
 
     assert error.value.code == "verification_required"
     assert "完成安全验证" in error.value.user_prompt
+
+
+def test_boss_collect_surfaces_unknown_api_failure():
+    driver = BossSearchDriver(response={"code": 5001, "message": "service unavailable"})
+
+    with pytest.raises(RuntimeError, match="5001"):
+        BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
 
 
 class FlowDriver:

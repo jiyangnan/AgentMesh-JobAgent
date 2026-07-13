@@ -7,7 +7,6 @@ browser driver runtime but does not belong inside the driver package.
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 from urllib.parse import quote
@@ -18,11 +17,8 @@ from jobagent.drivers.boss.base import BossActionDriver
 from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
 
 from .parser import boss_job_id, parse_boss_job
-from .selectors import build_boss_snapshot_script
-
-
 class BossDataDriver:
-    """Fetch job listings from the visible Boss search results page."""
+    """Fetch Boss listings through the authenticated browser API session."""
 
     API_URL = "https://www.zhipin.com/wapi/zpgeek/search/joblist.json"
 
@@ -37,40 +33,36 @@ class BossDataDriver:
         page: int = 1,
         page_size: int = 15,
     ) -> dict[str, Any]:
-        """Open a real search page and extract its rendered job cards."""
+        """Fetch one API page without loading the resource-heavy search UI."""
         url = (
-            f"https://www.zhipin.com/web/geek/jobs?query={quote(query)}"
+            f"{self.API_URL}?scene=1&query={quote(query)}"
             f"&city={quote(city_code)}&page={max(1, int(page))}"
+            f"&pageSize={max(1, min(100, int(page_size)))}"
         )
-        open_result = self.driver.open_url_in_new_tab(url, wait_seconds=6)
-        if not open_result.get("ok"):
-            error = str(open_result.get("error") or "open_url_failed")
-            if error == "verification_required":
-                raise UserActionRequiredError(
-                    "verification_required",
-                    "Boss requires a visible security verification before Discover can continue",
-                    "请在已经打开的 Boss 直聘页面完成安全验证，完成后回复我“已完成验证”。",
-                )
-            return {"ok": False, "error": error, "cards": []}
+        api_fetch = getattr(self.driver, "api_fetch", None)
+        if not callable(api_fetch):
+            raise RuntimeError("Boss Discover requires the CDP browser driver")
+        result = api_fetch(url)
+        if not isinstance(result, dict):
+            raise RuntimeError("Boss job search API returned an unexpected payload")
 
-        result = self.driver._exec_js(build_boss_snapshot_script(limit=page_size))
-        if isinstance(result, dict) and "raw" in result:
-            try:
-                parsed = json.loads(result["raw"])
-                snapshot = parsed if isinstance(parsed, dict) else {}
-            except (json.JSONDecodeError, TypeError):
-                snapshot = {}
-        else:
-            snapshot = result if isinstance(result, dict) else {}
-        if snapshot.get("loginRequired"):
+        message = str(result.get("message") or result.get("zpMessage") or "")
+        if result.get("code") != 0 and any(marker in message for marker in ("登录", "login")):
             raise LoginRequiredError()
-        if snapshot.get("verificationRequired"):
+        if result.get("code") != 0 and any(
+            marker in message for marker in ("安全验证", "验证", "异常", "verify")
+        ):
             raise UserActionRequiredError(
                 "verification_required",
                 "Boss requires a visible security verification before Discover can continue",
                 "请在已经打开的 Boss 直聘页面完成安全验证，完成后回复我“已完成验证”。",
             )
-        return snapshot
+        if result.get("code") != 0:
+            raise RuntimeError(
+                f"Boss job search API failed with code {result.get('code')}: "
+                f"{message or 'unknown error'}"
+            )
+        return result
 
     def _parse_job(self, raw: dict[str, Any], city_name: str = "") -> Job:
         """Parse raw Boss API job dict to the standardized Job model."""
@@ -99,9 +91,9 @@ class BossDataDriver:
     ) -> list[Job]:
         """Fetch a single page of Boss jobs."""
         data = self._fetch_page(query, city_code, page, page_size)
-        if not data.get("ok"):
+        if data.get("code") != 0:
             return []
-        raw_jobs = data.get("cards", [])
+        raw_jobs = data.get("zpData", {}).get("jobList", [])
         self._check_data_quality(raw_jobs, page=page)
         return [
             self._parse_job(j, city_name)
