@@ -7,8 +7,14 @@ import pytest
 
 from jobagent.drivers.boss.data_driver import BossDataDriver as LegacyBossDataDriver
 from jobagent.domain.models import SendAttempt
-from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
+from jobagent.infra.exceptions import (
+    LoginRequiredError,
+    PlatformEnvironmentRejectedError,
+    UserActionRequiredError,
+)
 from jobagent.platforms.boss import BossDataDriver, boss_job_id, parse_boss_job
+from jobagent.platforms.boss.selectors import build_boss_snapshot_script
+from jobagent.platforms.discovery import CollectionError, collect_from_search_plan
 from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
 
 
@@ -60,6 +66,22 @@ class BossSearchDriver:
         return self.response
 
 
+class BossFallbackSearchDriver(BossSearchDriver):
+    def __init__(self, snapshot):
+        super().__init__(response={"code": 37, "message": "您的环境存在异常."})
+        self.snapshot = snapshot
+        self.open_calls = []
+        self.snapshot_scripts = []
+
+    def open_url_in_new_tab(self, url, wait_seconds=5):
+        self.open_calls.append((url, wait_seconds))
+        return {"ok": True, "url": url}
+
+    def _exec_js(self, script, **_kwargs):
+        self.snapshot_scripts.append(script)
+        return self.snapshot
+
+
 def test_boss_collect_queries_browser_api_without_opening_search_page():
     driver = BossSearchDriver()
     jobs = BossDataDriver(driver=driver).fetch_jobs(
@@ -98,6 +120,71 @@ def test_boss_collect_preserves_security_verification_intervention():
 
     assert error.value.code == "verification_required"
     assert "完成安全验证" in error.value.user_prompt
+
+
+def test_boss_collect_falls_back_to_visible_search_cards_for_environment_rejection():
+    driver = BossFallbackSearchDriver(
+        {
+            "ok": True,
+            "cards": [
+                {
+                    "encryptJobId": "dom-job-1",
+                    "jobName": "AI产品经理",
+                    "salaryDesc": "30-50K·16薪",
+                    "brandName": "Example AI",
+                    "cityName": "深圳",
+                    "areaDistrict": "南山区",
+                    "jobUrl": "https://www.zhipin.com/job_detail/dom-job-1.html",
+                }
+            ],
+        }
+    )
+
+    jobs = BossDataDriver(driver=driver).fetch_jobs(
+        "AI产品经理",
+        "101280600",
+        city_name="深圳",
+    )
+
+    assert [job.raw_data["source"] for job in jobs] == ["boss_search_dom_fallback"]
+    assert [job.name for job in jobs] == ["AI产品经理"]
+    assert len(driver.api_calls) == 1
+    assert len(driver.open_calls) == 1
+    assert "query=AI%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86" in driver.open_calls[0][0]
+    assert driver.snapshot_scripts
+
+
+def test_boss_collect_does_not_turn_environment_rejection_into_user_verification():
+    driver = BossSearchDriver(response={"code": 37, "message": "您的环境存在异常."})
+
+    with pytest.raises(PlatformEnvironmentRejectedError):
+        BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
+
+
+def test_boss_discovery_environment_rejection_requires_no_user_action():
+    plan = {
+        "platform": "boss",
+        "candidate_limit": 15,
+        "queries": [
+            {"keyword": "AI产品经理", "city": "深圳", "page_limit": 1}
+        ],
+    }
+    driver = BossSearchDriver(response={"code": 37, "message": "您的环境存在异常."})
+
+    with pytest.raises(CollectionError) as error:
+        collect_from_search_plan(plan, driver=driver, page_delay=0)
+
+    assert error.value.code == "platform_environment_rejected"
+    assert error.value.user_prompt == ""
+
+
+def test_boss_visible_fallback_does_not_classify_environment_text_as_verification():
+    script = build_boss_snapshot_script(limit=15)
+
+    assert "boss_search_dom_fallback" in script
+    assert ".job-card-box, .job-card-wrapper" in script
+    assert "安全验证" in script
+    assert "环境存在异常" not in script
 
 
 def test_boss_collect_surfaces_unknown_api_failure():

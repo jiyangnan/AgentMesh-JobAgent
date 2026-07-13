@@ -56,7 +56,7 @@ def test_old_install_clears_only_ephemeral_state_and_migrates_round(tmp_path):
 
     report = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
         pid_alive=lambda _pid: False,
     )
@@ -90,7 +90,7 @@ def test_old_install_clears_only_ephemeral_state_and_migrates_round(tmp_path):
     assert migrated_round["schema_version"] == 2
     assert migrated_round["migration"]["from_schema_version"] == 1
     marker = json.loads((state / "client_upgrade_state.json").read_text(encoding="utf-8"))
-    assert marker["client_version"] == "0.3.15"
+    assert marker["client_version"] == "0.3.16"
     assert marker["state_migration_version"] == upgrade.STATE_MIGRATION_VERSION
 
 
@@ -104,7 +104,7 @@ def test_upgrade_conflicts_block_platform_but_allow_recovery_commands(tmp_path):
 
     report = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
     )
 
@@ -133,12 +133,12 @@ def test_upgrade_migration_is_idempotent(tmp_path):
 
     first = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
     )
     second = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
     )
 
@@ -166,7 +166,7 @@ def test_protocol_change_archives_unsigned_runtime_decisions_without_touching_au
 
     report = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
     )
 
@@ -187,7 +187,7 @@ def test_live_process_defers_migration_and_next_run_retries_it(tmp_path):
 
     blocked = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
         pid_alive=lambda pid: pid == 42,
     )
@@ -202,7 +202,7 @@ def test_live_process_defers_migration_and_next_run_retries_it(tmp_path):
 
     recovered = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
         pid_alive=lambda _pid: False,
     )
@@ -222,7 +222,7 @@ def test_invalid_current_round_is_archived_instead_of_crashing_later(tmp_path):
 
     report = upgrade.run_client_upgrade(
         app_dir=app_dir,
-        current_version="0.3.15",
+        current_version="0.3.16",
         protocol_version=1,
     )
 

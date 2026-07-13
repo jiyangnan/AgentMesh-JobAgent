@@ -174,7 +174,11 @@ def collect_from_search_plan(
     driver=None,
 ) -> list[dict[str, Any]]:
     from jobagent.drivers.boss import create_driver
-    from jobagent.infra.exceptions import LoginRequiredError, UserActionRequiredError
+    from jobagent.infra.exceptions import (
+        LoginRequiredError,
+        PlatformEnvironmentRejectedError,
+        UserActionRequiredError,
+    )
 
     platform = str(plan["platform"])
     candidate_limit = min(100, int(plan.get("candidate_limit", 100)))
@@ -226,6 +230,15 @@ def collect_from_search_plan(
             "login_required",
             f"{platform} requires login before Discover can continue",
             user_prompt=f"请在已经打开的浏览器中登录 {platform}，完成后回复我“已登录”。",
+        ) from exc
+    except PlatformEnvironmentRejectedError as exc:
+        raise CollectionError(
+            "platform_environment_rejected",
+            str(exc),
+            details={
+                "platform": exc.platform,
+                "upstream_code": exc.upstream_code,
+            },
         ) from exc
 
     if not candidates:

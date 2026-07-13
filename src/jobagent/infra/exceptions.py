@@ -31,3 +31,12 @@ class UserActionRequiredError(RuntimeError):
         self.code = code
         self.user_prompt = user_prompt
         super().__init__(message)
+
+
+class PlatformEnvironmentRejectedError(RuntimeError):
+    """Raised when a platform rejects the browser environment without a human fix."""
+
+    def __init__(self, platform: str, message: str, upstream_code: int | None = None):
+        self.platform = platform
+        self.upstream_code = upstream_code
+        super().__init__(message)

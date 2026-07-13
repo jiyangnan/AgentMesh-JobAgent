@@ -853,6 +853,30 @@ class CDPBossDriver(BossActionDriver):
         self._ensure_connected_for_url(url)
         self.cdp.send("Page.navigate", {"url": url})
 
+    def snapshot_search_page(
+        self,
+        url: str,
+        script: str,
+        *,
+        wait_seconds: int = 4,
+        timeout: int = 8,
+    ) -> dict[str, Any]:
+        """Navigate once and take a bounded snapshot of visible search results."""
+        self._ensure_connected_for_url(url)
+        try:
+            self.cdp.send("Page.navigate", {"url": url})
+            time.sleep(max(0, wait_seconds))
+            result = self.cdp.evaluate(script, timeout=max(1, timeout))
+            value = result.get("result", {}).get("value")
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {"ok": False}
+            return {"ok": False, "error": "search_snapshot_unavailable"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def api_fetch(self, path: str, method: str = "GET", body: str | None = None) -> Any:
         """Execute a fetch() inside Chrome and return JSON.
 

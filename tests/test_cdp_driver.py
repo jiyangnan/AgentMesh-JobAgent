@@ -10,10 +10,12 @@ class FakeCDP:
         self.last_value = self.values[-1]
         self.connected = True
         self.js_calls: list[str] = []
+        self.evaluate_timeouts: list[int] = []
         self.send_calls: list[tuple[str, dict | None]] = []
 
     def evaluate(self, js_code: str, timeout: int = 30, **_kwargs):
         self.js_calls.append(js_code)
+        self.evaluate_timeouts.append(timeout)
         value = self.values.pop(0) if self.values else self.last_value
         self.last_value = value
         return {"result": {"value": value}}
@@ -123,6 +125,32 @@ def test_login_wait_is_passive_after_opening_login_page_once(monkeypatch):
     navigations = [params["url"] for method, params in driver.cdp.send_calls if method == "Page.navigate"]
     assert navigations == ["https://www.zhipin.com/web/user/?ka=header-login"]
     assert any("[Job Agent]" in script for script in driver.cdp.js_calls)
+
+
+def test_snapshot_search_page_uses_one_navigation_and_bounded_evaluation(monkeypatch):
+    driver = make_driver('{"ok":true,"cards":[{"jobId":"job-1"}]}')
+    driver.platform = "boss"
+    driver.current_platform = "boss"
+    driver.manager = object()
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: None)
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+
+    result = driver.snapshot_search_page(
+        "https://www.zhipin.com/web/geek/jobs?query=AI",
+        "snapshot-script",
+        wait_seconds=2,
+        timeout=8,
+    )
+
+    assert result == {"ok": True, "cards": [{"jobId": "job-1"}]}
+    assert driver.cdp.send_calls == [
+        (
+            "Page.navigate",
+            {"url": "https://www.zhipin.com/web/geek/jobs?query=AI"},
+        )
+    ]
+    assert driver.cdp.js_calls == ["snapshot-script"]
+    assert driver.cdp.evaluate_timeouts == [8]
 
 
 def test_click_chat_entry_no_popup_is_not_auto_sent(monkeypatch):
