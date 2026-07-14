@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from jobagent.domain.models import Job
 
@@ -31,7 +33,22 @@ def _string_list(value: Any) -> list[str]:
 
 def liepin_job_id(raw: dict[str, Any]) -> str:
     """Return a stable Liepin job id from common saved response shapes."""
-    return str(_first(raw, "jobId", "job_id", "id", "positionId", "position_id") or "")
+    explicit = _first(raw, "jobId", "job_id", "id", "positionId", "position_id")
+    if explicit:
+        return str(explicit)
+    url = str(_first(raw, "url", "jobUrl", "pcUrl") or "")
+    match = re.search(r"/job/([^/?#]+?)(?:\.shtml)?(?:[?#]|$)", url)
+    return match.group(1) if match else ""
+
+
+def _canonical_liepin_job_url(url: Any) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    parts = urlsplit(value)
+    if not parts.netloc and parts.path.startswith("/"):
+        parts = urlsplit(f"https://www.liepin.com{value}")
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def parse_liepin_job(raw: dict[str, Any], city_name: str = "") -> Job:
@@ -53,7 +70,7 @@ def parse_liepin_job(raw: dict[str, Any], city_name: str = "") -> Job:
     recruiter_title = _first(raw, "recruiterTitle", "hrTitle")
     recruiter = _join_non_empty([recruiter_name, recruiter_title], sep=" · ")
     skills = _string_list(_first(raw, "skills", "labels", "tags", "skillLabels"))
-    url = _first(raw, "url", "jobUrl", "pcUrl")
+    url = _canonical_liepin_job_url(_first(raw, "url", "jobUrl", "pcUrl"))
     if not url and job_id:
         url = f"https://www.liepin.com/job/{job_id}.shtml"
 

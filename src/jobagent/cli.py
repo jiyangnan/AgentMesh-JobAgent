@@ -216,24 +216,76 @@ def _with_login_workflow(platform: str, payload: dict[str, Any]) -> dict[str, An
     from jobagent.infra import rounds
 
     logged_in = bool(payload.get("ok") and payload.get("logged_in"))
-    next_suggested = (
-        f"jobagent {platform} discover"
-        if logged_in
-        else f"jobagent {platform} login --check"
+    workflow_before = rounds.round_status()
+    platform_before = dict(
+        (workflow_before.get("platforms") or {}).get(platform) or {}
     )
+    status_before = str(platform_before.get("status") or "pending")
+    evidence_before = dict(platform_before.get("evidence") or {})
+    resumable_statuses = {"discovered", "reviewed", "sent"}
+    stored_next = str(platform_before.get("next_suggested") or "")
+
+    inferred_status = ""
+    if " audit" in stored_next:
+        inferred_status = "sent"
+    elif " greet send" in stored_next or " apply send" in stored_next:
+        inferred_status = "reviewed"
+    elif " greet preview" in stored_next or " apply review" in stored_next:
+        inferred_status = "discovered"
+
+    if logged_in:
+        restored_status = (
+            str(evidence_before.get("resume_status") or inferred_status)
+            if status_before in {"active", "blocked"}
+            else status_before
+        )
+        preserve_progress = restored_status in resumable_statuses
+        target_status = restored_status if preserve_progress else "login_verified"
+        next_suggested = (
+            str(evidence_before.get("resume_next_suggested") or stored_next)
+            if status_before in {"active", "blocked"} and preserve_progress
+            else stored_next
+            if preserve_progress
+            else ""
+        ) or rounds._default_next_command(platform, target_status)
+        evidence = (
+            {
+                key: value
+                for key, value in evidence_before.items()
+                if key not in {"resume_status", "resume_next_suggested"}
+            }
+            if preserve_progress
+            else {}
+        )
+    else:
+        target_status = "blocked"
+        next_suggested = f"jobagent {platform} login --check"
+        evidence = dict(evidence_before) if status_before == "blocked" else {}
+        resumable_status = (
+            status_before if status_before in resumable_statuses else inferred_status
+        )
+        if resumable_status in resumable_statuses:
+            evidence["resume_status"] = resumable_status
+            evidence["resume_next_suggested"] = (
+                stored_next
+                or rounds._default_next_command(platform, resumable_status)
+            )
+
+    evidence["login"] = {
+        "logged_in": logged_in,
+        "requires_user_action": bool(payload.get("requires_user_action")),
+        "error": payload.get("error"),
+    }
     rounds.set_platform_status(
         platform,
-        "login_verified" if logged_in else "blocked",
+        target_status,
         command=f"jobagent {platform} login",
-        evidence={
-            "logged_in": logged_in,
-            "requires_user_action": bool(payload.get("requires_user_action")),
-            "error": payload.get("error"),
-        },
+        evidence=evidence,
         next_suggested=next_suggested,
     )
-    payload["next_suggested"] = next_suggested
-    payload["workflow"] = rounds.round_status()
+    workflow = rounds.round_status()
+    payload["next_suggested"] = workflow.get("next_suggested") or next_suggested
+    payload["workflow"] = workflow
     return payload
 
 

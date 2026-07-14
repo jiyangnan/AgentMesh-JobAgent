@@ -296,6 +296,10 @@ class LiepinApplySender:
             attempt.error = "login_required"
             attempt.steps = steps
             return attempt
+        if inspect_before.get("requires_user_action"):
+            attempt.error = str(inspect_before.get("user_action") or "user_action_required")
+            attempt.steps = steps
+            return attempt
         if not inspect_before.get("chatOpen"):
             click_entry = _exec_liepin_js(driver, _liepin_apply_click_chat_script())
             steps.append({"step": "click_liepin_chat_entry", **click_entry})
@@ -303,12 +307,34 @@ class LiepinApplySender:
                 attempt.error = str(click_entry.get("error") or "chat_entry_not_found")
                 attempt.steps = steps
                 return attempt
-            time.sleep(1.5)
+            chat_state = _poll_liepin_state(
+                driver,
+                attempts=20,
+                require_chat=True,
+            )
+            if not chat_state.get("chatOpen"):
+                # On a first contact Liepin may only create the conversation
+                # and change the entry from 聊一聊 to 继续聊. A second click
+                # opens that existing conversation; it does not create another
+                # greeting. Poll again because the IM modal hydrates slowly.
+                reopen = _exec_liepin_js(driver, _liepin_apply_click_chat_script())
+                steps.append({"step": "reopen_liepin_chat", **reopen})
+                if reopen.get("ok"):
+                    chat_state = _poll_liepin_state(
+                        driver,
+                        attempts=20,
+                        require_chat=True,
+                    )
+        else:
+            chat_state = inspect_before
 
-        chat_state = _exec_liepin_js(driver, _liepin_apply_inspect_script())
         steps.append({"step": "inspect_liepin_chat", **chat_state})
         if _liepin_page_requires_login(chat_state):
             attempt.error = "login_required"
+            attempt.steps = steps
+            return attempt
+        if chat_state.get("requires_user_action"):
+            attempt.error = str(chat_state.get("user_action") or "user_action_required")
             attempt.steps = steps
             return attempt
         if not chat_state.get("chatOpen"):
@@ -338,6 +364,11 @@ class LiepinApplySender:
         state: dict[str, Any],
         resume_already_delivered: bool,
     ) -> dict[str, Any]:
+        if state.get("requires_user_action"):
+            return {
+                "delivered": False,
+                "error": state.get("user_action") or "user_action_required",
+            }
         resume_delivered = bool(resume_already_delivered or state.get("resumeDelivered"))
         greeting_delivered = _liepin_greeting_delivery_detected(state, message)
 
@@ -351,27 +382,141 @@ class LiepinApplySender:
                 }
             )
         else:
-            resume_action = _click_liepin_resume_action(driver)
-            steps.append({"step": "click_liepin_resume_action", **resume_action})
-            if resume_action.get("ok"):
+            if state.get("chatOpen") and state.get("canSendChatResume") is False:
                 state = _poll_liepin_state(
                     driver,
-                    attempts=4,
-                    require_resume=True,
-                    allow_resume_confirm=True,
+                    attempts=20,
+                    require_chat_resume=True,
                 )
-                if state.get("canConfirmResume"):
-                    steps.append({"step": "inspect_liepin_resume_dialog", **state})
-                    if state.get("resumeAttachmentSelected") is False:
-                        resume_confirm = {
-                            "ok": False,
-                            "error": "resume_attachment_not_selected",
+                if state.get("requires_user_action"):
+                    return {
+                        "delivered": False,
+                        "error": state.get("user_action") or "user_action_required",
+                    }
+            if state.get("chatOpen") and state.get("canSendChatResume") is False:
+                resume_action = {
+                    "ok": False,
+                    "error": "chat_resume_action_not_ready",
+                }
+                steps.append({"step": "click_liepin_resume_action", **resume_action})
+            else:
+                for resume_action_attempt in range(1, 4):
+                    resume_action = _click_liepin_resume_action(driver)
+                    steps.append({
+                        "step": "click_liepin_resume_action",
+                        "attempt": resume_action_attempt,
+                        **resume_action,
+                    })
+                    if not resume_action.get("ok"):
+                        break
+                    state = _poll_liepin_state(
+                        driver,
+                        attempts=12,
+                        require_resume=True,
+                        allow_resume_confirm=True,
+                    )
+                    if state.get("requires_user_action"):
+                        return {
+                            "delivered": False,
+                            "error": state.get("user_action") or "user_action_required",
                         }
-                    else:
-                        resume_confirm = _click_liepin_resume_confirm(driver)
+                    if state.get("resumeDelivered") or state.get("canConfirmResume"):
+                        break
+                    if state.get("canSendChatResume") is False:
+                        state = _poll_liepin_state(
+                            driver,
+                            attempts=20,
+                            require_chat_resume=True,
+                        )
+                        if state.get("requires_user_action"):
+                            return {
+                                "delivered": False,
+                                "error": state.get("user_action") or "user_action_required",
+                            }
+                        if state.get("canSendChatResume") is False:
+                            break
+            if (
+                not state.get("resumeDelivered")
+                and not state.get("canConfirmResume")
+                and state.get("canSendChatResume") is True
+            ):
+                x = resume_action.get("x")
+                y = resume_action.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    dom_fallback = _exec_liepin_js(
+                        driver,
+                        _liepin_apply_dom_click_script(x, y),
+                    )
+                    steps.append({
+                        "step": "click_liepin_resume_action_dom_fallback",
+                        **dom_fallback,
+                    })
+                    if dom_fallback.get("ok"):
+                        state = _poll_liepin_state(
+                            driver,
+                            attempts=12,
+                            require_resume=True,
+                            allow_resume_confirm=True,
+                        )
+                    if state.get("requires_user_action"):
+                        return {
+                            "delivered": False,
+                            "error": state.get("user_action") or "user_action_required",
+                        }
+            if state.get("canConfirmResume"):
+                steps.append({"step": "inspect_liepin_resume_dialog", **state})
+                if state.get("resumeAttachmentSelected") is False:
+                    resume_confirm = {
+                        "ok": False,
+                        "error": "resume_attachment_not_selected",
+                    }
                     steps.append({"step": "click_liepin_resume_confirm", **resume_confirm})
-                    if resume_confirm.get("ok"):
-                        state = _poll_liepin_state(driver, attempts=4, require_resume=True)
+                else:
+                    for confirm_attempt in range(1, 4):
+                        resume_confirm = _click_liepin_resume_confirm(driver)
+                        steps.append({
+                            "step": "click_liepin_resume_confirm",
+                            "attempt": confirm_attempt,
+                            **resume_confirm,
+                        })
+                        if not resume_confirm.get("ok"):
+                            break
+                        state = _poll_liepin_state(
+                            driver,
+                            attempts=12,
+                            require_resume=True,
+                            allow_resume_confirm=True,
+                        )
+                        if state.get("requires_user_action"):
+                            return {
+                                "delivered": False,
+                                "error": state.get("user_action") or "user_action_required",
+                            }
+                        if state.get("resumeDelivered") or not state.get("canConfirmResume"):
+                            break
+                if state.get("canConfirmResume") and not state.get("resumeDelivered"):
+                    x = resume_confirm.get("x")
+                    y = resume_confirm.get("y")
+                    if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                        dom_fallback = _exec_liepin_js(
+                            driver,
+                            _liepin_apply_dom_click_script(x, y),
+                        )
+                        steps.append({
+                            "step": "click_liepin_resume_confirm_dom_fallback",
+                            **dom_fallback,
+                        })
+                        if dom_fallback.get("ok"):
+                            state = _poll_liepin_state(
+                                driver,
+                                attempts=20,
+                                require_resume=True,
+                            )
+                        if state.get("requires_user_action"):
+                            return {
+                                "delivered": False,
+                                "error": state.get("user_action") or "user_action_required",
+                            }
             resume_delivered = bool(state.get("resumeDelivered"))
             steps.append(
                 {
@@ -401,6 +546,11 @@ class LiepinApplySender:
             if send.get("ok"):
                 state = _poll_liepin_state(driver, attempts=4, expected_message=message)
             greeting_delivered = _liepin_greeting_delivery_detected(state, message)
+            # The resume confirmation can finish asynchronously while the
+            # personalized greeting is being sent. Reconcile against the
+            # freshest chat state so a completed resume delivery is not
+            # rejected because the earlier verification poll was premature.
+            resume_delivered = bool(resume_delivered or state.get("resumeDelivered"))
             steps.append(
                 {
                     "step": "verify_liepin_personalized_greeting",
@@ -408,6 +558,31 @@ class LiepinApplySender:
                     "delivered": greeting_delivered,
                 }
             )
+            if state.get("requires_user_action"):
+                return {
+                    "delivered": False,
+                    "error": state.get("user_action") or "user_action_required",
+                }
+
+        if greeting_delivered and not resume_delivered:
+            state = _poll_liepin_state(
+                driver,
+                attempts=20,
+                require_resume=True,
+            )
+            resume_delivered = bool(state.get("resumeDelivered"))
+            steps.append(
+                {
+                    "step": "reconcile_liepin_resume_after_greeting",
+                    **state,
+                    "delivered": resume_delivered,
+                }
+            )
+            if state.get("requires_user_action"):
+                return {
+                    "delivered": False,
+                    "error": state.get("user_action") or "user_action_required",
+                }
 
         if resume_delivered and greeting_delivered:
             return {"delivered": True}
@@ -457,18 +632,31 @@ def _poll_liepin_state(
     require_resume: bool = False,
     allow_resume_confirm: bool = False,
     expected_message: str = "",
+    require_chat: bool = False,
+    require_chat_resume: bool = False,
 ) -> dict[str, Any]:
     state: dict[str, Any] = {"ok": False, "error": "inspection_not_run"}
     for _ in range(max(1, attempts)):
         time.sleep(1)
         state = _exec_liepin_js(driver, _liepin_apply_inspect_script())
+        if _liepin_page_requires_login(state):
+            return state
+        if require_chat and state.get("chatOpen"):
+            return state
+        if require_chat_resume and state.get("canSendChatResume"):
+            return state
         if require_resume and state.get("resumeDelivered"):
             return state
         if require_resume and allow_resume_confirm and state.get("canConfirmResume"):
             return state
         if expected_message and _liepin_greeting_delivery_detected(state, expected_message):
             return state
-        if not require_resume and not expected_message:
+        if (
+            not require_resume
+            and not expected_message
+            and not require_chat
+            and not require_chat_resume
+        ):
             return state
     return state
 
@@ -477,7 +665,12 @@ def _liepin_attempt_delivery_parts(attempt: SendAttempt) -> tuple[bool, bool]:
     resume_delivered = False
     greeting_delivered = False
     for step in attempt.steps:
-        if step.get("step") in {"resume_already_delivered", "verify_liepin_resume_delivery"}:
+        resume_delivered = resume_delivered or step.get("resumeDelivered") is True
+        if step.get("step") in {
+            "resume_already_delivered",
+            "verify_liepin_resume_delivery",
+            "reconcile_liepin_resume_after_greeting",
+        }:
             resume_delivered = resume_delivered or step.get("delivered") is True
         if step.get("step") == "verify_liepin_personalized_greeting":
             greeting_delivered = greeting_delivered or step.get("delivered") is True
@@ -529,8 +722,22 @@ def _click_liepin_resume_action(driver: Any) -> dict[str, Any]:
 
 
 def _click_liepin_resume_confirm(driver: Any) -> dict[str, Any]:
-    result = _exec_liepin_js(driver, _liepin_apply_click_resume_confirm_script())
-    return _click_liepin_result(driver, result)
+    result: dict[str, Any] = {"ok": False, "error": "resume_confirm_button_not_found"}
+    previous: tuple[float, float] | None = None
+    for _ in range(10):
+        result = _exec_liepin_js(driver, _liepin_apply_click_resume_confirm_script())
+        x = result.get("x")
+        y = result.get("y")
+        if not result.get("ok") or not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            previous = None
+            time.sleep(0.5)
+            continue
+        current = (float(x), float(y))
+        if previous is not None and abs(current[0] - previous[0]) <= 2 and abs(current[1] - previous[1]) <= 2:
+            return _click_liepin_result(driver, result)
+        previous = current
+        time.sleep(0.5)
+    return {**result, "ok": False, "error": "resume_confirm_button_not_stable"}
 
 
 def _click_liepin_result(driver: Any, result: dict[str, Any]) -> dict[str, Any]:
@@ -593,7 +800,16 @@ def _liepin_apply_inspect_script() -> str:
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
       }).map(el => (el.innerText || el.textContent || '').trim());
       const canConfirmResume = visibleButtons.some(t => /立即投递|确认投递|投递/.test(t));
-      const canSendResume = visibleButtons.some(t => /^(发简历|发送简历|投递简历)$/.test(t));
+      const canSendResume = visibleButtons.some(t => /^(发简历|发送简历|投递简历|投简历)$/.test(t));
+      const canSendChatResume = Array.from(document.querySelectorAll('.action-resume'))
+        .some(el => {
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          const label = (el.innerText || el.textContent || '').trim();
+          return /^(发简历|发送简历)$/.test(label)
+            && style.display !== 'none' && style.visibility !== 'hidden'
+            && rect.width > 1 && rect.height > 1;
+        });
       const editor = Array.from(document.querySelectorAll(
         'textarea.im-ui-textarea,textarea,[contenteditable="true"]'
       )).find(el => {
@@ -601,9 +817,11 @@ def _liepin_apply_inspect_script() -> str:
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
       });
-      const outgoingMessages = Array.from(document.querySelectorAll('.im-ui-txt.send .text'))
-        .map(el => (el.innerText || el.textContent || '').trim())
-        .filter(Boolean);
+      const outgoingMessages = Array.from(new Set(
+        Array.from(document.querySelectorAll(
+          '.im-ui-txt.send .text, .im-ui-txt.send .im-ui-txt-content, .im-ui-txt.send'
+        )).map(el => (el.innerText || el.textContent || '').trim()).filter(Boolean)
+      ));
       const resumeDelivered = Boolean(
         document.querySelector('.im-ui-txt.send .im-ui-send-attachment-card')
       ) || outgoingMessages.some(message => /这是我的简历|简历已发送|已发送简历/.test(message));
@@ -613,6 +831,31 @@ def _liepin_apply_inspect_script() -> str:
       const requiresResume = /请选择简历|上传简历|完善简历|创建简历|附件简历/.test(text)
         && !canConfirmResume && !resumeDelivered;
       const requiresCaptcha = /验证码登录|手机验证码|安全验证|滑块/.test(text);
+      const moderationPrompt = '你的发言疑似存在不良信息，请文明沟通。如需平台介入请及时反馈';
+      const moderationNotice = text.includes('你的发言疑似存在不良信息')
+        || text.includes('请文明沟通。如需平台介入请及时反馈');
+      const moderationLeaves = Array.from(document.querySelectorAll('body *')).filter(el => {
+        const own = (el.innerText || el.textContent || '').trim();
+        if (!own.includes('你的发言疑似存在不良信息')) return false;
+        const childContains = Array.from(el.children || []).some(child =>
+          ((child.innerText || child.textContent || '').trim()).includes('你的发言疑似存在不良信息')
+        );
+        if (childContains) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden'
+          && rect.width > 1 && rect.height > 1;
+      });
+      const requiresModeration = moderationLeaves.some(el =>
+        !el.closest('.im-ui-system-tip,.im-ui-message-item')
+      );
+      const requiresUserAction = requiresResume || requiresCaptcha || requiresModeration;
+      const userAction = requiresModeration
+        ? 'message_moderation_required'
+        : (requiresCaptcha ? 'captcha_required' : (requiresResume ? 'resume_selection_required' : ''));
+      const userPrompt = requiresModeration
+        ? moderationPrompt
+        : (requiresCaptcha ? '请在猎聘页面完成安全验证。' : (requiresResume ? '请在猎聘页面选择或完善要发送的简历。' : ''));
       return JSON.stringify({
         ok: true,
         href,
@@ -621,12 +864,16 @@ def _liepin_apply_inspect_script() -> str:
         delivered,
         chatOpen: Boolean(editor),
         canSendResume,
+        canSendChatResume,
         canConfirmResume,
         resumeAttachmentSelected,
         resumeDelivered,
         outgoingMessages,
-        requires_user_action: requiresResume || requiresCaptcha,
-        user_action: requiresCaptcha ? 'captcha_required' : (requiresResume ? 'resume_selection_required' : ''),
+        requires_user_action: requiresUserAction,
+        user_action: userAction,
+        user_prompt: userPrompt,
+        moderation_notice: moderationNotice,
+        moderation_notice_blocking: requiresModeration,
         bodySnippet: text.slice(0, 1200)
       });
     })()
@@ -723,11 +970,34 @@ def _liepin_apply_click_message_send_script() -> str:
 def _liepin_apply_click_resume_script() -> str:
     return r"""
     (function(){
-      const labels = ['发简历', '发送简历', '投递简历'];
+      const labels = ['发简历', '发送简历', '投递简历', '投简历'];
       function visible(el){
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 1 && rect.height > 1;
+      }
+      function target(el, label){
+        el.scrollIntoView({block:'center', inline:'center'});
+        const rect = el.getBoundingClientRect();
+        return JSON.stringify({
+          ok:true,
+          clicked:label,
+          x:rect.left + rect.width / 2,
+          y:rect.top + rect.height / 2
+        });
+      }
+      const chatResume = Array.from(document.querySelectorAll('.action-resume'))
+        .find(node => visible(node) && /^(发简历|发送简历)$/.test(
+          (node.innerText || node.textContent || '').trim()
+        ));
+      if (chatResume) {
+        return target(chatResume, (chatResume.innerText || chatResume.textContent || '').trim());
+      }
+      const chatEditor = Array.from(document.querySelectorAll(
+        'textarea.im-ui-textarea,textarea,[contenteditable="true"]'
+      )).find(visible);
+      if (chatEditor) {
+        return JSON.stringify({ok:false, error:'chat_resume_action_not_ready'});
       }
       const all = Array.from(document.querySelectorAll(
         'button,a,[role="button"],.im-ui-action-button,.action-resume'
@@ -735,14 +1005,7 @@ def _liepin_apply_click_resume_script() -> str:
       for (const label of labels) {
         const el = all.find(node => visible(node) && (node.innerText || node.textContent || '').trim() === label);
         if (el) {
-          el.scrollIntoView({block:'center', inline:'center'});
-          const rect = el.getBoundingClientRect();
-          return JSON.stringify({
-            ok:true,
-            clicked:label,
-            x:rect.left + rect.width / 2,
-            y:rect.top + rect.height / 2
-          });
+          return target(el, label);
         }
       }
       return JSON.stringify({ok:false, error:'resume_action_not_found'});

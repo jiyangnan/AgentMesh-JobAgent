@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -56,7 +57,7 @@ class Job51SessionGuide:
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
             )
-        return self.inspect_current_page()
+        return self.inspect_current_page(wait_seconds=max(8, wait_seconds))
 
     def open_login(self, wait_seconds: int = 3) -> Job51SessionStatus:
         open_result = self.driver.open_url_in_new_tab(JOB51_SEARCH_URL, wait_seconds=wait_seconds)
@@ -69,7 +70,7 @@ class Job51SessionGuide:
                 error=str(open_result.get("error", "open_url_failed")),
                 evidence={"open_result": open_result},
             )
-        return self.inspect_current_page()
+        return self.inspect_current_page(wait_seconds=max(8, wait_seconds))
 
     def wait_for_login(self, timeout: int = 300, poll_interval: int = 3, wait_seconds: int = 3) -> Job51SessionStatus:
         status = self.open_login(wait_seconds=wait_seconds)
@@ -94,20 +95,45 @@ class Job51SessionGuide:
             evidence=last.evidence,
         )
 
-    def inspect_current_page(self) -> Job51SessionStatus:
+    def inspect_current_page(
+        self,
+        wait_seconds: float = 0,
+        poll_interval: float = 0.5,
+    ) -> Job51SessionStatus:
         js = """
         (function(){
           const href = location.href || '';
           const title = document.title || '';
           const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
-          const snippet = bodyText.slice(0, 1000);
+          const snippet = bodyText.slice(0, 2000);
+          const placeholder = /doesn't work properly without JavaScript enabled/i.test(bodyText);
           const hasLoginEntry = /登录[/]注册/.test(snippet);
+          const hasAuthenticatedEntry = /在线简历/.test(snippet) && !hasLoginEntry;
+          const pageReady = !placeholder && (hasLoginEntry || hasAuthenticatedEntry);
           const loginRequired = /passport|login/.test(href) || hasLoginEntry;
-          return JSON.stringify({ok:true, url:href, title, loginRequired, bodySnippet:snippet});
+          return JSON.stringify({
+            ok:true,
+            url:href,
+            title,
+            pageReady,
+            placeholder,
+            hasLoginEntry,
+            hasAuthenticatedEntry,
+            loginRequired,
+            bodySnippet:snippet
+          });
         })()
         """
-        result = self.driver._exec_js(js)
-        data = _unwrap_js_result(result)
+        interval = max(0.1, float(poll_interval))
+        attempts = max(1, int(math.ceil(max(0.0, float(wait_seconds)) / interval)) + 1)
+        data: dict[str, Any] = {}
+        for attempt in range(attempts):
+            result = self.driver._exec_js(js)
+            data = _unwrap_js_result(result)
+            if not data.get("ok") or data.get("pageReady"):
+                break
+            if attempt < attempts - 1:
+                time.sleep(interval)
         if not data.get("ok"):
             error = str(data.get("error", "job51_session_inspect_failed"))
             return Job51SessionStatus(
@@ -117,14 +143,30 @@ class Job51SessionGuide:
                 error=error,
                 evidence=data,
             )
+        if not data.get("pageReady"):
+            return Job51SessionStatus(
+                ok=False,
+                logged_in=False,
+                login_required=False,
+                url=str(data.get("url", "")),
+                title=str(data.get("title", "")),
+                error="job51_page_not_ready",
+                evidence={
+                    "placeholder": bool(data.get("placeholder")),
+                    "bodySnippet": data.get("bodySnippet", ""),
+                },
+            )
         login_required = bool(data.get("loginRequired"))
         return Job51SessionStatus(
             ok=True,
-            logged_in=not login_required,
+            logged_in=bool(data.get("hasAuthenticatedEntry")) and not login_required,
             login_required=login_required,
             url=str(data.get("url", "")),
             title=str(data.get("title", "")),
-            evidence={"bodySnippet": data.get("bodySnippet", "")},
+            evidence={
+                "hasAuthenticatedEntry": bool(data.get("hasAuthenticatedEntry")),
+                "bodySnippet": data.get("bodySnippet", ""),
+            },
         )
 
 

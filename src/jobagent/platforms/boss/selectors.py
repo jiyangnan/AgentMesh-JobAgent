@@ -30,6 +30,8 @@ def build_boss_snapshot_script(limit: int = 15) -> str:
         && (/login|passport/.test(href) || /登录|扫码登录|验证码登录/.test(title + '\\n' + bodyText.slice(0, 800)));
       const verificationRequired = nodes.length === 0
         && (/verify|code=36/.test(href) || /安全验证|拖动滑块|验证码/.test(bodyText.slice(0, 1000)));
+      const environmentRejected = nodes.length === 0
+        && /环境存在异常|环境异常|访问异常/.test(bodyText.slice(0, 1000));
       const cards = [];
       const seen = new Set();
       for (const card of nodes) {{
@@ -69,8 +71,10 @@ def build_boss_snapshot_script(limit: int = 15) -> str:
         selectorVersion,
         url: href,
         title,
+        readyState: document.readyState || '',
         loginRequired,
         verificationRequired,
+        environmentRejected,
         candidateCount: nodes.length,
         cardCount: cards.length,
         noResults: /暂无职位|没有找到|换个关键词/.test(bodyText.slice(0, 1400)),

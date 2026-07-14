@@ -15,8 +15,12 @@ def build_job51_snapshot_script(limit: int = 20) -> str:
       const href = location.href || '';
       const title = document.title || '';
       const bodyText = clean(document.body && (document.body.innerText || document.body.textContent));
-      const loginRequired = /login|passport|登录[/]注册|请登录|扫码登录|验证码登录|手机验证码|安全验证|滑块/.test(href + '\\n' + title)
-        && !document.querySelector('.joblist-item');
+      const placeholder = /doesn't work properly without JavaScript enabled/i.test(bodyText);
+      const loginPromptPresent = /登录[/]注册|请登录|扫码登录|验证码登录/.test(bodyText.slice(0, 1200));
+      const loginRequired = loginPromptPresent || (
+        /login|passport|请登录|扫码登录|验证码登录|手机验证码|安全验证|滑块/.test(href + '\\n' + title)
+        && !document.querySelector('.joblist-item')
+      );
       function parseSensors(el) {{
         const raw = el && el.getAttribute && el.getAttribute('sensorsdata');
         if (!raw) return {{}};
@@ -33,6 +37,14 @@ def build_job51_snapshot_script(limit: int = 20) -> str:
       const cards = [];
       const seen = new Set();
       const nodes = Array.from(document.querySelectorAll('.joblist-item'));
+      const app = document.querySelector('#app');
+      const appMounted = Boolean(app && app.children.length > 0 && !placeholder);
+      const noResults = /暂无相关职位|没有找到相关职位|换个条件试试/.test(bodyText);
+      const pageReady = !placeholder && (
+        loginRequired
+        || nodes.length > 0
+        || noResults
+      );
       for (const card of nodes) {{
         if (cards.length >= limit) break;
         const sensorsNode = card.querySelector('[sensorsdata]');
@@ -76,8 +88,12 @@ def build_job51_snapshot_script(limit: int = 20) -> str:
         selectorVersion,
         url: href,
         title,
+        pageReady,
+        placeholder,
+        appMounted,
+        noResults,
         loginRequired,
-        loginPromptPresent: /登录[/]注册|请登录|扫码登录|验证码登录/.test(bodyText.slice(0, 1200)),
+        loginPromptPresent,
         candidateCount: nodes.length,
         cardCount: cards.length,
         cards,

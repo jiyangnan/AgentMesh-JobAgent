@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from jobagent.domain.models import SendAttempt
 from jobagent.drivers.boss.base import BossActionDriver
@@ -32,13 +33,36 @@ def execute_boss_greeting_flow(
         attempt.steps = steps
         return attempt
 
+    editor_result: dict[str, Any] | None = None
     chat_click = driver.click_chat_entry()
     steps.append({"step": "click_chat_entry", **chat_click})
     if not chat_click.get("ok"):
         err = chat_click.get("error", "")
-        attempt.error = "risk_control" if err == "risk_control" else "chat_entry_failed"
-        attempt.steps = steps
-        return attempt
+        if err == "risk_control":
+            attempt.error = "risk_control"
+            attempt.steps = steps
+            return attempt
+        # Boss can finish navigating to the job-specific chat after the CDP
+        # request itself times out. Wait for a writable editor, but recover only
+        # when the chat URL still identifies this exact job.
+        editor_result = driver.inspect_chat_editor()
+        steps.append({"step": "inspect_chat_editor_after_entry_failure", **editor_result})
+        expected_job_id = urlsplit(job_url).path.rsplit("/", 1)[-1].removesuffix(".html")
+        same_job = (
+            str(editor_result.get("jobId") or "") == expected_job_id
+            or (
+                bool(chat_click.get("clicked"))
+                and str(chat_click.get("jobId") or "") == expected_job_id
+            )
+        )
+        if (
+            not editor_result.get("editorFound")
+            or not same_job
+        ):
+            attempt.error = "chat_entry_failed"
+            attempt.steps = steps
+            return attempt
+        steps.append({"step": "chat_entry_recovered", "ok": True, "jobId": expected_job_id})
     if chat_click.get("autoSent"):
         if chat_click.get("platformDefaultSent"):
             steps.append(
@@ -56,8 +80,9 @@ def execute_boss_greeting_flow(
             attempt.steps = steps
             return attempt
 
-    editor_result = driver.inspect_chat_editor()
-    steps.append({"step": "inspect_chat_editor", **editor_result})
+    if editor_result is None:
+        editor_result = driver.inspect_chat_editor()
+        steps.append({"step": "inspect_chat_editor", **editor_result})
     if editor_result.get("error") == "risk_control":
         attempt.error = "risk_control"
         attempt.steps = steps

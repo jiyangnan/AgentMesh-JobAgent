@@ -104,7 +104,13 @@ def job_to_candidate(platform: str, job: Job) -> dict[str, Any]:
     return {key: value for key, value in candidate.items() if value is not None}
 
 
-def _collect_boss(query: dict[str, Any], page: int, limit: int, driver) -> list[Job]:
+def _collect_boss(
+    query: dict[str, Any],
+    page: int,
+    limit: int,
+    driver,
+    wait_seconds: int,
+) -> list[Job]:
     from jobagent.platforms.boss.collect import BossDataDriver
 
     city = str(query.get("city") or "").replace("市", "")
@@ -114,7 +120,10 @@ def _collect_boss(query: dict[str, Any], page: int, limit: int, driver) -> list[
             "unsupported_city",
             f"Boss adapter does not have a city code for {city or 'empty city'}",
         )
-    collector = BossDataDriver(driver=driver)
+    collector = BossDataDriver(
+        driver=driver,
+        visible_page_wait_seconds=wait_seconds,
+    )
     return collector.fetch_jobs(
         str(query.get("keyword") or ""),
         code,
@@ -199,7 +208,13 @@ def collect_from_search_plan(
                 if remaining <= 0:
                     return candidates
                 if platform == "boss":
-                    jobs = _collect_boss(query, page, remaining, driver)
+                    jobs = _collect_boss(
+                        query,
+                        page,
+                        remaining,
+                        driver,
+                        wait_seconds,
+                    )
                 else:
                     jobs = _collect_web_platform(
                         platform,

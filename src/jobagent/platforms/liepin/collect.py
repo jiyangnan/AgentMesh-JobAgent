@@ -17,27 +17,33 @@ from .parser import liepin_job_id, parse_liepin_job
 from .selectors import build_liepin_snapshot_script
 
 LIEPIN_CITY_CODES = {
+    "北京": "010",
+    "上海": "020",
     "深圳": "050090",
 }
 
 
 def build_liepin_search_url(query: str, city: str = "", page: int = 1) -> str:
     """Build a human-search URL for the live read-only spike."""
-    city_code = LIEPIN_CITY_CODES.get(city.strip()) if city else ""
+    city = city.strip().removesuffix("市") if city else ""
+    city_code = LIEPIN_CITY_CODES.get(city) if city else ""
+    current_page = max(0, int(page) - 1)
     if city_code:
-        current_page = max(0, int(page) - 1)
         return (
             "https://www.liepin.com/zhaopin/"
             f"?city={quote(city_code)}&dq={quote(city_code)}"
             f"&currentPage={current_page}&pageSize=40&key={quote(query)}"
             "&scene=input&sfrom=search_job_pc"
         )
-    url = f"https://www.liepin.com/zhaopin/?key={quote(query)}"
+    url = "https://www.liepin.com/zhaopin/"
     if city:
-        url += f"&dq={quote(city)}"
-    if page > 1:
-        url += f"&currentPage={page}"
-    return url
+        url += f"?city={quote(city)}&dq={quote(city)}"
+    else:
+        url += "?"
+    return (
+        f"{url}&currentPage={current_page}&pageSize=40&key={quote(query)}"
+        "&scene=input&sfrom=search_job_pc"
+    )
 
 
 @dataclass
@@ -101,6 +107,7 @@ class LiepinReadOnlyCollector:
         if not query:
             raise ValueError("query is required for live Liepin read-only collect")
 
+        city = city.strip().removesuffix("市") if city else ""
         start_page = max(1, int(page))
         page_count = max(1, int(pages))
         limit = max(1, int(limit))

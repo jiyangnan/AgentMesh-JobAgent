@@ -82,6 +82,23 @@ class BossFallbackSearchDriver(BossSearchDriver):
         return self.snapshot
 
 
+class BossSnapshotSearchDriver(BossSearchDriver):
+    def __init__(self, snapshot):
+        super().__init__(response={"code": 37, "message": "您的环境存在异常."})
+        self.snapshot = snapshot
+        self.snapshot_calls = []
+
+    def snapshot_search_page(self, url, script, **kwargs):
+        self.snapshot_calls.append((url, script, kwargs))
+        return self.snapshot
+
+
+class BossFailedApiSearchDriver(BossSnapshotSearchDriver):
+    def api_fetch(self, url):
+        self.api_calls.append(url)
+        raise RuntimeError("API 请求失败: Failed to fetch")
+
+
 def test_boss_collect_queries_browser_api_without_opening_search_page():
     driver = BossSearchDriver()
     jobs = BossDataDriver(driver=driver).fetch_jobs(
@@ -154,8 +171,86 @@ def test_boss_collect_falls_back_to_visible_search_cards_for_environment_rejecti
     assert driver.snapshot_scripts
 
 
+def test_boss_collect_falls_back_to_visible_page_when_browser_fetch_fails():
+    driver = BossFailedApiSearchDriver({
+        "ok": True,
+        "cards": [
+            {
+                "encryptJobId": "dom-job-1",
+                "jobName": "AI产品经理",
+                "salaryDesc": "30-50K·16薪",
+                "brandName": "Example AI",
+                "cityName": "深圳",
+                "areaDistrict": "南山区",
+                "jobUrl": "https://www.zhipin.com/job_detail/dom-job-1.html",
+            }
+        ],
+    })
+
+    jobs = BossDataDriver(driver=driver).fetch_jobs(
+        "AI产品经理",
+        "101280600",
+        city_name="深圳",
+    )
+
+    assert [job.name for job in jobs] == ["AI产品经理"]
+    assert len(driver.api_calls) == 1
+    assert len(driver.snapshot_calls) == 1
+
+
 def test_boss_collect_does_not_turn_environment_rejection_into_user_verification():
     driver = BossSearchDriver(response={"code": 37, "message": "您的环境存在异常."})
+
+    with pytest.raises(PlatformEnvironmentRejectedError):
+        BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
+
+
+def test_boss_collect_distinguishes_slow_page_from_environment_rejection():
+    driver = BossSnapshotSearchDriver({
+        "ok": False,
+        "error": "search_page_load_timeout",
+        "readyState": "interactive",
+        "cardCount": 0,
+        "waitedSeconds": 45.0,
+    })
+
+    with pytest.raises(UserActionRequiredError) as error:
+        BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
+
+    assert error.value.code == "boss_search_page_load_timeout"
+    assert "页面已就绪" in error.value.user_prompt
+    assert driver.snapshot_calls[0][2]["wait_seconds"] == 45.0
+
+
+def test_boss_discovery_surfaces_slow_page_as_user_action():
+    plan = {
+        "platform": "boss",
+        "candidate_limit": 15,
+        "queries": [
+            {"keyword": "AI产品经理", "city": "深圳", "page_limit": 1}
+        ],
+    }
+    driver = BossSnapshotSearchDriver({
+        "ok": False,
+        "error": "search_page_load_timeout",
+        "readyState": "loading",
+        "cardCount": 0,
+        "waitedSeconds": 45.0,
+    })
+
+    with pytest.raises(CollectionError) as error:
+        collect_from_search_plan(plan, driver=driver, page_delay=0)
+
+    assert error.value.code == "boss_search_page_load_timeout"
+    assert "页面已就绪" in error.value.user_prompt
+
+
+def test_boss_collect_keeps_explicit_visible_environment_rejection_noninteractive():
+    driver = BossSnapshotSearchDriver({
+        "ok": True,
+        "environmentRejected": True,
+        "cards": [],
+    })
 
     with pytest.raises(PlatformEnvironmentRejectedError):
         BossDataDriver(driver=driver).fetch_jobs("AI产品经理", "101280600")
@@ -178,13 +273,19 @@ def test_boss_discovery_environment_rejection_requires_no_user_action():
     assert error.value.user_prompt == ""
 
 
-def test_boss_visible_fallback_does_not_classify_environment_text_as_verification():
+def test_boss_visible_fallback_classifies_environment_text_separately_from_verification():
     script = build_boss_snapshot_script(limit=15)
 
     assert "boss_search_dom_fallback" in script
     assert ".job-card-box, .job-card-wrapper" in script
     assert "安全验证" in script
-    assert "环境存在异常" not in script
+    assert "const environmentRejected" in script
+    assert "环境存在异常" in script
+    verification_clause = script.split("const environmentRejected", 1)[0].split(
+        "const verificationRequired",
+        1,
+    )[1]
+    assert "环境存在异常" not in verification_clause
 
 
 def test_boss_collect_surfaces_unknown_api_failure():
@@ -252,6 +353,26 @@ class PlatformDefaultSentDriver(FlowDriver):
             "autoSent": True,
             "platformDefaultSent": True,
             "sentMessage": "已发送 这是我的资料，希望能够成为贵团队的一员。",
+        }
+
+
+class DelayedChatAfterEntryTimeoutDriver(FlowDriver):
+    def click_chat_entry(self):
+        self.calls.append("click_chat_entry")
+        return {
+            "ok": False,
+            "error": "CDP request timed out",
+            "clicked": True,
+            "jobId": "job-1",
+        }
+
+    def inspect_chat_editor(self):
+        self.calls.append("inspect_chat_editor")
+        return {
+            "ok": True,
+            "editorFound": True,
+            "jobId": "",
+            "href": "https://www.zhipin.com/web/geek/chat",
         }
 
 
@@ -342,6 +463,33 @@ def test_boss_send_flow_continues_after_platform_default_sent_dialog():
     ]
     assert attempt.steps[1]["platformDefaultSent"] is True
     assert attempt.steps[2]["step"] == "platform_default_does_not_complete_custom_greeting"
+
+
+def test_boss_send_flow_recovers_job_chat_after_entry_timeout():
+    driver = DelayedChatAfterEntryTimeoutDriver(delivered_sequence=[False, True])
+
+    attempt = execute_boss_greeting_flow(
+        driver,
+        "https://www.zhipin.com/job_detail/job-1.html",
+        "hello",
+    )
+
+    assert attempt.delivered is True
+    assert attempt.error == ""
+    assert driver.calls == [
+        "open_url_in_new_tab",
+        "click_chat_entry",
+        "inspect_chat_editor",
+        "verify_delivery",
+        "fill_chat_message",
+        "click_send",
+        "verify_delivery",
+    ]
+    assert attempt.steps[3] == {
+        "step": "chat_entry_recovered",
+        "ok": True,
+        "jobId": "job-1",
+    }
 
 
 def test_boss_send_flow_verifies_before_failing_missing_editor():

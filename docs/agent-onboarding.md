@@ -179,13 +179,17 @@ Report the resulting `send_count` and reviewed file, then continue automatically
 
 ## 6. User Intervention
 
-Known intervention states include login, CAPTCHA, security verification and resume selection. When one appears:
+Known intervention states include login, CAPTCHA, security verification, slow page loading and resume selection. When one appears:
 
 1. Stop the current action.
 2. Keep the dedicated browser open.
 3. Relay `user_prompt` exactly.
 4. Wait for the user to reply that the action is complete.
 5. Repeat the relevant login check or send command.
+
+For `boss_search_page_load_timeout`, keep the dedicated Chrome open and relay the
+returned `user_prompt`. A retry reuses an already loaded matching search page
+instead of refreshing it, so wait for the visible job list before continuing.
 
 Do not keep retrying while the user is expected to act.
 

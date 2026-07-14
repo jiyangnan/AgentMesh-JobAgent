@@ -388,7 +388,20 @@ class FakeCDP:
         return {}
 
     def evaluate(self, expression: str, **kwargs):
-        return {"result": {"value": '{"url":"https://www.liepin.com/job/1.shtml","title":"Liepin"}'}}
+        return {
+            "result": {
+                "value": json.dumps(
+                    {
+                        "url": "https://www.liepin.com/job/1.shtml",
+                        "title": "Liepin",
+                        "readyState": "complete",
+                        "authenticated": True,
+                        "hasAction": True,
+                        "loginRequired": False,
+                    }
+                )
+            }
+        }
 
 
 def test_cdp_driver_switches_to_platform_tab_for_url(monkeypatch):

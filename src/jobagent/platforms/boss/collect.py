@@ -30,10 +30,21 @@ class BossDataDriver:
 
     API_URL = "https://www.zhipin.com/wapi/zpgeek/search/joblist.json"
     SEARCH_URL = "https://www.zhipin.com/web/geek/jobs"
+    MIN_VISIBLE_PAGE_WAIT_SECONDS = 45
 
-    def __init__(self, driver: BossActionDriver | None = None):
+    def __init__(
+        self,
+        driver: BossActionDriver | None = None,
+        *,
+        visible_page_wait_seconds: int | float | None = None,
+    ):
         self.driver = driver or create_driver()
         self._seen_ids: set[str] = set()
+        requested_wait = float(visible_page_wait_seconds or 0)
+        self.visible_page_wait_seconds = max(
+            float(self.MIN_VISIBLE_PAGE_WAIT_SECONDS),
+            requested_wait,
+        )
 
     def _fetch_page(
         self,
@@ -51,7 +62,14 @@ class BossDataDriver:
         api_fetch = getattr(self.driver, "api_fetch", None)
         if not callable(api_fetch):
             raise RuntimeError("Boss Discover requires the CDP browser driver")
-        result = api_fetch(url)
+        try:
+            result = api_fetch(url)
+        except RuntimeError:
+            # A dedicated Chrome may render Boss successfully while an
+            # in-page fetch is temporarily unavailable. Reuse the visible
+            # search flow instead of classifying that transport failure as a
+            # platform rejection.
+            return self._fetch_visible_page(query, city_code, page, page_size)
         if not isinstance(result, dict):
             raise RuntimeError("Boss job search API returned an unexpected payload")
 
@@ -103,9 +121,14 @@ class BossDataDriver:
         )
         script = build_boss_snapshot_script(limit=page_size)
         if callable(snapshot_page):
-            result = snapshot_page(url, script, wait_seconds=4, timeout=8)
+            result = snapshot_page(
+                url,
+                script,
+                wait_seconds=self.visible_page_wait_seconds,
+                timeout=8,
+            )
         else:
-            opened = open_page(url, wait_seconds=4)
+            opened = open_page(url, wait_seconds=10)
             if not isinstance(opened, dict) or not opened.get("ok"):
                 if isinstance(opened, dict) and opened.get("error") == "verification_required":
                     raise UserActionRequiredError(
@@ -136,6 +159,12 @@ class BossDataDriver:
                 "Boss requires a visible security verification before Discover can continue",
                 "请在已经打开的 Boss 直聘页面完成安全验证，完成后回复我“已完成验证”。",
             )
+        if snapshot.get("environmentRejected"):
+            raise PlatformEnvironmentRejectedError(
+                "boss",
+                "Boss visibly reported that the current browser environment is unavailable",
+                upstream_code=37,
+            )
         cards = snapshot.get("cards")
         if isinstance(cards, list) and (cards or snapshot.get("noResults")):
             normalized_cards = []
@@ -146,6 +175,18 @@ class BossDataDriver:
                 card.setdefault("source", "boss_search_dom_fallback")
                 normalized_cards.append(card)
             return {"code": 0, "zpData": {"jobList": normalized_cards}}
+        if snapshot.get("error") == "search_page_load_timeout":
+            waited = float(
+                snapshot.get("waitedSeconds") or self.visible_page_wait_seconds
+            )
+            ready_state = str(snapshot.get("readyState") or "unknown")
+            raise UserActionRequiredError(
+                "boss_search_page_load_timeout",
+                f"Boss search page did not become ready within {waited:g}s "
+                f"(readyState={ready_state}, cardCount={int(snapshot.get('cardCount') or 0)})",
+                "Boss 搜索页仍在加载。请保持 Job Agent 专用 Chrome 打开，等待页面出现职位列表；"
+                "如果页面要求登录或安全验证，请完成后回复我“页面已就绪”。",
+            )
         raise PlatformEnvironmentRejectedError(
             "boss",
             "Boss rejected the current browser environment and the visible search page returned no readable jobs",

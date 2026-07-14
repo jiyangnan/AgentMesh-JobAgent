@@ -11,7 +11,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from jobagent.cli import _dispatch, _login, build_parser
+from jobagent.cli import _dispatch, _login, _with_login_workflow, build_parser
 from jobagent.infra.protocol import canonical_json_bytes, candidate_digest, digest_payload
 
 
@@ -288,6 +288,124 @@ def test_successful_login_check_advances_round_to_discover(monkeypatch):
 
     assert statuses == [("liepin", "login_verified")]
     assert result["workflow"]["next_suggested"] == "jobagent liepin discover"
+
+
+def test_successful_login_check_preserves_reviewed_progress(monkeypatch):
+    statuses: list[tuple[str, str, str]] = []
+    workflows = iter(
+        [
+            {
+                "platforms": {
+                    "boss": {
+                        "status": "reviewed",
+                        "next_suggested": "jobagent boss greet send --input /tmp/review.json",
+                        "evidence": {"discover_id": "discover-1"},
+                    }
+                }
+            },
+            {
+                "next_suggested": "jobagent boss greet send --input /tmp/review.json",
+            },
+        ]
+    )
+    monkeypatch.setattr("jobagent.infra.rounds.round_status", lambda: next(workflows))
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.set_platform_status",
+        lambda platform, status, **kwargs: statuses.append(
+            (platform, status, kwargs["next_suggested"])
+        ),
+    )
+
+    result = _with_login_workflow("boss", {"ok": True, "logged_in": True})
+
+    assert statuses == [
+        ("boss", "reviewed", "jobagent boss greet send --input /tmp/review.json")
+    ]
+    assert result["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+
+
+def test_login_reauthentication_restores_reviewed_progress(monkeypatch):
+    statuses: list[tuple[str, str, dict, str]] = []
+    workflow = {
+        "platforms": {
+            "boss": {
+                "status": "reviewed",
+                "next_suggested": "jobagent boss greet send --input /tmp/review.json",
+                "evidence": {"discover_id": "discover-1"},
+            }
+        }
+    }
+    blocked_workflow = {
+        "platforms": {
+            "boss": {
+                "status": "blocked",
+                "next_suggested": "jobagent boss login --check",
+                "evidence": {
+                    "discover_id": "discover-1",
+                    "resume_status": "reviewed",
+                    "resume_next_suggested": "jobagent boss greet send --input /tmp/review.json",
+                },
+            }
+        }
+    }
+    after_restore = {
+        "next_suggested": "jobagent boss greet send --input /tmp/review.json"
+    }
+    workflows = iter([workflow, blocked_workflow, blocked_workflow, after_restore])
+    monkeypatch.setattr("jobagent.infra.rounds.round_status", lambda: next(workflows))
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.set_platform_status",
+        lambda platform, status, **kwargs: statuses.append(
+            (platform, status, kwargs["evidence"], kwargs["next_suggested"])
+        ),
+    )
+
+    blocked = _with_login_workflow(
+        "boss",
+        {"ok": False, "logged_in": False, "requires_user_action": True},
+    )
+    restored = _with_login_workflow("boss", {"ok": True, "logged_in": True})
+
+    assert statuses[0][1] == "blocked"
+    assert statuses[0][2]["resume_status"] == "reviewed"
+    assert blocked["next_suggested"] == "jobagent boss login --check"
+    assert statuses[1][1] == "reviewed"
+    assert statuses[1][2]["discover_id"] == "discover-1"
+    assert restored["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+
+
+def test_login_reauthentication_infers_reviewed_progress_after_interruption(monkeypatch):
+    statuses: list[tuple[str, str, str]] = []
+    workflows = iter(
+        [
+            {
+                "platforms": {
+                    "boss": {
+                        "status": "blocked",
+                        "next_suggested": "jobagent boss greet send --input /tmp/review.json",
+                        "evidence": {"error": "interrupted"},
+                    }
+                }
+            },
+            {
+                "next_suggested": "jobagent boss greet send --input /tmp/review.json"
+            },
+        ]
+    )
+    monkeypatch.setattr("jobagent.infra.rounds.round_status", lambda: next(workflows))
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.set_platform_status",
+        lambda platform, status, **kwargs: statuses.append(
+            (platform, status, kwargs["next_suggested"])
+        ),
+    )
+
+    result = _with_login_workflow("boss", {"ok": True, "logged_in": True})
+
+    assert statuses == [
+        ("boss", "reviewed", "jobagent boss greet send --input /tmp/review.json")
+    ]
+    assert result["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
 
 
 @pytest.mark.parametrize(
@@ -763,6 +881,86 @@ def test_boss_send_skips_previously_delivered_jobs_before_opening_browser(tmp_pa
     assert opened == [pending_url]
     assert [attempt.error for attempt in attempts] == ["already_delivered", ""]
     assert attempts[1].delivered is True
+
+
+def test_boss_send_persists_attempt_and_stops_after_platform_default_only(monkeypatch):
+    from jobagent.application.delivery import _boss_send
+    from jobagent.domain.models import SendAttempt
+
+    driver = object()
+    opened: list[str] = []
+    persisted: list[SendAttempt] = []
+    monkeypatch.setattr("jobagent.drivers.boss.create_driver", lambda **_kwargs: driver)
+
+    def fake_send(_driver, url, message):
+        opened.append(url)
+        return SendAttempt(
+            job_url=url,
+            message=message,
+            delivered=False,
+            error="delivery_not_verified",
+            steps=[
+                {
+                    "step": "platform_default_sent",
+                    "platformDefaultSent": True,
+                    "autoSent": True,
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        "jobagent.platforms.boss.send_flow.execute_boss_greeting_flow",
+        fake_send,
+    )
+    attempts = _boss_send(
+        [
+            {"url": "https://www.zhipin.com/job_detail/first.html", "cloud_greeting": "one"},
+            {"url": "https://www.zhipin.com/job_detail/second.html", "cloud_greeting": "two"},
+        ],
+        dry_run=False,
+        on_attempt=persisted.append,
+    )
+
+    assert opened == ["https://www.zhipin.com/job_detail/first.html"]
+    assert attempts == persisted
+    assert len(attempts) == 1
+    assert attempts[0].delivered is False
+
+
+def test_boss_send_stops_after_first_generic_failure(monkeypatch):
+    from jobagent.application.delivery import _boss_send
+    from jobagent.domain.models import SendAttempt
+
+    driver = object()
+    opened: list[str] = []
+    monkeypatch.setattr("jobagent.drivers.boss.create_driver", lambda **_kwargs: driver)
+
+    def fake_send(_driver, url, message):
+        opened.append(url)
+        return SendAttempt(
+            job_url=url,
+            message=message,
+            delivered=False,
+            error="chat_entry_failed",
+            steps=[{"step": "click_chat_entry", "ok": False}],
+        )
+
+    monkeypatch.setattr(
+        "jobagent.platforms.boss.send_flow.execute_boss_greeting_flow",
+        fake_send,
+    )
+
+    attempts = _boss_send(
+        [
+            {"url": "https://www.zhipin.com/job_detail/first.html", "cloud_greeting": "one"},
+            {"url": "https://www.zhipin.com/job_detail/second.html", "cloud_greeting": "two"},
+        ],
+        dry_run=False,
+    )
+
+    assert opened == ["https://www.zhipin.com/job_detail/first.html"]
+    assert len(attempts) == 1
+    assert attempts[0].error == "chat_entry_failed"
 
 
 def test_boss_audit_does_not_treat_platform_default_only_as_personalized_delivery(tmp_path):

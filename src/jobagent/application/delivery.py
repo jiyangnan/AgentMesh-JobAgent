@@ -15,6 +15,9 @@ from jobagent.infra.state import audit_log_path, load_json, save_json
 from jobagent.infra.support import print_first_delivery_star_prompt_once
 
 
+_SKIPPED_SEND_ERRORS = {"already_delivered", "job_unavailable"}
+
+
 @dataclass
 class UserInterventionRequired(RuntimeError):
     code: str
@@ -39,7 +42,13 @@ def _append_boss_audit(attempts: list[Any]) -> None:
     save_json(audit_log_path(), records)
 
 
-def _boss_send(jobs: list[dict[str, Any]], *, dry_run: bool) -> list[Any]:
+def _boss_send(
+    jobs: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+    stop_on_failure: bool = True,
+    on_attempt=None,
+) -> list[Any]:
     from jobagent.domain.models import SendAttempt
 
     delivered_keys = AuditLog().delivered_job_keys()
@@ -96,8 +105,19 @@ def _boss_send(jobs: list[dict[str, Any]], *, dry_run: bool) -> list[Any]:
             str(job.get("cloud_greeting") or ""),
         )
         results.append(attempt)
+        if callable(on_attempt):
+            on_attempt(attempt)
         if attempt.delivered and key:
             delivered_keys.add(key)
+        platform_default_only = (
+            not attempt.delivered
+            and any(
+                isinstance(step, dict) and step.get("platformDefaultSent")
+                for step in attempt.steps
+            )
+        )
+        if platform_default_only or (stop_on_failure and not attempt.delivered):
+            break
     return results
 
 
@@ -145,12 +165,33 @@ def _apply_send(platform: str, jobs: list[dict[str, Any]], *, dry_run: bool, sto
         sender = Job51ApplySender()
     else:
         raise ValueError(f"Unsupported apply platform: {platform}")
-    return sender.send_batch(
+    attempts = sender.send_batch(
         jobs,
         limit=len(jobs),
         dry_run=dry_run,
         stop_on_failure=stop_on_failure,
     )
+    if not dry_run:
+        _raise_for_apply_user_intervention(platform, attempts)
+    return attempts
+
+
+def _raise_for_apply_user_intervention(platform: str, attempts: list[Any]) -> None:
+    for attempt in attempts:
+        for step in reversed(attempt.steps):
+            if not isinstance(step, dict) or not step.get("requires_user_action"):
+                continue
+            code = str(step.get("user_action") or attempt.error or "user_action_required")
+            prompt = str(step.get("user_prompt") or "请在已打开的平台页面完成所需操作。")
+            raise UserInterventionRequired(
+                code,
+                prompt,
+                details={
+                    "platform": platform,
+                    "job_url": attempt.job_url,
+                    "step": step.get("step"),
+                },
+            )
 
 
 def send_reviewed(
@@ -169,15 +210,26 @@ def send_reviewed(
     with active_command(f"jobagent {platform} send"):
         with PlatformSessionLock(platform=platform, command=f"jobagent {platform} send"):
             attempts = (
-                _boss_send(jobs, dry_run=dry_run)
+                _boss_send(
+                    jobs,
+                    dry_run=dry_run,
+                    stop_on_failure=stop_on_failure,
+                    on_attempt=(
+                        None
+                        if dry_run
+                        else lambda attempt: _append_boss_audit([attempt])
+                    ),
+                )
                 if platform == "boss"
                 else _apply_send(platform, jobs, dry_run=dry_run, stop_on_failure=stop_on_failure)
             )
-    if platform == "boss":
-        _append_boss_audit(attempts)
     delivered = sum(1 for attempt in attempts if attempt.delivered)
-    failed = sum(1 for attempt in attempts if not attempt.delivered and attempt.error != "already_delivered")
-    skipped = sum(1 for attempt in attempts if attempt.error == "already_delivered")
+    failed = sum(
+        1
+        for attempt in attempts
+        if not attempt.delivered and attempt.error not in _SKIPPED_SEND_ERRORS
+    )
+    skipped = sum(1 for attempt in attempts if attempt.error in _SKIPPED_SEND_ERRORS)
     print_first_delivery_star_prompt_once(
         platform=platform,
         command=("greet send" if platform == "boss" else "apply send"),

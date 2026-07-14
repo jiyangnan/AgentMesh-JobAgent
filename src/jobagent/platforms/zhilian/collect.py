@@ -22,17 +22,30 @@ from .parser import parse_zhilian_job, zhilian_job_id
 from .selectors import build_zhilian_city_filter_script, build_zhilian_snapshot_script
 
 
-def build_zhilian_search_url(query: str, city: str = "", page: int = 1) -> str:
-    """Build a keyword-only search URL for the Zhilian read-only spike.
+# Zhilian's public search endpoint accepts stable ``jl`` location codes and
+# redirects to the canonical ``/sou/jl<code>/...`` URL.  Prefer that route for
+# verified cities because the visible location panel is dynamically mounted
+# and can ignore otherwise valid native clicks while it is collapsed.
+_ZHILIAN_CITY_CODES = {
+    "北京": "530",
+    "上海": "538",
+}
 
-    Zhilian keeps location in a dedicated filter panel, not in the keyword box.
-    The `city` argument is accepted for API compatibility but intentionally not
-    encoded into the URL; live collection applies it via the page filter UI.
+
+def build_zhilian_search_url(query: str, city: str = "", page: int = 1) -> str:
+    """Build a public Zhilian search URL.
+
+    Verified cities use Zhilian's public ``jl`` query parameter.  Other cities
+    continue through the visible filter-panel fallback in the collector.
     """
-    url = f"https://sou.zhaopin.com/?kw={quote(query)}"
+    parts: list[str] = []
+    city_code = _ZHILIAN_CITY_CODES.get(city.strip().removesuffix("市"))
+    if city_code:
+        parts.append(f"jl={city_code}")
+    parts.append(f"kw={quote(query)}")
     if page > 1:
-        url += f"&p={page}"
-    return url
+        parts.append(f"p={page}")
+    return "https://sou.zhaopin.com/?" + "&".join(parts)
 
 
 @dataclass
@@ -123,7 +136,18 @@ class ZhilianReadOnlyCollector:
                 )
             city_filter: dict[str, Any] = {}
             if city:
-                city_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
+                city_code = _ZHILIAN_CITY_CODES.get(city.strip().removesuffix("市"))
+                if city_code:
+                    city_filter = {
+                        "ok": True,
+                        "mode": "zhilian_city_filter",
+                        "city": city,
+                        "cityCode": city_code,
+                        "applied": True,
+                        "urlEncoded": True,
+                    }
+                else:
+                    city_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
                 if city_filter.get("loginRequired"):
                     return ZhilianCollectResult(
                         query=search_query,

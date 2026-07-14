@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -128,7 +129,10 @@ class Job51ReadOnlyCollector:
                 )
 
             remaining = max(1, limit - len(jobs))
-            snapshot = self._extract_snapshot(limit=remaining)
+            snapshot = self._extract_snapshot(
+                limit=remaining,
+                wait_seconds=wait_seconds,
+            )
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
             snapshots.append(snapshot)
@@ -175,15 +179,60 @@ class Job51ReadOnlyCollector:
             pages=page_count,
         )
 
-    def _extract_snapshot(self, limit: int = 20) -> dict[str, Any]:
-        result = self.driver._exec_js(build_job51_snapshot_script(limit=limit))
-        if isinstance(result, dict) and "raw" in result:
-            try:
-                parsed = json.loads(result["raw"])
-                return parsed if isinstance(parsed, dict) else {}
-            except (json.JSONDecodeError, TypeError):
-                return {"ok": False, "error": "snapshot_parse_failed", "raw": result["raw"]}
-        return result if isinstance(result, dict) else {}
+    def _extract_snapshot(
+        self,
+        limit: int = 20,
+        wait_seconds: int = 8,
+    ) -> dict[str, Any]:
+        script = build_job51_snapshot_script(limit=limit)
+        max_wait = max(30.0, float(wait_seconds))
+        poll_interval = 0.75
+        attempts = max(2, int(math.ceil(max_wait / poll_interval)) + 1)
+        snapshot: dict[str, Any] = {}
+        empty_stable_hits = 0
+        empty_fingerprint = ""
+        for attempt in range(attempts):
+            result = self.driver._exec_js(script)
+            if isinstance(result, dict) and "raw" in result:
+                try:
+                    parsed = json.loads(result["raw"])
+                    snapshot = parsed if isinstance(parsed, dict) else {}
+                except (json.JSONDecodeError, TypeError):
+                    return {"ok": False, "error": "snapshot_parse_failed", "raw": result["raw"]}
+            else:
+                snapshot = result if isinstance(result, dict) else {}
+            if snapshot.get("ok") is False or snapshot.get("loginRequired"):
+                return snapshot
+            if snapshot.get("pageReady"):
+                return snapshot
+            stable_empty_candidate = bool(
+                snapshot.get("appMounted")
+                and not snapshot.get("placeholder")
+                and not snapshot.get("loginPromptPresent")
+                and int(snapshot.get("candidateCount") or 0) == 0
+            )
+            if stable_empty_candidate:
+                fingerprint = "|".join(
+                    (
+                        str(snapshot.get("url") or ""),
+                        str(snapshot.get("bodySnippet") or ""),
+                    )
+                )
+                empty_stable_hits = empty_stable_hits + 1 if fingerprint == empty_fingerprint else 1
+                empty_fingerprint = fingerprint
+                if empty_stable_hits >= 8:
+                    snapshot = {
+                        **snapshot,
+                        "pageReady": True,
+                        "emptyStable": True,
+                    }
+                    return snapshot
+            else:
+                empty_stable_hits = 0
+                empty_fingerprint = ""
+            if attempt < attempts - 1:
+                time.sleep(poll_interval)
+        return snapshot
 
 
 def write_job51_snapshot(path: str | Path, payload: dict[str, Any]) -> None:
@@ -219,4 +268,6 @@ def _snapshot_failure(snapshot: dict[str, Any]) -> str:
         return "job51_login_required"
     if snapshot.get("ok") is False:
         return str(snapshot.get("error") or "job51_snapshot_failed")
+    if "pageReady" in snapshot and not snapshot.get("pageReady"):
+        return "job51_page_not_ready"
     return ""

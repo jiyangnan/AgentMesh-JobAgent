@@ -39,8 +39,41 @@ def test_liepin_public_adapter_uses_current_shenzhen_location_shape():
     )
 
     assert "city=050090" in url and "dq=050090" in url
+    assert "currentPage=0" in url
     assert job.city == "深圳"
     assert job.area == "南山区"
+
+
+def test_liepin_search_pages_are_zero_based_for_all_cities():
+    first = build_liepin_search_url("AI产品负责人", city="上海市", page=1)
+    second = build_liepin_search_url("AI产品负责人", city="上海市", page=2)
+
+    assert "city=020" in first
+    assert "dq=020" in first
+    assert "currentPage=0" in first
+    assert "currentPage=1" in second
+
+
+def test_liepin_search_uses_live_beijing_city_code():
+    url = build_liepin_search_url("数据产品负责人", city="北京", page=1)
+
+    assert "city=010" in url
+    assert "dq=010" in url
+
+
+def test_liepin_parser_uses_canonical_url_identity_without_tracking_query():
+    raw = {
+        "jobTitle": "AI产品经理",
+        "jobUrl": (
+            "https://www.liepin.com/job/1984063863.shtml"
+            "?skId=volatile&index=1"
+        ),
+    }
+
+    job = parse_liepin_job(raw, city_name="深圳")
+
+    assert liepin_job_id(raw) == "1984063863"
+    assert job.url == "https://www.liepin.com/job/1984063863.shtml"
 
 
 def test_zhilian_public_parser_extracts_stable_identity():
