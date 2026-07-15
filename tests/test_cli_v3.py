@@ -203,6 +203,43 @@ def test_doctor_env_verifies_current_api_key(monkeypatch):
     assert "jobagent init --key" in result["api_key_action"]
 
 
+def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypatch):
+    from jobagent import cli
+
+    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: "agentmesh_live_trial")
+    monkeypatch.setattr("jobagent.infra.cloud_client.health", lambda: {"status": "ok"})
+    monkeypatch.setattr(
+        "jobagent.infra.cloud_client.me",
+        lambda: {
+            "account": {
+                "credit": 50,
+                "tier": "free",
+                "unlimited": False,
+                "source": "signup_trial",
+                "expires_at": "2026-07-30T00:00:00Z",
+            }
+        },
+    )
+    monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json")
+
+    result = cli._doctor_env()
+
+    assert result["ok"] is True
+    assert result["api_key_valid"] is True
+    assert result["cloud_access"] == {
+        "usable": True,
+        "reason": "signup_trial_active",
+        "credit": 50,
+        "source": "signup_trial",
+        "expires_at": "2026-07-30T00:00:00Z",
+        "required_credits": 5,
+        "paid_pass_required": False,
+        "next_suggested": "jobagent resume analyze --file <resume>",
+    }
+    assert result["api_key_action"] is None
+    assert result["next_suggested"] == "jobagent resume analyze --file <resume>"
+
+
 def test_round_skip_requires_explicit_confirmation(monkeypatch):
     args = build_parser().parse_args(["round", "skip", "--platform", "liepin"])
 
@@ -486,6 +523,29 @@ def test_public_agent_docs_forbid_batch_login_and_require_vertical_completion():
     for text in docs:
         assert "Never pre-login future platforms" in text
         assert "complete its audit before logging in to the next platform" in text
+
+
+def test_public_agent_docs_treat_signup_trial_as_immediately_usable():
+    root = Path(__file__).resolve().parents[1]
+    agent_contract = (root / "AGENTS.md").read_text(encoding="utf-8")
+    docs = [
+        (root / "README.md").read_text(encoding="utf-8"),
+        (root / "docs/agent-onboarding.md").read_text(encoding="utf-8"),
+        (root / "skills/claude-code/SKILL.md").read_text(encoding="utf-8"),
+        (root / "skills/openclaw-job-agent/SKILL.md").read_text(encoding="utf-8"),
+    ]
+
+    for text in docs:
+        assert "active monthly pass and available credits" not in text
+        assert "50 shared trial credits" in text
+    for skill in docs[2:]:
+        assert "jobagent doctor env" in skill
+        assert "cloud_access.usable=true" in skill
+        assert "paid_pass_required=true" in skill
+        assert "无需购买通行证" in skill
+    assert "50 shared trial credits" in agent_contract
+    assert "jobagent doctor env" in agent_contract
+    assert "continue with `next_suggested`" in agent_contract
 
 
 def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch, capsys):

@@ -2,6 +2,26 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.17] - 2026-07-16
+
+### Fixed
+
+- `jobagent doctor env` now exposes a machine-readable cloud-access decision, remaining credits, entitlement source, expiry and the next runnable command.
+- An active signup trial is treated as immediately usable without a paid pass; Agent guides must report the trial and continue instead of asking the user to purchase.
+- The public onboarding, Claude Code and OpenClaw assets now reserve the purchase prompt for a real `insufficient_credits` result.
+
+## [0.3.16] - 2026-07-13
+
+### Fixed
+
+- Boss Discover distinguishes environment rejection from login or verification requirements and uses a bounded visible-page recovery for `code=37`.
+
+## [0.3.15] - 2026-07-13
+
+### Fixed
+
+- Hardened upgrades from older clients, preserved active round state and improved cross-environment platform delivery diagnostics.
+
 ## [0.3.14] - 2026-07-12
 
 ### Fixed

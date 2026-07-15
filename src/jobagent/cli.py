@@ -116,6 +116,49 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool) -> dict[str, Any]:
+    account = account_response.get("account") or {}
+    credit = account.get("credit")
+    unlimited = bool(account.get("unlimited") or credit == "unlimited")
+    numeric_credit: int | None = None
+    if not unlimited:
+        try:
+            numeric_credit = int(credit)
+        except (TypeError, ValueError):
+            numeric_credit = None
+    required_credits = 10 if profile_exists else 5
+    usable = unlimited or (numeric_credit is not None and numeric_credit >= required_credits)
+    source = account.get("source") or "none"
+    if unlimited:
+        reason = "unlimited"
+    elif usable and source == "signup_trial":
+        reason = "signup_trial_active"
+    elif usable:
+        reason = "credits_available"
+    elif numeric_credit is None:
+        reason = "credit_status_unavailable"
+    else:
+        reason = "insufficient_credits"
+    return {
+        "usable": usable,
+        "reason": reason,
+        "credit": credit,
+        "source": source,
+        "expires_at": account.get("expires_at"),
+        "required_credits": required_credits,
+        "paid_pass_required": (
+            False if usable else reason == "insufficient_credits" or None
+        ),
+        "next_suggested": (
+            "jobagent boss discover"
+            if usable and profile_exists
+            else "jobagent resume analyze --file <resume>"
+            if usable
+            else None
+        ),
+    }
+
+
 def _init(args: argparse.Namespace) -> dict[str, Any]:
     from jobagent.infra import cloud_client
     from jobagent.infra.credentials import save_api_key
@@ -133,7 +176,13 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {"ok": True, "credentials_path": str(path)}
     if account is not None:
         payload["account"] = account
-    payload["next_suggested"] = "jobagent resume analyze --file <resume>"
+        payload["cloud_access"] = _cloud_access(account, profile_exists=False)
+    access = payload.get("cloud_access") or {}
+    payload["next_suggested"] = access.get("next_suggested") or (
+        "https://agentmesh360.com/app/#pricing"
+        if access.get("paid_pass_required")
+        else "jobagent doctor env"
+    )
     return payload
 
 
@@ -151,21 +200,39 @@ def _doctor_env() -> dict[str, Any]:
         cloud = {"ok": False, "error": str(exc)}
     key_valid = False
     key_error: str | None = None
+    account_response: dict[str, Any] | None = None
     if key_present:
         key = str(load_api_key() or "")
         if key.startswith("jba_live_"):
             key_error = "retired_license_key"
         elif cloud.get("status") == "ok":
             try:
-                cloud_client.me()
+                account_response = cloud_client.me()
                 key_valid = True
             except cloud_client.CloudError as exc:
                 key_error = exc.code or "api_key_verification_failed"
+    from jobagent.infra.state import profile_path
+
+    access = (
+        _cloud_access(account_response, profile_exists=profile_path().exists())
+        if account_response is not None
+        else {
+            "usable": False,
+            "reason": key_error or "api_key_required",
+            "credit": None,
+            "source": "none",
+            "expires_at": None,
+            "required_credits": 5,
+            "paid_pass_required": None,
+            "next_suggested": None,
+        }
+    )
     return {
         "ok": bool(
             shutil.which("python3")
             and key_present
             and key_valid
+            and access["usable"]
             and cloud.get("status") == "ok"
         ),
         "python": sys.version.split()[0],
@@ -178,8 +245,15 @@ def _doctor_env() -> dict[str, Any]:
         "api_key_valid": key_valid,
         "api_key_error": key_error,
         "api_key_action": (
-            None if key_valid else "jobagent init --key <your_api_key>"
+            None
+            if key_valid and access["usable"]
+            else "https://agentmesh360.com/app/#pricing"
+            if access.get("paid_pass_required")
+            else "jobagent init --key <your_api_key>"
         ),
+        "account": account_response.get("account") if account_response else None,
+        "cloud_access": access,
+        "next_suggested": access.get("next_suggested"),
         "cloud": cloud,
     }
 

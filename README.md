@@ -26,7 +26,7 @@ Resume profile
 
 One completed Discover covers one platform, processes up to 100 deduplicated candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
 
-Job Agent uses an AgentMesh API Key. Create one from the [AgentMesh 360 account center](https://agentmesh360.com/app/). The AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products. It does not renew automatically, and unused credits expire with the pass.
+Job Agent uses an AgentMesh360 universal API Key. Create one from the [AgentMesh360 account center](https://agentmesh360.com/app/). A verified new account receives 50 shared trial credits valid for 14 days and can use them immediately without buying a pass. When the trial balance is insufficient or expired, the optional monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products. It does not renew automatically, and unused credits expire with the pass.
 
 ## Install
 

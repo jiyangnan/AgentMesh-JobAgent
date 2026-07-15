@@ -21,7 +21,9 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 
 ## Safety Contract
 
-- Never invent an API Key. Ask the user to create one at `https://agentmesh360.com/app/`, ensure the account has an active monthly pass and available credits, and wait.
+- Never invent an API Key. Ask the user to create an AgentMesh360 universal Key at `https://agentmesh360.com/app/` and wait. A verified signup trial with sufficient unexpired credits is immediately usable and does not require a paid pass.
+- After configuring the Key, run `jobagent doctor env`. If `cloud_access.usable=true`, briefly report the active balance source and run `next_suggested` immediately. Never block on `Pass: not purchased`; ask for a purchase only when `paid_pass_required=true` or a real cloud command returns `insufficient_credits`.
+- For `signup_trial_active`, tell the user: `你的 AgentMesh360 新用户体验额度当前有效：剩余 {credit} credits，有效期至 {expires_at}。无需购买通行证，我现在继续执行下一步。` Then execute `next_suggested` without asking for confirmation.
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job as complete vertical chains. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> send -> audit` chain and complete its audit before logging in to the next platform. Never operate their shared browser concurrently.
 - Stop whenever `requires_user_action=true`; relay `user_prompt` exactly and wait.
 - Report `selected / review / rejected`, then automatically deliver the signed `selected` list without asking again.
@@ -53,7 +55,7 @@ jobagent doctor env
 jobagent resume analyze --file <resume-path> --target-role "<role>" --target-cities <cities>
 ```
 
-Each completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds. The AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products without automatic renewal.
+Each completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. Verified new accounts receive 50 shared trial credits valid for 14 days. The signed cloud response is authoritative for charges and refunds. When trial credits are insufficient or expired, the optional AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products without automatic renewal.
 
 ## Platform Flow
 
