@@ -10,7 +10,7 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 
 ## Required Behavior
 
-- Never invent an AgentMesh API Key. Without one, ask the user to create it at `https://agentmesh360.com/app/` and wait.
+- Never invent an AgentMesh API Key. Without one, ask the user to create it at `https://agentmesh360.com/app/`, ensure the account has an active monthly pass and available credits, and wait.
 - Run platforms as complete vertical chains: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> send -> audit` chain and complete its audit before logging in to the next platform.
 - When output contains `requires_user_action=true`, stop, relay `user_prompt` and wait for the user.
 - Report `selected / review / rejected`, then automatically deliver signed `selected` jobs without asking again for each platform.
@@ -33,7 +33,7 @@ jobagent resume analyze --file <resume-path> \
   --target-cities <city1> <city2>
 ```
 
-One completed Discover covers one platform and processes at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as authoritative for future policy changes.
+One completed Discover covers one platform, processes at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds. The AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products without automatic renewal.
 
 ## Boss直聘
 

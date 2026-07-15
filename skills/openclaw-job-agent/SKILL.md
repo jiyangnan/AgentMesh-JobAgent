@@ -21,7 +21,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 
 ## Safety Contract
 
-- Never invent an API Key. Ask the user to create one at `https://agentmesh360.com/app/` and wait.
+- Never invent an API Key. Ask the user to create one at `https://agentmesh360.com/app/`, ensure the account has an active monthly pass and available credits, and wait.
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job as complete vertical chains. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> send -> audit` chain and complete its audit before logging in to the next platform. Never operate their shared browser concurrently.
 - Stop whenever `requires_user_action=true`; relay `user_prompt` exactly and wait.
 - Report `selected / review / rejected`, then automatically deliver the signed `selected` list without asking again.
@@ -53,7 +53,7 @@ jobagent doctor env
 jobagent resume analyze --file <resume-path> --target-role "<role>" --target-cities <cities>
 ```
 
-Each completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as authoritative for future policy changes.
+Each completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds. The AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products without automatic renewal.
 
 ## Platform Flow
 

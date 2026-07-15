@@ -31,7 +31,7 @@ The CLI persists the four-platform order and returns one `next_suggested` comman
 
 Do not collect logins as a separate setup phase. At round start, log in to Boss only. Do not open or request the Liepin login until Boss audit has advanced `workflow.current_platform` to `liepin`; apply the same rule to Zhilian and 51Job.
 
-One completed platform Discover accepts at most 100 candidate jobs. AgentMesh 360 is currently in free-open mode: every account has unlimited access and Discover deducts 0 credits. Treat the signed cloud response as the authority for any future charge or refund policy.
+One completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds: pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice. The AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products without automatic renewal.
 
 ## 1. Install
 
@@ -70,7 +70,7 @@ Do not start a platform while `upgrade-check` returns `ok=false` or a command re
 
 If the user has not supplied an API Key, say:
 
-> 请打开 https://agentmesh360.com/app/ 注册或登录，在个人中心生成 Job Agent API Key。拿到以后发给我，我再继续。请不要把 API Key 发到公开 Issue。
+> 请打开 https://agentmesh360.com/app/ 注册或登录，在个人中心生成 Job Agent API Key，并确认账户有有效的月度通行证和可用 credits。通行证为 ¥29 / 30 天 / 1000 credits，AgentMesh360 全产品共享且不会自动续费。拿到 API Key 以后发给我，我再继续。请不要把 API Key 发到公开 Issue。
 
 Wait for the user. Then run:
 

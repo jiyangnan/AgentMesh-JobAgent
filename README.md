@@ -1,6 +1,8 @@
 # AgentMesh Job Agent
 
-Job Agent is an Agent-native CLI for discovering and applying to relevant jobs with the user's own browser session.
+Job Agent is an Agent-native job-search product. Its open-source CLI connects recruiting platforms through the user's own browser session, while AgentMesh360 cloud intelligence provides the official candidate profile, job decisions and personalized communication.
+
+The cloud turns the resume into a recruiter-side 36-dimension candidate profile, creates profile-driven search plans, classifies every deduplicated job into signed `selected / review / rejected` results with reasons and risks, and generates evidence-grounded personalized greetings where the platform supports them. The CLI verifies those official results before delivery.
 
 It supports four independent recruiting-platform workflows:
 
@@ -22,9 +24,9 @@ Resume profile
   -> completed round
 ```
 
-One completed Discover covers one platform and processes up to 100 deduplicated candidate jobs. AgentMesh 360 is currently in free-open mode, so every account has unlimited access and a completed Discover deducts 0 credits. If paid mode is introduced later, the signed cloud response remains the authority for any charge or refund.
+One completed Discover covers one platform, processes up to 100 deduplicated candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
 
-Job Agent uses an AgentMesh API Key. Create one from the [AgentMesh 360 account center](https://agentmesh360.com/app/).
+Job Agent uses an AgentMesh API Key. Create one from the [AgentMesh 360 account center](https://agentmesh360.com/app/). The AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products. It does not renew automatically, and unused credits expire with the pass.
 
 ## Install
 
