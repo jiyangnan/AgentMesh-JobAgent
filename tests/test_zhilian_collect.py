@@ -21,6 +21,15 @@ def test_build_zhilian_search_url_encodes_verified_shanghai_city_and_page():
     )
 
 
+def test_build_zhilian_search_url_encodes_verified_shenzhen_city():
+    url = build_zhilian_search_url("高级产品经理", city="深圳市", page=1)
+
+    assert url == (
+        "https://sou.zhaopin.com/?jl=489&"
+        "kw=%E9%AB%98%E7%BA%A7%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86"
+    )
+
+
 def test_build_zhilian_search_url_keeps_ui_fallback_for_unknown_city():
     url = build_zhilian_search_url("BI负责人", city="杭州", page=1)
 

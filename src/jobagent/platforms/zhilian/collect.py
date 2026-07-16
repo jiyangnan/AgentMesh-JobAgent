@@ -29,6 +29,7 @@ from .selectors import build_zhilian_city_filter_script, build_zhilian_snapshot_
 _ZHILIAN_CITY_CODES = {
     "北京": "530",
     "上海": "538",
+    "深圳": "489",
 }
 
 
