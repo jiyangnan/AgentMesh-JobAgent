@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.3.18] - 2026-07-17
+
+### Fixed
+
+- Zhilian Shenzhen searches now use the verified public `jl=489` route instead of the fragile visible-filter fallback.
+- The post-release customer-validation fix is now included in the signed managed-client release.
+
 ## [0.3.17] - 2026-07-16
 
 ### Fixed
