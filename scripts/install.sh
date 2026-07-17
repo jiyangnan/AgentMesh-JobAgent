@@ -129,10 +129,13 @@ Next steps:
 4. Analyze your resume:
      jobagent resume analyze --file ~/Downloads/your-resume.pdf
 
-5. Start with one platform:
-     jobagent boss discover
+5. Start the four-platform round:
+     jobagent round start
 
-6. Read the full guide:
+6. Follow the current platform:
+     jobagent boss login --check
+
+7. Read the full guide:
      $INSTALL_DIR/README.md
 
 EOF

@@ -1207,18 +1207,18 @@ def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
         {
             "product": "jobagent",
             "channel": "stable",
-            "latest_client_version": "0.4.1",
+            "latest_client_version": "0.4.2",
             "minimum_supported_version": "0.3.0",
             "protocol_version": 1,
-            "git_tag": "v0.4.1",
+            "git_tag": "v0.4.2",
             "git_commit": "a" * 40,
             "artifact_sha256": "b" * 64,
             "published_at": "2026-07-11T00:00:00Z",
             "required": False,
-            "notes_url": "https://example.test/v0.4.1",
+            "notes_url": "https://example.test/v0.4.2",
         },
     )
-    assert updates.verify_release_manifest(manifest)["latest_client_version"] == "0.4.1"
+    assert updates.verify_release_manifest(manifest)["latest_client_version"] == "0.4.2"
     monkeypatch.setattr(updates, "fetch_release_manifest", lambda **_kwargs: manifest)
     monkeypatch.setattr(updates, "_package_root", lambda: tmp_path)
     result = updates.check_for_update(auto_apply=True)

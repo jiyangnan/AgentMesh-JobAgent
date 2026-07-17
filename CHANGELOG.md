@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.1] - 2026-07-17
+
+### Fixed
+
+- The macOS/Linux and Windows installers now start the post-install workflow with `jobagent round start`, followed by the current platform's login check. They no longer direct a new user to run Boss Discover before a round exists.
+
 ## [0.4.0] - 2026-07-17
 
 ### Changed
