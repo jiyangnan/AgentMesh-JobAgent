@@ -15,6 +15,19 @@ def test_cli_version_matches_package_metadata():
     assert __version__ == metadata["project"]["version"]
 
 
+@pytest.mark.parametrize(
+    "relative",
+    ["skills/claude-code/SKILL.md", "skills/openclaw-job-agent/SKILL.md"],
+)
+def test_skill_version_matches_cli_version(relative):
+    lines = (ROOT / relative).read_text(encoding="utf-8").splitlines()
+    skill_version = next(
+        line.removeprefix("version: ") for line in lines if line.startswith("version: ")
+    )
+
+    assert skill_version == __version__
+
+
 @pytest.mark.parametrize("relative", ["scripts/install.sh", "scripts/install.ps1"])
 def test_official_installer_targets_public_repo_and_current_credential_term(relative):
     text = (ROOT / relative).read_text(encoding="utf-8")

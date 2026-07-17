@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.4] - 2026-07-17
+
+### Fixed
+
+- Synchronize Claude Code and OpenClaw Skill frontmatter versions with the CLI release.
+- Add a release-contract test that prevents Skill metadata from drifting behind the Python package version.
+
 ## [0.4.3] - 2026-07-17
 
 ### Changed
