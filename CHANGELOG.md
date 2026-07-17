@@ -2,6 +2,17 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.3] - 2026-07-17
+
+### Changed
+
+- New AgentMesh360 accounts now start with zero cloud credits. Public Agent instructions no longer promise a signup grant and direct users to the monthly pass only after `doctor env` reports `insufficient_credits`.
+- Registration, universal API Key creation, and the open-source client remain free; AgentMesh360 cloud capabilities use shared credits.
+
+### Compatibility
+
+- Previously issued signup-trial credits remain usable until their original expiry. When Core returns `signup_trial_active`, the Agent reports the returned balance and expiry and continues without asking the user to buy a pass.
+
 ## [0.4.2] - 2026-07-17
 
 ### Added

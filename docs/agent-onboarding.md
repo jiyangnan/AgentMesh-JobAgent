@@ -33,7 +33,7 @@ The CLI persists the four-platform order and returns one `next_suggested` comman
 
 Do not collect logins as a separate setup phase. At round start, log in to Boss only. Do not open or request the Liepin login until Boss audit has advanced `workflow.current_platform` to `liepin`; apply the same rule to Zhilian and 51Job.
 
-One completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds: pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice. A verified new account receives 50 shared trial credits valid for 14 days and can use them immediately without a paid pass. After those credits are insufficient or expire, the optional AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 shared credits without automatic renewal.
+One completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds: pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice. Registration, API Key creation, and the open-source client are free; new accounts start with zero cloud credits. The optional AgentMesh360 monthly pass costs CNY 29, lasts 30 days, and includes 1,000 shared credits without automatic renewal. Previously issued signup-trial credits remain usable until their original expiry.
 
 ## 1. Install
 
@@ -86,13 +86,13 @@ This preserves the previous account's local state and reuses the recruiting-site
 
 If the user has not supplied an API Key, say:
 
-> 请打开 https://agentmesh360.com/app/ 注册或登录，在个人中心生成 AgentMesh360 全平台通用 API Key。新用户完成验证后会获得 50 个共享体验 credits，14 天内可直接使用，不需要先购买通行证。拿到 API Key 以后发给我，我再继续。请不要把 API Key 发到公开 Issue。
+> 请打开 https://agentmesh360.com/app/ 免费注册或登录，在个人中心生成 AgentMesh360 全平台通用 API Key。开源客户端可免费使用；调用 AgentMesh360 云端能力需要可用 credits，新账户初始云端积分为 0。拿到 API Key 以后发给我，我再继续。请不要把 API Key 发到公开 Issue。
 
-After the API Key is configured, run `jobagent doctor env`. Treat `environment_healthy` as the environment result and `workflow.ready` as execution readiness; do not reinterpret one as the other. If `cloud_access.usable=true`, tell the user which balance source is active and immediately execute the top-level `next_suggested`; `signup_trial_active` explicitly means no paid pass is required. Do not inspect or block on the dashboard's pass-purchase status. Ask the user to purchase only when the CLI returns `cloud_access.reason=insufficient_credits` with `paid_pass_required=true`, or a real cloud command returns `insufficient_credits`.
+After the API Key is configured, run `jobagent doctor env`. Treat `environment_healthy` as the environment result and `workflow.ready` as execution readiness; do not reinterpret one as the other. If `cloud_access.usable=true`, tell the user which balance source is active and immediately execute the top-level `next_suggested`; `signup_trial_active` is a grandfathered entitlement and explicitly means no paid pass is required. Do not inspect or block on the dashboard's pass-purchase status. Ask the user to purchase only when the CLI returns `cloud_access.reason=insufficient_credits` with `paid_pass_required=true`, or a real cloud command returns `insufficient_credits`.
 
 When `cloud_access.reason=signup_trial_active`, say this before continuing, filling in the returned values:
 
-> 你的 AgentMesh360 新用户体验额度当前有效：剩余 `{credit}` credits，有效期至 `{expires_at}`。无需购买通行证，我现在继续执行下一步。
+> 你的 AgentMesh360 账户仍有此前发放的体验额度：剩余 `{credit}` credits，有效期至 `{expires_at}`。无需购买通行证，我现在继续执行下一步。
 
 Immediately run the returned `next_suggested` command after this message. Do not ask for confirmation.
 
