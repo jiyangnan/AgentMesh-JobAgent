@@ -52,9 +52,26 @@ jobagent doctor env
 jobagent resume analyze --file ~/Downloads/resume.pdf \
   --target-role "AI产品经理" \
   --target-cities 深圳 北京
+jobagent round start
 ```
 
 After an existing installation updates, Job Agent automatically clears rebuildable runtime caches and migrates compatible saved state before any platform command. API Keys, recruiting-site login cookies, resume profiles, audit history and user preferences are preserved. Run `jobagent upgrade-check`; if it returns `ok=false`, follow `next_suggested` and repeat the check before opening a platform.
+
+Local profiles, rounds, decisions and audits are bound to the opaque AgentMesh account behind the configured API Key. Existing pre-`0.4.0` state is never claimed silently. Confirm it once only when it belongs to the current account:
+
+```bash
+jobagent account status
+jobagent account bind --confirm-legacy
+```
+
+When changing to a Key from another account, preserve the previous account's state and enter the new account namespace explicitly:
+
+```bash
+jobagent init --key <new_api_key>
+jobagent account switch --new-state
+```
+
+The recruiting-site Chrome profile remains available; account-owned profiles, rounds, decisions and audits are saved and restored separately.
 
 Do not delete `~/.jobagent` or the Job Agent Chrome profile as a general upgrade fix. When the CLI returns `client_upgrade_required`, relay every reported conflict and use its recovery command instead.
 
@@ -62,9 +79,10 @@ The resume original and recruiting-site cookies remain on the user's machine. Th
 
 ## Platform Commands
 
-Start by reading the persisted round state:
+Start a new round explicitly. Reading status never creates a round:
 
 ```bash
+jobagent round start
 jobagent round status
 ```
 
@@ -73,6 +91,22 @@ Every platform command returns a `workflow` object. A platform audit does not en
 ```bash
 jobagent round skip --platform <platform> --confirm-skip
 ```
+
+Long Discover and delivery operations emit timestamped stage events and periodic heartbeats. Audits are compact by default:
+
+```bash
+jobagent round audit
+jobagent round audit --failures-only
+jobagent round audit --platform liepin --details --recent 20
+```
+
+If an existing Job Agent browser appears slow, stuck or incorrectly classified as logged out, inspect it without launching Chrome or navigating away from the current page:
+
+```bash
+jobagent browser diagnose --platform boss
+```
+
+The diagnostic separates CDP reachability, tab presence, page readiness and login evidence. Follow its `next_suggested`; do not clear the Chrome profile as a first response.
 
 ### Boss直聘
 
@@ -118,6 +152,8 @@ jobagent 51job audit
 
 猎聘 completes two verified actions for every selected job: it sends the resume associated with the user's platform account and then sends the signed personalized greeting generated from the resume profile and job. A platform-owned default introduction does not count as the personalized greeting. 智联招聘 and 51Job remain resume-submit workflows; on 51Job, the web chat entry is a mobile QR handoff.
 
+Boss and 猎聘 require a non-empty signed personalized greeting of at most 100 characters before either preview or real delivery can proceed. Their success records include the delivered-message evidence. 智联招聘 and 51Job explicitly report personalized message delivery as unsupported instead of treating a review note as a sent message.
+
 ## Review Rules
 
 - `selected` jobs are delivered automatically after signed review; the Agent does not ask for another confirmation on each platform.
@@ -126,6 +162,7 @@ jobagent 51job audit
 - Boss review excludes jobs already recorded as successfully delivered, and the send command checks the audit history again before opening any job page.
 - Send commands intentionally have no per-platform confirmation flag.
 - Recruiting-platform browser actions run serially in the product order shown above.
+- `jobagent round start` is the only command that creates a new round. A completed round stays completed until that explicit command runs.
 - Never pre-login future platforms. Enter only the current platform, finish its `login -> discover -> review -> send -> audit` chain, and complete its audit before logging in to the next platform.
 - Completing one platform is not completing the round. The Agent must follow `workflow.next_suggested` until `workflow.workflow_complete=true`.
 - One send covers the complete reviewed selected list, up to 100 jobs. The default send limit is 100.

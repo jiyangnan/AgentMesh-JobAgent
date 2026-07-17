@@ -2,6 +2,28 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.0] - 2026-07-17
+
+### Changed
+
+- Local profiles, rounds, decisions and audits are now bound to a stable opaque AgentMesh account reference. Legacy state requires one explicit ownership confirmation; switching accounts preserves and restores separate account-owned state.
+- `jobagent round start` is the only operation that creates a round. Doctor and status commands report existing state without silently starting work.
+- Doctor output now separates environment health, cloud access, local account state and workflow readiness, with one authoritative top-level `next_suggested`.
+- Platform and round audits return compact summaries by default. `--failures-only` and `--details` expose bounded records when requested.
+- Boss and Liepin enforce a signed personalized-message contract before preview or delivery. Both accept at most 100 characters; Zhilian and 51Job explicitly remain resume-submit-only.
+
+### Added
+
+- Timestamped progress stages and periodic heartbeats for long Discover and delivery operations.
+- `jobagent round audit` for one compact four-platform result.
+- `jobagent browser diagnose --platform <platform>` for read-only CDP, tab, page-readiness and login-evidence diagnostics.
+- Zhilian city-code discovery from visible platform controls, multi-signal verification and a local verified cache, with fail-closed/no-charge behavior when the requested city cannot be proven.
+
+### Upgrade Notes
+
+- Existing pre-`0.4.0` state is not claimed automatically. When it belongs to the configured account, run `jobagent account bind --confirm-legacy` once.
+- When a new API Key belongs to another account, run `jobagent account switch --new-state`; do not delete `~/.jobagent` or the dedicated Chrome profile.
+
 ## [0.3.18] - 2026-07-17
 
 ### Fixed

@@ -12,6 +12,7 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 6. Do not close the dedicated Job Agent Chrome window during a workflow.
 7. Do not stop after one platform. Read the `workflow` object after every command and continue while `workflow.continue_required=true`.
 8. Report the overall round complete only when `workflow.workflow_complete=true`. Skipping a platform requires the user's explicit approval and `jobagent round skip --platform <platform> --confirm-skip`.
+9. Create a round only with `jobagent round start`. `doctor env`, `round status` and platform commands must never be treated as implicit authorization to create another round.
 
 ## Goal, Actions and Acceptance
 
@@ -24,6 +25,7 @@ Before each platform, state:
 At the start of a round, run:
 
 ```bash
+jobagent round start
 jobagent round status
 ```
 
@@ -66,13 +68,27 @@ The CLI automatically migrates compatible state and clears only rebuildable runt
 
 Do not start a platform while `upgrade-check` returns `ok=false` or a command returns `client_upgrade_required`. Relay all conflicts, run the first `next_suggested` recovery action, and repeat `upgrade-check` until all persisted state is compatible.
 
+Starting with `0.4.0`, profiles, rounds, decisions and audits are bound to the opaque AgentMesh account behind the active API Key. If the CLI returns `local_state_owner_required`, do not continue or infer ownership. Ask the user to confirm that the existing local Job Agent state belongs to the current account, then run exactly:
+
+```bash
+jobagent account bind --confirm-legacy
+```
+
+If it returns `local_state_account_mismatch`, explain that the configured Key belongs to another account. After the user confirms the account switch, run:
+
+```bash
+jobagent account switch --new-state
+```
+
+This preserves the previous account's local state and reuses the recruiting-site Chrome profile. Never edit `state_owner.json` or move account state manually.
+
 ## 2. Configure API Key
 
 If the user has not supplied an API Key, say:
 
 > 请打开 https://agentmesh360.com/app/ 注册或登录，在个人中心生成 AgentMesh360 全平台通用 API Key。新用户完成验证后会获得 50 个共享体验 credits，14 天内可直接使用，不需要先购买通行证。拿到 API Key 以后发给我，我再继续。请不要把 API Key 发到公开 Issue。
 
-After the API Key is configured, run `jobagent doctor env`. If `cloud_access.usable=true`, tell the user which balance source is active and immediately execute `next_suggested`; `signup_trial_active` explicitly means no paid pass is required. Do not inspect or block on the dashboard's pass-purchase status. Ask the user to purchase only when the CLI returns `cloud_access.reason=insufficient_credits` with `paid_pass_required=true`, or a real cloud command returns `insufficient_credits`.
+After the API Key is configured, run `jobagent doctor env`. Treat `environment_healthy` as the environment result and `workflow.ready` as execution readiness; do not reinterpret one as the other. If `cloud_access.usable=true`, tell the user which balance source is active and immediately execute the top-level `next_suggested`; `signup_trial_active` explicitly means no paid pass is required. Do not inspect or block on the dashboard's pass-purchase status. Ask the user to purchase only when the CLI returns `cloud_access.reason=insufficient_credits` with `paid_pass_required=true`, or a real cloud command returns `insufficient_credits`.
 
 When `cloud_access.reason=signup_trial_active`, say this before continuing, filling in the returned values:
 
@@ -99,6 +115,8 @@ jobagent resume analyze --file <resume-path> \
 ```
 
 Acceptance: output reports `ok=true` and a saved profile path.
+
+Then execute the returned `jobagent round start`. This explicit command begins the four-platform round and authorizes automatic delivery of signed `selected` jobs for that round.
 
 ## 4. Run One Platform
 
@@ -201,7 +219,34 @@ instead of refreshing it, so wait for the visible job list before continuing.
 
 Do not keep retrying while the user is expected to act.
 
-## 7. Updates
+When the page appears slow or login evidence conflicts with what the user sees, run the read-only diagnostic before asking the user to log in again:
+
+```bash
+jobagent browser diagnose --platform <platform>
+```
+
+It must not launch Chrome or navigate. Interpret `cdp_reachable`, `page.ready_state`, `login.state` and `ready_for_platform_work` separately. `page_observed` with `login.state=unknown` or `conflicting` is not proof that the user is logged out.
+
+## 7. Progress and Audit
+
+Forward timestamped stage events and heartbeat updates during long Discover and delivery operations so the user knows the task is active. Do not replace the CLI's completed/failed counts with estimates.
+
+Use the compact round summary for normal completion reporting:
+
+```bash
+jobagent round audit
+```
+
+Read expanded records only when needed:
+
+```bash
+jobagent round audit --failures-only
+jobagent round audit --platform <platform> --details --recent 20
+```
+
+Do not dump complete local audit files into the conversation.
+
+## 8. Updates
 
 Official installer-managed clients check signed release policy between commands and update only when no Discover/send action is active. Developer source checkouts receive a notice and are not modified.
 
@@ -213,7 +258,7 @@ jobagent update check
 
 An `update_required` response must be resolved before continuing a cloud workflow.
 
-## 8. Completion Report
+## 9. Completion Report
 
 Report:
 

@@ -132,6 +132,7 @@ class Job51ApplySender:
         dry_run: bool = False,
         skip_delivered: bool = True,
         stop_on_failure: bool = True,
+        on_attempt=None,
     ) -> list[SendAttempt]:
         selected = jobs[max(0, start): max(0, start) + max(1, limit)]
         delivered_keys = self.audit_log.delivered_apply_send_keys() if skip_delivered else set()
@@ -196,6 +197,8 @@ class Job51ApplySender:
                     },
                 )
             )
+            if callable(on_attempt):
+                on_attempt(attempt, index - max(0, start) + 1, len(selected))
             if stop_on_failure and not dry_run and status == "failed":
                 break
         return attempts

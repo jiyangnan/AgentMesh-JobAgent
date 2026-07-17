@@ -18,7 +18,7 @@ def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tm
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    state = rounds.ensure_current_round()
+    state = rounds.start_new_round()
 
     assert state["round_id"] == "round-1"
     assert state["platforms"]["boss"]["status"] == "pending"
@@ -39,6 +39,27 @@ def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tm
     assert (rounds_path / "round-1.json").exists()
 
 
+def test_round_status_and_platform_guard_do_not_create_a_round(monkeypatch, tmp_path):
+    current_path = tmp_path / "current_round.json"
+    rounds_path = tmp_path / "rounds"
+    monkeypatch.setattr(rounds, "current_round_path", lambda: current_path)
+    monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
+
+    workflow = rounds.round_status()
+
+    assert workflow["status"] == "not_started"
+    assert workflow["next_suggested"] == "jobagent round start"
+    assert not current_path.exists()
+    with pytest.raises(rounds.RoundOrderError) as error:
+        rounds.assert_platform_turn("boss")
+    assert error.value.payload["error"] == "round_not_started"
+    assert not current_path.exists()
+    with pytest.raises(rounds.RoundOrderError) as state_error:
+        rounds.set_platform_status("boss", "active")
+    assert state_error.value.payload["error"] == "round_not_started"
+    assert not current_path.exists()
+
+
 def test_round_workflow_continues_to_liepin_after_boss_completion(monkeypatch, tmp_path):
     current_path = tmp_path / "current_round.json"
     rounds_path = tmp_path / "rounds"
@@ -46,7 +67,7 @@ def test_round_workflow_continues_to_liepin_after_boss_completion(monkeypatch, t
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    rounds.ensure_current_round()
+    rounds.start_new_round()
     rounds.set_platform_status("boss", "completed", command="jobagent boss audit")
     workflow = rounds.round_status()
 
@@ -81,7 +102,7 @@ def test_reviewed_platform_next_command_auto_sends_selected(
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    rounds.ensure_current_round()
+    rounds.start_new_round()
     for preceding in rounds.DEFAULT_PLATFORM_ORDER:
         if preceding == platform:
             break
@@ -100,7 +121,7 @@ def test_legacy_confirmation_flag_is_removed_from_persisted_next_command(
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    rounds.ensure_current_round()
+    rounds.start_new_round()
     rounds.set_platform_status("boss", "completed")
     rounds.set_platform_status(
         "liepin",
@@ -127,7 +148,7 @@ def test_round_workflow_completes_only_when_every_platform_is_terminal(monkeypat
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    rounds.ensure_current_round()
+    rounds.start_new_round()
     rounds.set_platform_status("boss", "completed")
     rounds.set_platform_status("liepin", "skipped_this_round")
     rounds.set_platform_status("zhilian", "completed")
@@ -148,7 +169,7 @@ def test_audit_only_advances_a_sent_platform(monkeypatch, tmp_path):
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    rounds.ensure_current_round()
+    rounds.start_new_round()
     unchanged = rounds.complete_platform_after_audit("boss")
     assert unchanged["platforms"]["boss"]["status"] == "pending"
 
@@ -225,7 +246,7 @@ def test_round_rejects_platforms_that_are_not_current(monkeypatch, tmp_path):
     monkeypatch.setattr(rounds, "rounds_dir", lambda: rounds_path)
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
-    rounds.ensure_current_round()
+    rounds.start_new_round()
 
     with pytest.raises(rounds.RoundOrderError) as exc:
         rounds.assert_platform_turn("liepin")

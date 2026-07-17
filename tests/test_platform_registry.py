@@ -14,7 +14,9 @@ def test_platform_registry_starts_with_boss_available():
 
     assert platforms[0].key == "boss"
     assert platforms[0].status == "available"
-    assert "confirmed_send" in platforms[0].capabilities
+    assert "greet_send" in platforms[0].capabilities
+    assert platforms[0].delivery_contract.personalized_message == "required_exact"
+    assert platforms[0].delivery_contract.message_max_chars == 100
 
 
 def test_linkedin_is_dropped_in_registry():
@@ -36,7 +38,12 @@ def test_liepin_registry_exposes_vertical_chain():
         "apply_send",
         "audit",
     ]
-    assert "signed review" in liepin.notes
+    assert "signed personalized greeting" in liepin.notes
+    assert liepin.delivery_contract.action == "resume_and_personalized_greeting"
+    assert liepin.delivery_contract.success_evidence == [
+        "resume_delivery_visible_in_chat",
+        "exact_message_visible_in_outgoing_chat",
+    ]
 
 
 def test_zhilian_registry_exposes_vertical_chain():
@@ -51,6 +58,7 @@ def test_zhilian_registry_exposes_vertical_chain():
         "audit",
     ]
     assert "resume submission" in zhilian.notes
+    assert zhilian.delivery_contract.personalized_message == "unsupported"
 
 
 def test_job51_registry_exposes_vertical_chain():
@@ -64,7 +72,8 @@ def test_job51_registry_exposes_vertical_chain():
         "apply_send",
         "audit",
     ]
-    assert "QR-only" in job51.notes
+    assert "QR handoff" in job51.notes
+    assert "web_chat" in job51.delivery_contract.unsupported_behaviors
 
 
 def test_legacy_zhipin_platform_normalizes_to_boss():

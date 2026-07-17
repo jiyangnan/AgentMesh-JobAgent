@@ -9,10 +9,12 @@ from jobagent.infra import rounds
 from jobagent.infra.activity import active_command
 from jobagent.infra.audit import AuditLog, boss_job_key
 from jobagent.infra.discovery_state import build_review, load_envelope
+from jobagent.infra.diagnostics import emit_stage, progress_heartbeat
 from jobagent.infra.platform_lock import PlatformSessionLock
 from jobagent.infra.protocol import verify_stored_decision
 from jobagent.infra.state import audit_log_path, load_json, save_json
 from jobagent.infra.support import print_first_delivery_star_prompt_once
+from jobagent.platforms.message_contract import validate_personalized_message
 
 
 _SKIPPED_SEND_ERRORS = {"already_delivered", "job_unavailable"}
@@ -67,22 +69,32 @@ def _boss_send(
         job for job in jobs if boss_job_key(str(job.get("url") or "")) not in delivered_keys
     ]
     if dry_run:
-        for job in jobs:
+        for index, job in enumerate(jobs, 1):
             if boss_job_key(str(job.get("url") or "")) in delivered_keys:
-                results.append(already_delivered(job))
+                attempt = already_delivered(job)
             else:
-                results.append(
-                    SendAttempt(
-                        job_url=str(job.get("url") or ""),
-                        message=str(job.get("cloud_greeting") or ""),
-                        delivered=False,
-                        error="dry_run",
-                        steps=[{"step": "plan_boss_greet_send", "ok": True}],
-                    )
+                message = str(job.get("cloud_greeting") or "")
+                validation = validate_personalized_message("boss", message)
+                attempt = SendAttempt(
+                    job_url=str(job.get("url") or ""),
+                    message=message,
+                    delivered=False,
+                    error="dry_run" if validation["ok"] else str(validation["error"]),
+                    steps=[
+                        {"step": "validate_boss_personalized_message", **validation},
+                        *([{"step": "plan_boss_greet_send", "ok": True}] if validation["ok"] else []),
+                    ],
                 )
+            results.append(attempt)
+            if callable(on_attempt):
+                on_attempt(attempt, index, len(jobs))
         return results
     if not actionable:
-        return [already_delivered(job) for job in jobs]
+        results = [already_delivered(job) for job in jobs]
+        if callable(on_attempt):
+            for index, attempt in enumerate(results, 1):
+                on_attempt(attempt, index, len(jobs))
+        return results
     from jobagent.drivers.boss import create_driver
     from jobagent.drivers.boss.cdp_driver import CDPBossDriver
     from jobagent.platforms.boss.send_flow import execute_boss_greeting_flow
@@ -94,19 +106,41 @@ def _boss_send(
             "login_required",
             "请在已经打开的 Job Agent 浏览器中登录 Boss 直聘，完成后回复我“已登录”。",
         )
-    for job in jobs:
+    for index, job in enumerate(jobs, 1):
         key = boss_job_key(str(job.get("url") or ""))
         if key in delivered_keys:
-            results.append(already_delivered(job))
+            attempt = already_delivered(job)
+            results.append(attempt)
+            if callable(on_attempt):
+                on_attempt(attempt, index, len(jobs))
+            continue
+        validation = validate_personalized_message(
+            "boss",
+            str(job.get("cloud_greeting") or ""),
+        )
+        if not validation["ok"]:
+            attempt = SendAttempt(
+                job_url=str(job.get("url") or ""),
+                message=str(job.get("cloud_greeting") or ""),
+                delivered=False,
+                error=str(validation["error"]),
+                steps=[{"step": "validate_boss_personalized_message", **validation}],
+            )
+            results.append(attempt)
+            if callable(on_attempt):
+                on_attempt(attempt, index, len(jobs))
+            if stop_on_failure:
+                break
             continue
         attempt = execute_boss_greeting_flow(
             driver,
             str(job.get("url") or ""),
             str(job.get("cloud_greeting") or ""),
         )
+        attempt.steps.insert(0, {"step": "validate_boss_personalized_message", **validation})
         results.append(attempt)
         if callable(on_attempt):
-            on_attempt(attempt)
+            on_attempt(attempt, index, len(jobs))
         if attempt.delivered and key:
             delivered_keys.add(key)
         platform_default_only = (
@@ -148,7 +182,14 @@ def _check_apply_login(platform: str, job: dict[str, Any]) -> None:
         )
 
 
-def _apply_send(platform: str, jobs: list[dict[str, Any]], *, dry_run: bool, stop_on_failure: bool):
+def _apply_send(
+    platform: str,
+    jobs: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+    stop_on_failure: bool,
+    on_attempt=None,
+):
     if not dry_run:
         _check_apply_login(platform, jobs[0])
     if platform == "liepin":
@@ -170,6 +211,7 @@ def _apply_send(platform: str, jobs: list[dict[str, Any]], *, dry_run: bool, sto
         limit=len(jobs),
         dry_run=dry_run,
         stop_on_failure=stop_on_failure,
+        on_attempt=on_attempt,
     )
     if not dry_run:
         _raise_for_apply_user_intervention(platform, attempts)
@@ -207,22 +249,39 @@ def send_reviewed(
     jobs = all_jobs[: max(1, min(100, limit))]
     if not jobs:
         raise ValueError("The reviewed decision contains no send candidates")
-    with active_command(f"jobagent {platform} send"):
-        with PlatformSessionLock(platform=platform, command=f"jobagent {platform} send"):
-            attempts = (
-                _boss_send(
-                    jobs,
-                    dry_run=dry_run,
-                    stop_on_failure=stop_on_failure,
-                    on_attempt=(
-                        None
-                        if dry_run
-                        else lambda attempt: _append_boss_audit([attempt])
-                    ),
+    emit_stage("delivery_started", platform=platform, total=len(jobs), dry_run=dry_run)
+
+    def on_attempt(attempt, index: int, total: int) -> None:
+        if platform == "boss" and not dry_run and attempt.error != "already_delivered":
+            _append_boss_audit([attempt])
+        emit_stage(
+            "delivery_item_completed",
+            platform=platform,
+            index=index,
+            total=total,
+            delivered=bool(attempt.delivered),
+            outcome=attempt.error or "delivered",
+        )
+
+    with progress_heartbeat("delivery_in_progress", platform=platform, total=len(jobs)):
+        with active_command(f"jobagent {platform} send"):
+            with PlatformSessionLock(platform=platform, command=f"jobagent {platform} send"):
+                attempts = (
+                    _boss_send(
+                        jobs,
+                        dry_run=dry_run,
+                        stop_on_failure=stop_on_failure,
+                        on_attempt=on_attempt,
+                    )
+                    if platform == "boss"
+                    else _apply_send(
+                        platform,
+                        jobs,
+                        dry_run=dry_run,
+                        stop_on_failure=stop_on_failure,
+                        on_attempt=on_attempt,
+                    )
                 )
-                if platform == "boss"
-                else _apply_send(platform, jobs, dry_run=dry_run, stop_on_failure=stop_on_failure)
-            )
     delivered = sum(1 for attempt in attempts if attempt.delivered)
     failed = sum(
         1
@@ -230,6 +289,14 @@ def send_reviewed(
         if not attempt.delivered and attempt.error not in _SKIPPED_SEND_ERRORS
     )
     skipped = sum(1 for attempt in attempts if attempt.error in _SKIPPED_SEND_ERRORS)
+    emit_stage(
+        "delivery_completed",
+        platform=platform,
+        attempted=len(attempts),
+        delivered=delivered,
+        failed=failed,
+        skipped=skipped,
+    )
     print_first_delivery_star_prompt_once(
         platform=platform,
         command=("greet send" if platform == "boss" else "apply send"),
@@ -279,28 +346,113 @@ def send_reviewed(
     }
 
 
-def audit_platform(platform: str, recent: int = 20) -> dict[str, Any]:
+def _audit_log(platform: str):
     if platform == "boss":
-        log = AuditLog()
+        return AuditLog()
     elif platform == "liepin":
         from jobagent.platforms.liepin.audit import LiepinAuditLog
 
-        log = LiepinAuditLog()
+        return LiepinAuditLog()
     elif platform == "zhilian":
         from jobagent.platforms.zhilian.audit import ZhilianAuditLog
 
-        log = ZhilianAuditLog()
+        return ZhilianAuditLog()
     elif platform == "51job":
         from jobagent.platforms.job51.audit import Job51AuditLog
 
-        log = Job51AuditLog()
-    else:
-        raise ValueError(f"Unsupported audit platform: {platform}")
+        return Job51AuditLog()
+    raise ValueError(f"Unsupported audit platform: {platform}")
+
+
+def _failed_record(record: dict[str, Any]) -> bool:
+    status = str(record.get("status") or "")
+    error = str(record.get("error") or "")
+    if status == "failed":
+        return True
+    if record.get("delivered") is False and error not in {
+        "",
+        "already_delivered",
+        "dry_run",
+        "job_unavailable",
+    }:
+        return True
+    return False
+
+
+def _summary_failure_count(summary: dict[str, Any]) -> int:
+    if isinstance(summary.get("failed"), int):
+        return int(summary["failed"])
+    send = summary.get("send") or summary.get("apply_send") or {}
+    return int(send.get("failed") or 0) if isinstance(send, dict) else 0
+
+
+def _audit_payload(
+    platform: str,
+    *,
+    recent: int,
+    details: bool,
+    failures_only: bool,
+) -> dict[str, Any]:
+    log = _audit_log(platform)
+    summary = log.summary()
+    payload: dict[str, Any] = {
+        "platform": platform,
+        "summary": summary,
+        "failure_count": _summary_failure_count(summary),
+    }
+    if details or failures_only:
+        records = log.list_recent(max(1, min(100, recent)))
+        if failures_only:
+            records = [record for record in records if _failed_record(record)]
+        payload["records"] = records
+        payload["record_count"] = len(records)
+    return payload
+
+
+def audit_platform(
+    platform: str,
+    recent: int = 20,
+    *,
+    details: bool = False,
+    failures_only: bool = False,
+) -> dict[str, Any]:
+    payload = _audit_payload(
+        platform,
+        recent=recent,
+        details=details,
+        failures_only=failures_only,
+    )
     workflow = rounds.complete_platform_after_audit(platform)
     return {
-        "platform": platform,
-        "summary": log.summary(),
-        "recent": log.list_recent(recent),
+        "ok": True,
+        **payload,
         "workflow": workflow,
         "next_suggested": workflow.get("next_suggested"),
+    }
+
+
+def audit_round(
+    *,
+    platform: str | None = None,
+    recent: int = 20,
+    details: bool = False,
+    failures_only: bool = False,
+) -> dict[str, Any]:
+    selected = [platform] if platform else list(rounds.DEFAULT_PLATFORM_ORDER)
+    platform_reports = {
+        item: _audit_payload(
+            item,
+            recent=recent,
+            details=details,
+            failures_only=failures_only,
+        )
+        for item in selected
+    }
+    return {
+        "ok": True,
+        "scope": "round",
+        "platforms": platform_reports,
+        "failure_count": sum(report["failure_count"] for report in platform_reports.values()),
+        "workflow": rounds.round_status(),
+        "next_suggested": rounds.round_status().get("next_suggested"),
     }

@@ -50,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--key", required=True)
     init.add_argument("--no-verify", action="store_true")
 
+    account = sub.add_parser("account", help="Inspect or switch local account-bound state")
+    account_sub = account.add_subparsers(dest="account_command", required=True)
+    account_sub.add_parser("status")
+    bind = account_sub.add_parser("bind")
+    bind.add_argument("--confirm-legacy", action="store_true")
+    switch = account_sub.add_parser("switch")
+    switch.add_argument("--new-state", action="store_true")
+
     sub.add_parser("upgrade-check", help="Check saved state after a Job Agent upgrade")
 
     doctor = sub.add_parser("doctor", help="Check the local and cloud environment")
@@ -72,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     health = platforms_sub.add_parser("health")
     health.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
 
+    browser = sub.add_parser("browser", help="Inspect the dedicated browser without navigation")
+    browser_sub = browser.add_subparsers(dest="browser_command", required=True)
+    diagnose = browser_sub.add_parser("diagnose")
+    diagnose.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
+
     update = sub.add_parser("update", help="Check signed client release policy")
     update.add_subparsers(dest="update_command", required=True).add_parser("check")
 
@@ -80,7 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     delivery_round = sub.add_parser("round", help="View or update the multi-platform round")
     round_sub = delivery_round.add_subparsers(dest="round_command", required=True)
+    round_sub.add_parser("start")
     round_sub.add_parser("status")
+    round_audit = round_sub.add_parser("audit")
+    round_audit.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
+    round_audit.add_argument("--recent", "-n", type=int, default=20)
+    round_audit.add_argument("--details", action="store_true")
+    round_audit.add_argument("--failures-only", action="store_true")
     round_skip = round_sub.add_parser("skip")
     round_skip.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
     round_skip.add_argument("--confirm-skip", action="store_true")
@@ -113,6 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
             _add_send(send)
         audit = platform_sub.add_parser("audit")
         audit.add_argument("--recent", "-n", type=int, default=20)
+        audit.add_argument("--details", action="store_true")
+        audit.add_argument("--failures-only", action="store_true")
     return parser
 
 
@@ -149,13 +170,6 @@ def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool) -> 
         "paid_pass_required": (
             False if usable else reason == "insufficient_credits" or None
         ),
-        "next_suggested": (
-            "jobagent boss discover"
-            if usable and profile_exists
-            else "jobagent resume analyze --file <resume>"
-            if usable
-            else None
-        ),
     }
 
 
@@ -175,15 +189,70 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
     path = save_api_key(args.key)
     payload: dict[str, Any] = {"ok": True, "credentials_path": str(path)}
     if account is not None:
+        from jobagent.infra.account_state import AccountStateError, ensure_account_state
+
         payload["account"] = account
         payload["cloud_access"] = _cloud_access(account, profile_exists=False)
+        try:
+            payload["local_state"] = ensure_account_state(account)
+        except AccountStateError as exc:
+            payload.update(exc.payload)
+            payload["credentials_path"] = str(path)
+            payload["account"] = account
+            return payload
     access = payload.get("cloud_access") or {}
-    payload["next_suggested"] = access.get("next_suggested") or (
-        "https://agentmesh360.com/app/#pricing"
+    payload["next_suggested"] = (
+        "jobagent resume analyze --file <resume>"
+        if access.get("usable")
+        else "https://agentmesh360.com/app/#pricing"
         if access.get("paid_pass_required")
         else "jobagent doctor env"
     )
     return payload
+
+
+def _account(args: argparse.Namespace) -> dict[str, Any]:
+    from jobagent.infra import cloud_client
+    from jobagent.infra.account_state import (
+        account_ref_from_response,
+        bind_legacy_state,
+        state_owner_status,
+        switch_account_state,
+    )
+
+    account_response = cloud_client.me()
+    if args.account_command == "status":
+        account_ref = account_ref_from_response(account_response)
+        return {
+            "ok": True,
+            "local_state": state_owner_status(account_ref),
+            "next_suggested": None,
+        }
+    if args.account_command == "bind":
+        return bind_legacy_state(
+            account_response,
+            confirm_legacy=args.confirm_legacy,
+        )
+    return switch_account_state(account_response, new_state=args.new_state)
+
+
+def _verify_state_owner_for_command(args: argparse.Namespace) -> None:
+    if args.command in {"account", "doctor", "init", "platforms", "update", "upgrade-check"}:
+        return
+    from jobagent.infra import cloud_client
+    from jobagent.infra.account_state import AccountStateError, ensure_account_state
+    from jobagent.infra.credentials import load_api_key
+
+    if not load_api_key():
+        raise AccountStateError(
+            {
+                "ok": False,
+                "error": "api_key_required",
+                "message": "Configure an AgentMesh API key before reading or changing account-bound state.",
+                "next_suggested": "jobagent init --key <your_api_key>",
+            }
+        )
+    ensure_account_state(cloud_client.me())
 
 
 def _doctor_env() -> dict[str, Any]:
@@ -211,10 +280,38 @@ def _doctor_env() -> dict[str, Any]:
                 key_valid = True
             except cloud_client.CloudError as exc:
                 key_error = exc.code or "api_key_verification_failed"
-    from jobagent.infra.state import profile_path
+    python_available = bool(shutil.which("python3"))
+    chrome_available = bool(
+        Path("/Applications/Google Chrome.app").exists()
+        or shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+    )
+    cloud_healthy = cloud.get("status") == "ok"
+    environment_healthy = bool(
+        python_available and chrome_available and key_present and key_valid and cloud_healthy
+    )
+    local_state: dict[str, Any] = {
+        "status": "account_unverified",
+        "ready": False,
+    }
+    profile_exists = False
+    if account_response is not None:
+        from jobagent.infra.account_state import AccountStateError, ensure_account_state
 
+        try:
+            local_state = ensure_account_state(account_response)
+        except AccountStateError as exc:
+            local_state = {
+                key: value
+                for key, value in exc.payload.items()
+                if key not in {"ok", "message"}
+            }
+    if local_state.get("ready"):
+        from jobagent.infra.state import profile_path
+
+        profile_exists = profile_path().exists()
     access = (
-        _cloud_access(account_response, profile_exists=profile_path().exists())
+        _cloud_access(account_response, profile_exists=profile_exists)
         if account_response is not None
         else {
             "usable": False,
@@ -224,36 +321,54 @@ def _doctor_env() -> dict[str, Any]:
             "expires_at": None,
             "required_credits": 5,
             "paid_pass_required": None,
-            "next_suggested": None,
         }
     )
+    from jobagent.infra.rounds import round_status
+
+    workflow = round_status() if local_state.get("ready") else None
+    blocked_by: list[str] = []
+    if not environment_healthy:
+        blocked_by.append("environment")
+    if not local_state.get("ready"):
+        blocked_by.append(str(local_state.get("error") or local_state.get("status")))
+    if not access.get("usable"):
+        blocked_by.append(str(access.get("reason") or "cloud_access"))
+    if not key_present or not key_valid:
+        next_suggested = "jobagent init --key <your_api_key>"
+    elif not cloud_healthy:
+        next_suggested = "jobagent doctor env"
+    elif not local_state.get("ready"):
+        next_suggested = str(local_state.get("next_suggested") or "jobagent account status")
+    elif not access.get("usable"):
+        next_suggested = "https://agentmesh360.com/app/#pricing"
+    elif not profile_exists:
+        next_suggested = "jobagent resume analyze --file <resume>"
+    else:
+        next_suggested = str((workflow or {}).get("next_suggested") or "jobagent round start")
     return {
-        "ok": bool(
-            shutil.which("python3")
-            and key_present
-            and key_valid
-            and access["usable"]
-            and cloud.get("status") == "ok"
-        ),
+        "ok": environment_healthy,
+        "environment_healthy": environment_healthy,
         "python": sys.version.split()[0],
-        "chrome": bool(
-            Path("/Applications/Google Chrome.app").exists()
-            or shutil.which("google-chrome")
-            or shutil.which("google-chrome-stable")
-        ),
+        "chrome": chrome_available,
         "api_key_configured": key_present,
         "api_key_valid": key_valid,
         "api_key_error": key_error,
         "api_key_action": (
             None
-            if key_valid and access["usable"]
-            else "https://agentmesh360.com/app/#pricing"
-            if access.get("paid_pass_required")
+            if key_valid
             else "jobagent init --key <your_api_key>"
         ),
         "account": account_response.get("account") if account_response else None,
+        "local_state": local_state,
         "cloud_access": access,
-        "next_suggested": access.get("next_suggested"),
+        "round": workflow,
+        "workflow": {
+            "ready": not blocked_by,
+            "blocked_by": blocked_by,
+            "profile_exists": profile_exists,
+            "next_suggested": next_suggested,
+        },
+        "next_suggested": next_suggested,
         "cloud": cloud,
     }
 
@@ -282,7 +397,7 @@ def _resume_analyze(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "ok": True,
         "profile_path": str(output),
-        "next_suggested": "jobagent boss discover",
+        "next_suggested": "jobagent round start",
     }
 
 
@@ -461,6 +576,8 @@ def _prepare_client_upgrade(args: argparse.Namespace) -> dict[str, Any]:
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "init":
         return _init(args)
+    if args.command == "account":
+        return _account(args)
     if args.command == "upgrade-check":
         from jobagent.infra.upgrade_readiness import run_upgrade_check
 
@@ -483,6 +600,10 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         if args.platform:
             return check_platform_health(args.platform).to_dict()
         return {"platforms": [health.to_dict() for health in check_all_platforms()]}
+    if args.command == "browser":
+        from jobagent.infra.browser_diagnostics import diagnose_browser
+
+        return diagnose_browser(args.platform)
     if args.command == "update":
         from jobagent.infra.release_update import check_for_update
 
@@ -492,10 +613,27 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
 
         return support_star_payload()
     if args.command == "round":
-        from jobagent.infra.rounds import round_status, set_platform_status
+        from jobagent.infra.rounds import (
+            assert_platform_turn,
+            round_status,
+            set_platform_status,
+            start_new_round,
+        )
 
+        if args.round_command == "start":
+            start_new_round()
+            return {"ok": True, "workflow": round_status()}
         if args.round_command == "status":
             return {"ok": True, "workflow": round_status()}
+        if args.round_command == "audit":
+            from jobagent.application.delivery import audit_round
+
+            return audit_round(
+                platform=args.platform,
+                recent=args.recent,
+                details=args.details,
+                failures_only=args.failures_only,
+            )
         if not args.confirm_skip:
             return {
                 "ok": False,
@@ -503,6 +641,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
                 "platform": args.platform,
                 "message": "Explicitly confirm skipping this platform for the current round.",
             }
+        assert_platform_turn(args.platform)
         set_platform_status(args.platform, "skipped_this_round", command="jobagent round skip")
         return {"ok": True, "platform": args.platform, "workflow": round_status()}
 
@@ -521,7 +660,12 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         from jobagent.application.delivery import audit_platform
 
         assert_platform_turn(platform)
-        return audit_platform(platform, recent=args.recent)
+        return audit_platform(
+            platform,
+            recent=args.recent,
+            details=args.details,
+            failures_only=args.failures_only,
+        )
     if platform == "boss" and args.platform_command == "greet":
         if args.greet_command == "preview":
             from jobagent.application.review import review_decision
@@ -564,6 +708,7 @@ def main() -> None:
     try:
         _maybe_update(args)
         _prepare_client_upgrade(args)
+        _verify_state_owner_for_command(args)
         result = _dispatch(args)
         _print(result)
         if result.get("ok") is False:
@@ -573,6 +718,7 @@ def main() -> None:
         raise SystemExit(130) from None
     except Exception as exc:
         from jobagent.infra.cloud_client import CloudError
+        from jobagent.infra.account_state import AccountStateError
         from jobagent.infra.client_upgrade import UpgradeCompatibilityError
         from jobagent.infra.platform_lock import PlatformLockError
         from jobagent.infra.rounds import RoundOrderError
@@ -583,7 +729,9 @@ def main() -> None:
             from jobagent.application.delivery import UserInterventionRequired
         except ImportError:
             UserInterventionRequired = ()  # type: ignore[assignment,misc]
-        if isinstance(exc, UpgradeCompatibilityError):
+        if isinstance(exc, AccountStateError):
+            payload = exc.payload
+        elif isinstance(exc, UpgradeCompatibilityError):
             payload = exc.payload
         elif isinstance(exc, CollectionError):
             payload = {

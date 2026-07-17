@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.3.16
+version: 0.4.0
 metadata:
   openclaw:
     emoji: "💼"
@@ -22,7 +22,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 ## Safety Contract
 
 - Never invent an API Key. Ask the user to create an AgentMesh360 universal Key at `https://agentmesh360.com/app/` and wait. A verified signup trial with sufficient unexpired credits is immediately usable and does not require a paid pass.
-- After configuring the Key, run `jobagent doctor env`. If `cloud_access.usable=true`, briefly report the active balance source and run `next_suggested` immediately. Never block on `Pass: not purchased`; ask for a purchase only when `paid_pass_required=true` or a real cloud command returns `insufficient_credits`.
+- After configuring the Key, run `jobagent doctor env`. Read `environment_healthy` and `workflow.ready` separately. If `cloud_access.usable=true`, briefly report the active balance source and run the top-level `next_suggested` immediately. Never block on `Pass: not purchased`; ask for a purchase only when `paid_pass_required=true` or a real cloud command returns `insufficient_credits`.
 - For `signup_trial_active`, tell the user: `你的 AgentMesh360 新用户体验额度当前有效：剩余 {credit} credits，有效期至 {expires_at}。无需购买通行证，我现在继续执行下一步。` Then execute `next_suggested` without asking for confirmation.
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job as complete vertical chains. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> send -> audit` chain and complete its audit before logging in to the next platform. Never operate their shared browser concurrently.
 - Stop whenever `requires_user_action=true`; relay `user_prompt` exactly and wait.
@@ -32,8 +32,12 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - Starting the round authorizes real actions for `selected`; send commands have no per-platform confirmation flag.
 - On Boss, a platform default introduction is not the reviewed greeting. Require the CLI's exact personalized-delivery verification.
 - Never stop after one platform. Follow `workflow.next_suggested` while `workflow.continue_required=true`; only `workflow.workflow_complete=true` ends the round.
+- Create a round only by executing `jobagent round start`. Never infer that `doctor env`, `round status` or a platform command created or authorized a new round.
 - Skip a platform only after explicit user approval with `jobagent round skip --platform <platform> --confirm-skip`.
 - After an existing installation updates, run `jobagent upgrade-check` and resolve its `next_suggested` action before opening a platform. Never delete `~/.jobagent` or the Job Agent Chrome profile as a general fix; preserve credentials, login cookies, profiles, audits and preferences.
+- Profiles, rounds, decisions and audits are account-bound. On `local_state_owner_required`, ask the user to confirm ownership and run `jobagent account bind --confirm-legacy`. On `local_state_account_mismatch`, ask the user to confirm switching accounts and run `jobagent account switch --new-state`. Never edit account-state files manually.
+- Diagnose browser slowness or conflicting login evidence with `jobagent browser diagnose --platform <platform>` before asking for another login. Treat `login.state=unknown` or `conflicting` as inconclusive.
+- Forward CLI progress stages and heartbeats. Use compact `jobagent round audit` by default; expand only failures or explicitly requested details.
 
 ## Install and Profile
 
@@ -53,6 +57,7 @@ irm https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/
 jobagent init --key <your_api_key>
 jobagent doctor env
 jobagent resume analyze --file <resume-path> --target-role "<role>" --target-cities <cities>
+jobagent round start
 ```
 
 Each completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. Verified new accounts receive 50 shared trial credits valid for 14 days. The signed cloud response is authoritative for charges and refunds. When trial credits are insufficient or expired, the optional AgentMesh360 monthly pass costs CNY 29, lasts 30 days and includes 1,000 credits shared across AgentMesh360 cloud products without automatic renewal.
@@ -60,6 +65,7 @@ Each completed platform Discover accepts at most 100 candidate jobs and costs a 
 ## Platform Flow
 
 ```bash
+jobagent round start
 jobagent round status
 ```
 
@@ -106,6 +112,8 @@ jobagent 51job audit
 ```
 
 Run each send line automatically after review. Do not ask for per-platform approval. 猎聘 must verify both the account resume and the exact signed personalized greeting; a platform default introduction is not enough. 智联 and 51Job submit resumes only. 51Job's web chat is QR-only.
+
+Boss and 猎聘 greetings must be signed, non-empty and at most 100 characters before preview or delivery. Never describe a 智联 or 51Job review note as a sent greeting.
 
 ## Review Override
 

@@ -49,10 +49,28 @@ def _default_platform_state() -> dict[str, dict[str, Any]]:
 
 
 def ensure_current_round() -> dict[str, Any]:
-    """Return the active delivery round, creating one when needed."""
+    """Return the active delivery round without creating one."""
     current = load_json(current_round_path())
     if current and current.get("status") == "active" and current.get("round_id"):
         return _migrate_round(current)
+
+    status = "completed" if current and current.get("status") == "completed" else "not_started"
+    raise RoundOrderError(
+        {
+            "ok": False,
+            "error": "round_completed" if status == "completed" else "round_not_started",
+            "message": (
+                "The previous round is complete. Start a new round explicitly."
+                if status == "completed"
+                else "Start a Job Agent round before changing workflow state."
+            ),
+            "next_suggested": "jobagent round start",
+        }
+    )
+
+
+def _create_round() -> dict[str, Any]:
+    """Create the persisted round state for the explicit start command."""
 
     round_id = new_round_id()
     now = utc_now()
@@ -68,6 +86,14 @@ def ensure_current_round() -> dict[str, Any]:
     }
     save_round(state)
     return state
+
+
+def start_new_round() -> dict[str, Any]:
+    """Start a round explicitly, or return the already-active round."""
+    current = load_json(current_round_path())
+    if current and current.get("status") == "active" and current.get("round_id"):
+        return _migrate_round(current)
+    return _create_round()
 
 
 def _migrate_round(state: dict[str, Any]) -> dict[str, Any]:
@@ -172,7 +198,24 @@ def _migrate_next_command(command: str | None) -> str | None:
 
 def round_status() -> dict[str, Any]:
     """Return machine-readable progress for the current multi-platform round."""
-    state = load_json(current_round_path()) or ensure_current_round()
+    state = load_json(current_round_path())
+    if not state:
+        return {
+            "round_id": None,
+            "status": "not_started",
+            "workflow_complete": False,
+            "continue_required": False,
+            "delivery_policy": dict(DELIVERY_POLICY),
+            "execution_policy": {
+                **ROUND_EXECUTION_POLICY,
+                "stages": list(ROUND_EXECUTION_POLICY["stages"]),
+            },
+            "platform_order": list(DEFAULT_PLATFORM_ORDER),
+            "platforms": {},
+            "current_platform": None,
+            "remaining_platforms": [],
+            "next_suggested": "jobagent round start",
+        }
     state = _migrate_round(state)
     order = list(state.get("platform_order") or DEFAULT_PLATFORM_ORDER)
     platforms = state.setdefault("platforms", _default_platform_state())
@@ -219,7 +262,9 @@ def round_status() -> dict[str, Any]:
 
 def complete_platform_after_audit(platform: str) -> dict[str, Any]:
     """Complete a platform only when a successful send reached the audit step."""
-    state = load_json(current_round_path()) or ensure_current_round()
+    state = load_json(current_round_path())
+    if not state:
+        return round_status()
     item = state.setdefault("platforms", _default_platform_state()).setdefault(
         platform,
         {"status": "pending"},
@@ -236,9 +281,28 @@ def complete_platform_after_audit(platform: str) -> dict[str, Any]:
 def assert_platform_turn(platform: str) -> dict[str, Any]:
     """Reject browser workflows that do not follow the persisted platform order."""
     workflow = round_status()
+    if workflow["status"] == "not_started":
+        raise RoundOrderError(
+            {
+                "ok": False,
+                "error": "round_not_started",
+                "message": "Start a Job Agent round before opening a recruiting platform.",
+                "requested_platform": platform,
+                "next_suggested": "jobagent round start",
+                "workflow": workflow,
+            }
+        )
     if workflow["workflow_complete"]:
-        ensure_current_round()
-        workflow = round_status()
+        raise RoundOrderError(
+            {
+                "ok": False,
+                "error": "round_completed",
+                "message": "The previous round is complete. Start a new round explicitly.",
+                "requested_platform": platform,
+                "next_suggested": "jobagent round start",
+                "workflow": workflow,
+            }
+        )
     current_platform = workflow.get("current_platform")
     if current_platform != platform:
         raise RoundOrderError(

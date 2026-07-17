@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from jobagent.domain.models import SendAttempt
 from jobagent.drivers.boss import create_driver
+from jobagent.platforms.message_contract import validate_personalized_message
 
 from .audit import LiepinAuditEvent, LiepinAuditLog
 
@@ -192,6 +193,7 @@ class LiepinApplySender:
         dry_run: bool = False,
         skip_delivered: bool = True,
         stop_on_failure: bool = True,
+        on_attempt=None,
     ) -> list[SendAttempt]:
         selected = jobs[max(0, start): max(0, start) + max(1, limit)]
         attempts: list[SendAttempt] = []
@@ -231,6 +233,7 @@ class LiepinApplySender:
 
             attempts.append(attempt)
             resume_delivered, greeting_delivered = _liepin_attempt_delivery_parts(attempt)
+            greeting_contract = validate_personalized_message("liepin", message)
             self.audit_log.append(
                 LiepinAuditEvent(
                     action="apply_send",
@@ -244,6 +247,7 @@ class LiepinApplySender:
                         "index": index,
                         "has_greeting": bool(message.strip()),
                         "greeting": message,
+                        "greeting_contract": greeting_contract,
                         "score": job.get("score"),
                         "match_level": job.get("match_level") or job.get("recommendation") or job.get("cloud_recommendation"),
                         "resume_delivered": resume_delivered,
@@ -252,6 +256,8 @@ class LiepinApplySender:
                     },
                 )
             )
+            if callable(on_attempt):
+                on_attempt(attempt, index - max(0, start) + 1, len(selected))
             if stop_on_failure and not dry_run and status == "failed":
                 break
         return attempts
@@ -271,13 +277,18 @@ class LiepinApplySender:
             attempt.error = "missing_job_url"
             attempt.steps = steps
             return attempt
+        greeting_contract = validate_personalized_message("liepin", message)
+        if not greeting_contract["ok"]:
+            attempt.error = str(greeting_contract["error"])
+            attempt.steps = [
+                {"step": "validate_liepin_personalized_message", **greeting_contract}
+            ]
+            return attempt
+        steps.append({"step": "validate_liepin_personalized_message", **greeting_contract})
         if dry_run:
             attempt.error = "dry_run"
-            attempt.steps = [{"step": "plan_liepin_apply_send", "ok": True, "url": url}]
-            return attempt
-        if not message.strip():
-            attempt.error = "missing_signed_greeting"
-            attempt.steps = [{"step": "validate_liepin_greeting", "ok": False}]
+            steps.append({"step": "plan_liepin_apply_send", "ok": True, "url": url})
+            attempt.steps = steps
             return attempt
 
         driver = self.driver or create_driver(platform="liepin")

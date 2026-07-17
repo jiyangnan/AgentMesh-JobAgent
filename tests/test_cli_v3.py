@@ -43,7 +43,14 @@ def _future(hours=1):
 def test_public_parser_exposes_only_v3_platform_commands():
     parser = build_parser()
     assert parser.parse_args(["upgrade-check"]).command == "upgrade-check"
+    assert parser.parse_args(["account", "status"]).account_command == "status"
+    assert parser.parse_args(
+        ["account", "bind", "--confirm-legacy"]
+    ).confirm_legacy is True
+    assert parser.parse_args(["account", "switch", "--new-state"]).new_state is True
     assert parser.parse_args(["round", "status"]).round_command == "status"
+    assert parser.parse_args(["round", "start"]).round_command == "start"
+    assert parser.parse_args(["round", "audit", "--failures-only"]).failures_only is True
     assert parser.parse_args(
         ["round", "skip", "--platform", "liepin", "--confirm-skip"]
     ).confirm_skip is True
@@ -52,6 +59,10 @@ def test_public_parser_exposes_only_v3_platform_commands():
     assert parser.parse_args(["liepin", "apply", "review"]).apply_command == "review"
     assert parser.parse_args(["zhilian", "apply", "send", "--dry-run"]).dry_run is True
     assert parser.parse_args(["51job", "audit"]).platform_command == "audit"
+    assert parser.parse_args(["boss", "audit", "--details"]).details is True
+    assert parser.parse_args(
+        ["browser", "diagnose", "--platform", "boss"]
+    ).browser_command == "diagnose"
 
     for retired in (
         ["boss", "collect"],
@@ -145,11 +156,16 @@ def test_init_verifies_new_api_key_before_saving(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "jobagent.infra.cloud_client.me",
-        lambda *, api_key=None: calls.append(("verify", api_key)) or {"account": {"id": 1}},
+        lambda *, api_key=None: calls.append(("verify", api_key))
+        or {"account": {"id": 1, "account_ref": "acct_test_account"}},
     )
     monkeypatch.setattr(
         "jobagent.infra.credentials.save_api_key",
         lambda key: calls.append(("save", key)) or Path("/tmp/credentials"),
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.account_state.ensure_account_state",
+        lambda _account: {"status": "ready", "ready": True},
     )
     args = build_parser().parse_args(["init", "--key", "jobagent_live_new"])
 
@@ -217,10 +233,22 @@ def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypa
                 "unlimited": False,
                 "source": "signup_trial",
                 "expires_at": "2026-07-30T00:00:00Z",
+                "account_ref": "acct_test_account",
             }
         },
     )
     monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(
+        "jobagent.infra.account_state.ensure_account_state",
+        lambda _account: {"status": "ready", "ready": True},
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.round_status",
+        lambda: {
+            "status": "not_started",
+            "next_suggested": "jobagent round start",
+        },
+    )
 
     result = cli._doctor_env()
 
@@ -234,10 +262,45 @@ def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypa
         "expires_at": "2026-07-30T00:00:00Z",
         "required_credits": 5,
         "paid_pass_required": False,
-        "next_suggested": "jobagent resume analyze --file <resume>",
     }
     assert result["api_key_action"] is None
     assert result["next_suggested"] == "jobagent resume analyze --file <resume>"
+
+
+def test_doctor_env_reports_healthy_environment_when_credits_are_insufficient(
+    tmp_path, monkeypatch
+):
+    from jobagent import cli
+
+    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: "agentmesh_live_empty")
+    monkeypatch.setattr("jobagent.infra.cloud_client.health", lambda: {"status": "ok"})
+    monkeypatch.setattr(
+        "jobagent.infra.cloud_client.me",
+        lambda: {
+            "account": {
+                "account_ref": "acct_test_account",
+                "credit": 0,
+                "tier": "free",
+                "unlimited": False,
+                "source": "signup_trial",
+                "expires_at": "2026-07-30T00:00:00Z",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.account_state.ensure_account_state",
+        lambda _account: {"status": "ready", "ready": True},
+    )
+    monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json")
+
+    result = cli._doctor_env()
+
+    assert result["ok"] is True
+    assert result["environment_healthy"] is True
+    assert result["cloud_access"]["usable"] is False
+    assert result["workflow"]["ready"] is False
+    assert result["api_key_action"] is None
+    assert result["next_suggested"] == "https://agentmesh360.com/app/#pricing"
 
 
 def test_round_skip_requires_explicit_confirmation(monkeypatch):
@@ -261,13 +324,17 @@ def test_round_skip_updates_only_current_round(monkeypatch):
         "jobagent.infra.rounds.round_status",
         lambda: {"round_id": "round-1", "current_platform": "zhilian"},
     )
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.assert_platform_turn",
+        lambda platform: {"current_platform": platform},
+    )
     args = build_parser().parse_args(
-        ["round", "skip", "--platform", "liepin", "--confirm-skip"]
+        ["round", "skip", "--platform", "zhilian", "--confirm-skip"]
     )
 
     result = _dispatch(args)
 
-    assert updates == [("liepin", "skipped_this_round")]
+    assert updates == [("zhilian", "skipped_this_round")]
     assert result["ok"] is True
     assert result["workflow"]["current_platform"] == "zhilian"
 
@@ -541,11 +608,43 @@ def test_public_agent_docs_treat_signup_trial_as_immediately_usable():
     for skill in docs[2:]:
         assert "jobagent doctor env" in skill
         assert "cloud_access.usable=true" in skill
+        assert "environment_healthy" in skill
+        assert "workflow.ready" in skill
         assert "paid_pass_required=true" in skill
         assert "无需购买通行证" in skill
     assert "50 shared trial credits" in agent_contract
     assert "jobagent doctor env" in agent_contract
-    assert "continue with `next_suggested`" in agent_contract
+    assert "top-level `next_suggested`" in agent_contract
+
+
+def test_public_agent_docs_require_explicit_round_start():
+    root = Path(__file__).resolve().parents[1]
+    docs = [
+        (root / "AGENTS.md").read_text(encoding="utf-8"),
+        (root / "README.md").read_text(encoding="utf-8"),
+        (root / "docs/agent-onboarding.md").read_text(encoding="utf-8"),
+        (root / "skills/claude-code/SKILL.md").read_text(encoding="utf-8"),
+        (root / "skills/openclaw-job-agent/SKILL.md").read_text(encoding="utf-8"),
+    ]
+
+    for text in docs:
+        assert "jobagent round start" in text
+
+
+def test_public_agent_docs_cover_account_recovery_browser_diagnostics_and_compact_audit():
+    root = Path(__file__).resolve().parents[1]
+    docs = [
+        (root / "README.md").read_text(encoding="utf-8"),
+        (root / "docs/agent-onboarding.md").read_text(encoding="utf-8"),
+        (root / "skills/claude-code/SKILL.md").read_text(encoding="utf-8"),
+        (root / "skills/openclaw-job-agent/SKILL.md").read_text(encoding="utf-8"),
+    ]
+
+    for text in docs:
+        assert "jobagent account bind --confirm-legacy" in text
+        assert "jobagent account switch --new-state" in text
+        assert "jobagent browser diagnose --platform" in text
+        assert "jobagent round audit" in text
 
 
 def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch, capsys):
@@ -654,6 +753,7 @@ def test_unexpected_cli_error_writes_diagnostic_log(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(diagnostics, "LOG_DIR", tmp_path)
     monkeypatch.setattr(cli, "_maybe_update", lambda _args: None)
     monkeypatch.setattr(cli, "_prepare_client_upgrade", lambda _args: None)
+    monkeypatch.setattr(cli, "_verify_state_owner_for_command", lambda _args: None)
     monkeypatch.setattr(cli, "_dispatch", lambda _args: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr("sys.argv", ["jobagent", "profile", "show"])
 
@@ -829,6 +929,36 @@ def test_send_marks_platform_sent_and_audit_advances_to_next_platform(monkeypatc
 
     assert audited["workflow"]["current_platform"] == "liepin"
     assert audited["next_suggested"] == "jobagent liepin login --check"
+    assert "records" not in audited
+
+
+def test_round_audit_is_compact_by_default_and_details_are_opt_in(monkeypatch):
+    import jobagent.application.delivery as delivery
+
+    class Log:
+        def summary(self):
+            return {"total": 200, "failed": 3}
+
+        def list_recent(self, _n):
+            return [
+                {"delivered": True, "error": ""},
+                {"delivered": False, "error": "delivery_not_verified"},
+            ]
+
+    monkeypatch.setattr(delivery, "_audit_log", lambda _platform: Log())
+    monkeypatch.setattr(
+        delivery.rounds,
+        "round_status",
+        lambda: {"round_id": "round-1", "next_suggested": "jobagent boss audit"},
+    )
+
+    compact = delivery.audit_round()
+    failures = delivery.audit_round(platform="boss", failures_only=True)
+
+    assert compact["failure_count"] == 12
+    assert all("records" not in report for report in compact["platforms"].values())
+    assert failures["platforms"]["boss"]["record_count"] == 1
+    assert failures["platforms"]["boss"]["records"][0]["error"] == "delivery_not_verified"
 
 
 def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
@@ -978,7 +1108,7 @@ def test_boss_send_persists_attempt_and_stops_after_platform_default_only(monkey
             {"url": "https://www.zhipin.com/job_detail/second.html", "cloud_greeting": "two"},
         ],
         dry_run=False,
-        on_attempt=persisted.append,
+        on_attempt=lambda attempt, _index, _total: persisted.append(attempt),
     )
 
     assert opened == ["https://www.zhipin.com/job_detail/first.html"]
@@ -1077,18 +1207,18 @@ def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
         {
             "product": "jobagent",
             "channel": "stable",
-            "latest_client_version": "0.4.0",
+            "latest_client_version": "0.4.1",
             "minimum_supported_version": "0.3.0",
             "protocol_version": 1,
-            "git_tag": "v0.4.0",
+            "git_tag": "v0.4.1",
             "git_commit": "a" * 40,
             "artifact_sha256": "b" * 64,
             "published_at": "2026-07-11T00:00:00Z",
             "required": False,
-            "notes_url": "https://example.test/v0.4.0",
+            "notes_url": "https://example.test/v0.4.1",
         },
     )
-    assert updates.verify_release_manifest(manifest)["latest_client_version"] == "0.4.0"
+    assert updates.verify_release_manifest(manifest)["latest_client_version"] == "0.4.1"
     monkeypatch.setattr(updates, "fetch_release_manifest", lambda **_kwargs: manifest)
     monkeypatch.setattr(updates, "_package_root", lambda: tmp_path)
     result = updates.check_for_update(auto_apply=True)

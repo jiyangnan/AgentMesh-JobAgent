@@ -11,11 +11,22 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class DeliveryContract:
+    action: str
+    resume_source: str
+    personalized_message: str
+    message_max_chars: int | None
+    success_evidence: list[str] = field(default_factory=list)
+    unsupported_behaviors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PlatformInfo:
     key: str
     display_name: str
     status: str
     capabilities: list[str] = field(default_factory=list)
+    delivery_contract: DeliveryContract | None = None
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,10 +42,18 @@ _PLATFORMS: tuple[PlatformInfo, ...] = (
             "login",
             "discover",
             "greet_preview",
-            "confirmed_send",
+            "greet_send",
             "audit",
         ],
-        notes="Discover plus signed greeting review and explicitly confirmed send.",
+        delivery_contract=DeliveryContract(
+            action="personalized_greeting",
+            resume_source="not_submitted",
+            personalized_message="required_exact",
+            message_max_chars=100,
+            success_evidence=["exact_message_visible_in_outgoing_chat"],
+            unsupported_behaviors=["platform_default_message_as_success"],
+        ),
+        notes="Discover plus signed personalized greeting delivery and exact-message audit.",
     ),
     PlatformInfo(
         key="liepin",
@@ -47,7 +66,18 @@ _PLATFORMS: tuple[PlatformInfo, ...] = (
             "apply_send",
             "audit",
         ],
-        notes="Discover plus signed review and explicitly confirmed resume submission.",
+        delivery_contract=DeliveryContract(
+            action="resume_and_personalized_greeting",
+            resume_source="platform_account_resume",
+            personalized_message="required_exact",
+            message_max_chars=100,
+            success_evidence=[
+                "resume_delivery_visible_in_chat",
+                "exact_message_visible_in_outgoing_chat",
+            ],
+            unsupported_behaviors=["platform_default_message_as_personalized_success"],
+        ),
+        notes="Discover plus verified account-resume and signed personalized greeting delivery.",
     ),
     PlatformInfo(
         key="zhilian",
@@ -60,7 +90,15 @@ _PLATFORMS: tuple[PlatformInfo, ...] = (
             "apply_send",
             "audit",
         ],
-        notes="Discover plus signed review and explicitly confirmed resume submission.",
+        delivery_contract=DeliveryContract(
+            action="resume_submit",
+            resume_source="platform_account_resume",
+            personalized_message="unsupported",
+            message_max_chars=None,
+            success_evidence=["platform_delivery_confirmation"],
+            unsupported_behaviors=["personalized_message_send"],
+        ),
+        notes="Discover plus verified resume submission; personalized messages are not supported.",
     ),
     PlatformInfo(
         key="51job",
@@ -73,7 +111,15 @@ _PLATFORMS: tuple[PlatformInfo, ...] = (
             "apply_send",
             "audit",
         ],
-        notes="Discover plus signed review and explicitly confirmed resume submission; web chat remains QR-only.",
+        delivery_contract=DeliveryContract(
+            action="resume_submit",
+            resume_source="platform_account_resume",
+            personalized_message="unsupported",
+            message_max_chars=None,
+            success_evidence=["platform_delivery_confirmation"],
+            unsupported_behaviors=["web_personalized_message_send", "web_chat"],
+        ),
+        notes="Discover plus verified resume submission; web chat remains a mobile QR handoff.",
     ),
     PlatformInfo(
         key="linkedin",

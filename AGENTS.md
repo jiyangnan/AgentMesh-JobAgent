@@ -8,8 +8,9 @@ This is the public Job Agent CLI repository in the AgentMesh ecosystem. It conta
 
 1. `README.md` for public product scope and user setup.
 2. `docs/agent-onboarding.md` for the canonical agent-driven workflow.
-3. `skills/claude-code/SKILL.md` and `skills/openclaw-job-agent/SKILL.md` when updating skill distribution assets.
-4. `pyproject.toml` for package metadata and CLI entry points.
+3. `docs/client-upgrade-contract.md` before changing persisted state or upgrade behavior.
+4. `skills/claude-code/SKILL.md` and `skills/openclaw-job-agent/SKILL.md` when updating skill distribution assets.
+5. `pyproject.toml` for package metadata and CLI entry points.
 
 ## Repo Map
 
@@ -29,13 +30,18 @@ This is the public Job Agent CLI repository in the AgentMesh ecosystem. It conta
 
 ## Product Rules
 
-- Before suggesting a paid pass, run `jobagent doctor env`. An unexpired signup trial with sufficient credits is usable immediately: report the 50 shared trial credits and continue with `next_suggested`; do not block on the absence of a paid pass.
+- Before suggesting a paid pass, run `jobagent doctor env`. Read `environment_healthy` separately from `workflow.ready`. An unexpired signup trial with sufficient credits is usable immediately: report the 50 shared trial credits and continue with the top-level `next_suggested`; do not block on the absence of a paid pass.
 - Follow the persisted workflow and `next_suggested`; never invent a parallel or batch-login workflow.
 - Platforms run as complete vertical chains in this order: Boss -> Liepin -> Zhilian -> 51Job. Complete the current platform through audit before logging in to the next platform.
 - Starting a job-search round authorizes automatic delivery of cloud-signed `selected` jobs. Do not request another confirmation before each platform or send command.
 - `review` jobs require explicit user-selected IDs and `--confirm-promote`. Never auto-promote `rejected` jobs.
 - Stop and relay the exact prompt whenever the CLI returns `requires_user_action=true`.
 - Never delete `~/.jobagent` or the Job Agent Chrome profile as a general upgrade fix. Follow `client_upgrade_required`, `conflicts`, and `next_suggested`.
+- Local profiles, rounds, signed decisions, archives and audits are account-bound. Never silently claim legacy state or bypass an account mismatch; preserve the explicit `account bind --confirm-legacy` and `account switch --new-state` handoffs.
+- `jobagent round start` is the only operation that creates a round. Status, doctor, browser helpers and platform internals must not create one implicitly.
+- For browser incidents, preserve the Chrome profile and use the read-only `jobagent browser diagnose --platform <platform>` before asking for another login. `unknown` or `conflicting` login evidence is inconclusive.
+- Normal audit output is compact. Use round-level summaries by default and expand bounded failures/details only when investigation requires records.
+- Boss and Liepin require signed, non-empty personalized greetings of at most 100 characters and exact outgoing-message evidence. Zhilian and 51Job are resume-submit-only and must never be reported as greeting delivery.
 
 ## Safety Rules
 

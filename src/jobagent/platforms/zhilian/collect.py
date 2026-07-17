@@ -13,6 +13,7 @@ from jobagent.domain.models import Job
 from jobagent.drivers.boss import create_driver
 
 from .constants import ZHILIAN_LOGIN_USER_PROMPT
+from .city_resolver import BUNDLED_CITY_CODES, ZhilianCityResolver, normalize_city_name
 from .detail import (
     build_zhilian_detail_snapshot_script,
     merge_zhilian_detail_into_job,
@@ -26,21 +27,23 @@ from .selectors import build_zhilian_city_filter_script, build_zhilian_snapshot_
 # redirects to the canonical ``/sou/jl<code>/...`` URL.  Prefer that route for
 # verified cities because the visible location panel is dynamically mounted
 # and can ignore otherwise valid native clicks while it is collapsed.
-_ZHILIAN_CITY_CODES = {
-    "北京": "530",
-    "上海": "538",
-    "深圳": "489",
-}
+_ZHILIAN_CITY_CODES = BUNDLED_CITY_CODES
 
 
-def build_zhilian_search_url(query: str, city: str = "", page: int = 1) -> str:
+def build_zhilian_search_url(
+    query: str,
+    city: str = "",
+    page: int = 1,
+    *,
+    city_code: str | None = None,
+) -> str:
     """Build a public Zhilian search URL.
 
     Verified cities use Zhilian's public ``jl`` query parameter.  Other cities
     continue through the visible filter-panel fallback in the collector.
     """
     parts: list[str] = []
-    city_code = _ZHILIAN_CITY_CODES.get(city.strip().removesuffix("市"))
+    city_code = city_code or _ZHILIAN_CITY_CODES.get(normalize_city_name(city))
     if city_code:
         parts.append(f"jl={city_code}")
     parts.append(f"kw={quote(query)}")
@@ -93,8 +96,9 @@ class ZhilianCollectResult:
 class ZhilianReadOnlyCollector:
     """Collect Zhilian search cards without applying or sending messages."""
 
-    def __init__(self, driver: Any | None = None):
+    def __init__(self, driver: Any | None = None, *, city_cache_path: Path | None = None):
         self.driver = driver or create_driver(platform="zhilian")
+        self.city_resolver = ZhilianCityResolver(city_cache_path)
 
     def collect(
         self,
@@ -118,10 +122,21 @@ class ZhilianReadOnlyCollector:
         snapshots: list[dict[str, Any]] = []
         detail_snapshots: list[dict[str, Any]] = []
         search_query = normalize_zhilian_keyword(query, city)
-        first_url = build_zhilian_search_url(search_query, city, page=start_page)
+        resolved_city_code, city_code_source = self.city_resolver.lookup(city) if city else (None, "none")
+        first_url = build_zhilian_search_url(
+            search_query,
+            city,
+            page=start_page,
+            city_code=resolved_city_code,
+        )
 
         for index, current_page in enumerate(range(start_page, start_page + page_count)):
-            url = build_zhilian_search_url(search_query, city, page=current_page)
+            url = build_zhilian_search_url(
+                search_query,
+                city,
+                page=current_page,
+                city_code=resolved_city_code,
+            )
             open_result = self.driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
             if not open_result.get("ok"):
                 return ZhilianCollectResult(
@@ -137,13 +152,12 @@ class ZhilianReadOnlyCollector:
                 )
             city_filter: dict[str, Any] = {}
             if city:
-                city_code = _ZHILIAN_CITY_CODES.get(city.strip().removesuffix("市"))
-                if city_code:
+                if resolved_city_code:
                     city_filter = {
                         "ok": True,
                         "mode": "zhilian_city_filter",
                         "city": city,
-                        "cityCode": city_code,
+                        "cityCode": resolved_city_code,
                         "applied": True,
                         "urlEncoded": True,
                     }
@@ -195,12 +209,88 @@ class ZhilianReadOnlyCollector:
                     error=failure,
                 )
 
+            if city:
+                city_resolution = self.city_resolver.verify_snapshot(
+                    city,
+                    snapshot,
+                    expected_code=resolved_city_code,
+                    source=city_code_source,
+                )
+                if not city_resolution["verified"] and resolved_city_code:
+                    recovery_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
+                    if recovery_filter.get("loginRequired"):
+                        return ZhilianCollectResult(
+                            query=search_query,
+                            city=city,
+                            url=str(recovery_filter.get("url") or snapshot.get("url") or url),
+                            jobs=jobs,
+                            snapshot=_combined_snapshot(
+                                snapshots,
+                                {
+                                    "error": "zhilian_login_required",
+                                    "cityFilter": recovery_filter,
+                                    "cityResolution": city_resolution,
+                                    "page": current_page,
+                                },
+                            ),
+                            page=start_page,
+                            pages=page_count,
+                            ok=False,
+                            error="zhilian_login_required",
+                        )
+                    if _city_filter_applied(recovery_filter):
+                        recovered_snapshot = self._extract_snapshot(limit=remaining)
+                        recovered_snapshot["page"] = current_page
+                        recovered_snapshot["requestedUrl"] = url
+                        recovered_snapshot["cityFilter"] = recovery_filter
+                        recovered_failure = _snapshot_failure(recovered_snapshot)
+                        if not recovered_failure:
+                            snapshot = recovered_snapshot
+                            snapshots[-1] = snapshot
+                            city_resolution = self.city_resolver.verify_snapshot(
+                                city,
+                                snapshot,
+                                expected_code=None,
+                                source="visible_filter_recovery",
+                            )
+                snapshot["cityResolution"] = city_resolution
+                if not city_resolution["verified"]:
+                    return ZhilianCollectResult(
+                        query=search_query,
+                        city=city,
+                        url=str(snapshot.get("url") or open_result.get("url") or url),
+                        jobs=jobs,
+                        snapshot=_combined_snapshot(
+                            snapshots,
+                            {
+                                "error": "zhilian_city_resolution_unverified",
+                                "cityFilter": city_filter,
+                                "cityResolution": city_resolution,
+                                "page": current_page,
+                            },
+                        ),
+                        page=start_page,
+                        pages=page_count,
+                        ok=False,
+                        error="zhilian_city_resolution_unverified",
+                    )
+                resolution_source = str(city_resolution.get("source") or city_code_source)
+                previous_city_code = resolved_city_code
+                resolved_city_code = str(city_resolution["observedCode"])
+                city_code_source = "verified_cache"
+                if resolution_source != "bundled_seed" or resolved_city_code != previous_city_code:
+                    self.city_resolver.remember(
+                        city,
+                        resolved_city_code,
+                        evidence_url=str(city_resolution["observedUrl"]),
+                    )
+
             cards = snapshot.get("cards", []) if isinstance(snapshot, dict) else []
             for card in cards:
                 if not isinstance(card, dict):
                     continue
                 job = parse_zhilian_job(card, city_name=city)
-                if city and job.city and job.city != city:
+                if city and job.city and normalize_city_name(job.city) != normalize_city_name(city):
                     continue
                 key = _job_dedupe_key(job, card)
                 if key in seen:
