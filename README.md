@@ -42,7 +42,7 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.ps1 | iex
 ```
 
-The official installer creates a managed installation. Starting with `0.3.0`, managed installations verify signed release policy and safely update between commands. A developer source checkout is never changed automatically.
+The official installer creates a managed installation. Starting with `0.3.0`, managed installations verify signed release policy and safely update between commands. When an update is found, the CLI emits machine-readable progress events for detection, start, completion and original-command continuation. These events appear only for a real update; an up-to-date client stays quiet. A developer source checkout is never changed automatically.
 
 ## Set Up
 

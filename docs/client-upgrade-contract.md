@@ -37,7 +37,7 @@
 
 每条 CLI 命令按以下顺序执行：
 
-1. 验证签名版本策略，受管安装按政策完成客户端更新。
+1. 验证签名版本策略，受管安装按政策完成客户端更新；仅在真实发现新版时输出 `client_update_detected -> client_update_started -> client_update_completed -> client_command_resumed`，更新成功后自动恢复原命令。
 2. 检测 `client_version`、协议版本和状态迁移版本。
 3. 检查是否存在仍存活的 Job Agent 进程；有则记录 `migration_pending=true` 并停止迁移。
 4. 清理可重建状态、迁移旧 schema、按协议边界归档运行时决策。
@@ -65,6 +65,8 @@
 ## 验收标准
 
 - 旧安装首次启动：自动迁移一次，报告 `cleared`、`migrated`、`archived` 和 `conflicts`。
+- 真实新版：受管安装按阶段输出版本号与状态，成功后原命令自动恢复；当前已是最新版时不输出升级事件。
+- 旧事件协议兼容：从尚不具备阶段事件的旧客户端升级后，新进程至少补发一次 `client_update_completed` 和 `client_command_resumed`，后续版本升级输出完整四阶段。
 - 同版本再次启动：`upgrade_detected=false`，不重复删除或归档。
 - 活锁场景：不修改运行时状态，返回 `active_process_lock`；进程结束后自动续做。
 - 过期 Key / 不兼容画像：平台 dispatch 不执行，恢复命令可执行。

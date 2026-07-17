@@ -256,6 +256,7 @@ def run_client_upgrade(
     return {
         "ok": not conflicts,
         "upgrade_detected": upgrade_detected,
+        "version_changed": version_changed,
         "from_version": prior_version or "unknown",
         "to_version": current_version,
         "state_migration_version": STATE_MIGRATION_VERSION,

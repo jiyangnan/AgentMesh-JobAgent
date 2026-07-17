@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +12,14 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from jobagent.cli import _dispatch, _login, _with_login_workflow, build_parser
+from jobagent.cli import (
+    _dispatch,
+    _login,
+    _maybe_update,
+    _prepare_client_upgrade,
+    _with_login_workflow,
+    build_parser,
+)
 from jobagent.infra.protocol import canonical_json_bytes, candidate_digest, digest_payload
 
 
@@ -1200,6 +1208,7 @@ def test_signed_release_manifest_is_verified_and_source_checkout_is_notice_only(
 ):
     import jobagent.infra.release_update as updates
 
+    monkeypatch.setattr(updates, "__version__", "0.4.1")
     private, public = _key_pair()
     monkeypatch.setattr(updates, "RELEASE_SIGNING_PUBLIC_KEY", public)
     manifest = _sign(
@@ -1255,6 +1264,212 @@ def test_explicit_update_check_bypasses_manifest_cache(monkeypatch):
 
     assert _dispatch(args) == {"status": "current"}
     assert calls == [{"auto_apply": False, "force": True}]
+
+
+def test_managed_update_emits_bounded_lifecycle_events(tmp_path, monkeypatch):
+    import jobagent.infra.release_update as updates
+
+    monkeypatch.setattr(updates, "__version__", "0.4.1")
+    manifest = {
+        "latest_client_version": "0.4.2",
+        "minimum_supported_version": "0.3.0",
+        "notes_url": "https://example.test/v0.4.2",
+    }
+    events = []
+    monkeypatch.setattr(updates, "fetch_release_manifest", lambda **_kwargs: manifest)
+    monkeypatch.setattr(updates, "_package_root", lambda: tmp_path)
+    monkeypatch.setattr(updates, "_install_metadata", lambda _root: {"managed": True})
+    monkeypatch.setattr(updates, "apply_managed_update", lambda *_args, **_kwargs: "0.4.2")
+
+    result = updates.check_for_update(
+        auto_apply=True,
+        on_event=lambda stage, **details: events.append((stage, details)),
+    )
+
+    assert result == {
+        "status": "updated",
+        "from_version": updates.__version__,
+        "to_version": "0.4.2",
+    }
+    assert [stage for stage, _details in events] == [
+        "client_update_detected",
+        "client_update_started",
+        "client_update_completed",
+    ]
+    assert all(details["automatic"] is True for _stage, details in events)
+    assert all(details["notes_url"] == manifest["notes_url"] for _stage, details in events)
+
+
+def test_managed_update_emits_failure_event(tmp_path, monkeypatch):
+    import jobagent.infra.release_update as updates
+
+    monkeypatch.setattr(updates, "__version__", "0.4.1")
+    manifest = {
+        "latest_client_version": "0.4.2",
+        "minimum_supported_version": "0.3.0",
+        "notes_url": "https://example.test/v0.4.2",
+    }
+    events = []
+    monkeypatch.setattr(updates, "fetch_release_manifest", lambda **_kwargs: manifest)
+    monkeypatch.setattr(updates, "_package_root", lambda: tmp_path)
+    monkeypatch.setattr(updates, "_install_metadata", lambda _root: {"managed": True})
+
+    def fail_update(*_args, **_kwargs):
+        raise updates.UpdateError("managed install has local changes; update refused")
+
+    monkeypatch.setattr(updates, "apply_managed_update", fail_update)
+
+    with pytest.raises(updates.UpdateError, match="local changes"):
+        updates.check_for_update(
+            auto_apply=True,
+            on_event=lambda stage, **details: events.append((stage, details)),
+        )
+
+    assert [stage for stage, _details in events] == [
+        "client_update_detected",
+        "client_update_started",
+        "client_update_failed",
+    ]
+    assert events[-1][1]["next_suggested"].startswith("Resolve the reported update error")
+
+
+def test_current_release_does_not_emit_update_events(monkeypatch):
+    import jobagent.infra.release_update as updates
+
+    monkeypatch.setattr(updates, "__version__", "0.4.2")
+    monkeypatch.setattr(
+        updates,
+        "fetch_release_manifest",
+        lambda **_kwargs: {
+            "latest_client_version": "0.4.2",
+            "minimum_supported_version": "0.3.0",
+        },
+    )
+    events = []
+
+    result = updates.check_for_update(
+        on_event=lambda stage, **details: events.append((stage, details))
+    )
+
+    assert result["status"] == "current"
+    assert events == []
+
+
+def test_previous_managed_version_reads_pre_update_checkout(tmp_path, monkeypatch):
+    import jobagent.infra.release_update as updates
+
+    monkeypatch.setattr(updates, "_install_metadata", lambda _root: {"managed": True})
+    values = {
+        ("git", "rev-parse", "HEAD@{1}"): "a" * 40,
+        ("git", "rev-parse", "HEAD"): "b" * 40,
+        ("git", "show", f"{'a' * 40}:pyproject.toml"): (
+            '[project]\nname = "jobagent"\nversion = "0.4.1"\n'
+        ),
+    }
+    monkeypatch.setattr(updates, "_run", lambda _root, *args: values[args])
+
+    assert updates.previous_managed_version(tmp_path) == "0.4.1"
+
+
+def test_cli_update_restart_receipt_is_safe_and_emitted_once(monkeypatch, capsys):
+    import jobagent.cli as cli
+    import jobagent.infra.release_update as updates
+
+    args = build_parser().parse_args(["doctor", "env"])
+    calls = []
+
+    def updated(*, on_event=None):
+        assert on_event is not None
+        return {"status": "updated", "from_version": "0.4.1", "to_version": "0.4.2"}
+
+    class ExecCalled(RuntimeError):
+        pass
+
+    def fake_execv(executable, argv):
+        calls.append((executable, argv))
+        raise ExecCalled
+
+    monkeypatch.setattr(updates, "maybe_auto_update", updated)
+    monkeypatch.setattr(cli.os, "execv", fake_execv)
+    monkeypatch.setattr(cli.sys, "argv", ["jobagent", "doctor", "env"])
+
+    with pytest.raises(ExecCalled):
+        _maybe_update(args)
+
+    receipt = json.loads(os.environ[cli._UPDATE_RESUME_ENV])
+    assert receipt == {
+        "from_version": "0.4.1",
+        "to_version": "0.4.2",
+        "command": "jobagent doctor",
+    }
+    assert "env" not in os.environ[cli._UPDATE_RESUME_ENV]
+    assert calls == [
+        (sys.executable, [sys.executable, "-m", "jobagent", "doctor", "env"])
+    ]
+
+    monkeypatch.setattr(updates, "maybe_auto_update", lambda **_kwargs: {"status": "current"})
+    _maybe_update(args)
+    first = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [event["stage"] for event in first] == ["client_command_resumed"]
+    assert first[0]["command"] == "jobagent doctor"
+    assert cli._UPDATE_RESUME_ENV not in os.environ
+
+    _maybe_update(args)
+    assert capsys.readouterr().err == ""
+
+
+def test_previous_client_upgrade_bootstraps_completion_events(monkeypatch, capsys):
+    import jobagent.infra.client_upgrade as upgrades
+
+    args = build_parser().parse_args(["round", "status"])
+    report = {
+        "ok": True,
+        "upgrade_detected": True,
+        "version_changed": True,
+        "from_version": "0.4.1",
+        "to_version": "0.4.2",
+        "conflicts": [],
+        "next_suggested": "jobagent round status",
+    }
+    monkeypatch.setattr(upgrades, "run_client_upgrade", lambda: report)
+
+    assert _prepare_client_upgrade(args) == report
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [event["stage"] for event in events] == [
+        "client_update_completed",
+        "client_command_resumed",
+    ]
+    assert all(event["bootstrap_compatibility"] is True for event in events)
+    assert events[-1]["command"] == "jobagent round"
+
+
+def test_uninitialized_previous_client_uses_managed_reflog_for_bootstrap(
+    monkeypatch, capsys
+):
+    import jobagent.infra.client_upgrade as upgrades
+    import jobagent.infra.release_update as updates
+
+    args = build_parser().parse_args(["platforms", "status"])
+    report = {
+        "ok": True,
+        "upgrade_detected": True,
+        "version_changed": False,
+        "from_version": "unknown",
+        "to_version": "0.4.2",
+        "conflicts": [],
+        "next_suggested": "jobagent round status",
+    }
+    monkeypatch.setattr(upgrades, "run_client_upgrade", lambda: report)
+    monkeypatch.setattr(updates, "previous_managed_version", lambda: "0.4.1")
+
+    assert _prepare_client_upgrade(args) == report
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [event["stage"] for event in events] == [
+        "client_update_completed",
+        "client_command_resumed",
+    ]
+    assert all(event["from_version"] == "0.4.1" for event in events)
+    assert events[-1]["command"] == "jobagent platforms"
 
 
 def test_update_lock_reclaims_dead_owner_but_blocks_live_owner(tmp_path, monkeypatch):

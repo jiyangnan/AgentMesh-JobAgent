@@ -31,6 +31,7 @@ This is the public Job Agent CLI repository in the AgentMesh ecosystem. It conta
 ## Product Rules
 
 - Before suggesting a paid pass, run `jobagent doctor env`. Read `environment_healthy` separately from `workflow.ready`. An unexpired signup trial with sufficient credits is usable immediately: report the 50 shared trial credits and continue with the top-level `next_suggested`; do not block on the absence of a paid pass.
+- Forward managed-update stages once in the user's language. Do not ask permission for a signed automatic update or stop after `client_update_completed`; continue the original command on `client_command_resumed`. Stop only on `client_update_failed`, report its recovery fields, and never expose command arguments in update telemetry.
 - Follow the persisted workflow and `next_suggested`; never invent a parallel or batch-login workflow.
 - Platforms run as complete vertical chains in this order: Boss -> Liepin -> Zhilian -> 51Job. Complete the current platform through audit before logging in to the next platform.
 - Starting a job-search round authorizes automatic delivery of cloud-signed `selected` jobs. Do not request another confirmation before each platform or send command.

@@ -63,6 +63,7 @@ def test_old_install_clears_only_ephemeral_state_and_migrates_round(tmp_path):
 
     assert report["ok"] is True
     assert report["upgrade_detected"] is True
+    assert report["version_changed"] is False
     assert set(report["cleared"]) == {
         "state/release_manifest_cache.json",
         "state/platform_tabs.json",
@@ -171,6 +172,7 @@ def test_protocol_change_archives_unsigned_runtime_decisions_without_touching_au
     )
 
     assert report["ok"] is True
+    assert report["version_changed"] is True
     assert not (app_dir / "state" / "discoveries").exists()
     archived = list((app_dir / "state" / "archive").glob("discoveries-protocol-0-*"))
     assert len(archived) == 1

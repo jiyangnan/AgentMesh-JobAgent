@@ -250,6 +250,16 @@ Do not dump complete local audit files into the conversation.
 
 Official installer-managed clients check signed release policy between commands and update only when no Discover/send action is active. Developer source checkouts receive a notice and are not modified.
 
+When a managed client updates, forward these stderr progress stages in the user's language:
+
+- `client_update_detected`: briefly report the old and new versions; do not ask for permission.
+- `client_update_started`: report that the signed update is being installed before the requested command.
+- `client_update_completed`: report that the update succeeded.
+- `client_command_resumed`: continue the original command immediately; do not stop for another confirmation.
+- `client_update_failed`: stop, report `message` and follow `next_suggested`.
+
+These stages are emitted only when a newer release is involved. Do not invent an update message for `status=current` or repeat a successful update notice on later commands. A first upgrade from an older client may begin with the compatibility `client_update_completed` and `client_command_resumed` stages because that older process could not emit the earlier stages.
+
 Manual status check:
 
 ```bash

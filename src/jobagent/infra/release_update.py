@@ -7,11 +7,12 @@ import os
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from jobagent import __version__
 from jobagent.infra.cloud_client import PROTOCOL_VERSION
@@ -29,6 +30,7 @@ OFFICIAL_REPO_URLS = {
     "git@github.com:jiyangnan/AgentMesh-JobAgent.git",
 }
 CACHE_TTL_SECONDS = 5 * 60
+UpdateEventHandler = Callable[..., None]
 
 
 class UpdateError(RuntimeError):
@@ -120,6 +122,31 @@ def _install_metadata(root: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) and payload.get("managed") is True else None
 
 
+def previous_managed_version(root: Path | None = None) -> str | None:
+    """Read the pre-update version from the managed checkout reflog, if available."""
+    root = root or _package_root()
+    if _install_metadata(root) is None:
+        return None
+    try:
+        previous_commit = _run(root, "git", "rev-parse", "HEAD@{1}")
+        current_commit = _run(root, "git", "rev-parse", "HEAD")
+        if previous_commit == current_commit:
+            return None
+        pyproject = _run(root, "git", "show", f"{previous_commit}:pyproject.toml")
+        value = str(tomllib.loads(pyproject).get("project", {}).get("version", ""))
+        _version(value)
+    except (
+        AttributeError,
+        OSError,
+        TypeError,
+        ValueError,
+        UpdateError,
+        tomllib.TOMLDecodeError,
+    ):
+        return None
+    return value
+
+
 def _run(root: Path, *args: str) -> str:
     result = subprocess.run(
         list(args),
@@ -208,7 +235,12 @@ def apply_managed_update(manifest: dict[str, Any], root: Path | None = None) -> 
     return str(manifest["latest_client_version"])
 
 
-def check_for_update(*, auto_apply: bool = True, force: bool = False) -> dict[str, Any]:
+def check_for_update(
+    *,
+    auto_apply: bool = True,
+    force: bool = False,
+    on_event: UpdateEventHandler | None = None,
+) -> dict[str, Any]:
     manifest = fetch_release_manifest(force=force)
     if manifest is None:
         return {"status": "unavailable", "current_version": __version__}
@@ -218,17 +250,53 @@ def check_for_update(*, auto_apply: bool = True, force: bool = False) -> dict[st
         return {"status": "current", "current_version": __version__, "manifest": manifest}
     root = _package_root()
     managed = _install_metadata(root) is not None
+    required = _version(__version__) < _version(minimum)
+    event_details = {
+        "from_version": __version__,
+        "to_version": latest,
+        "automatic": bool(managed and auto_apply),
+        "required": required,
+        "notes_url": manifest.get("notes_url"),
+    }
+    if on_event is not None:
+        on_event(
+            "client_update_detected",
+            message="A signed Job Agent update is available.",
+            **event_details,
+        )
     if not managed or not auto_apply:
         return {
-            "status": "update_required" if _version(__version__) < _version(minimum) else "update_available",
+            "status": "update_required" if required else "update_available",
             "current_version": __version__,
             "latest_version": latest,
             "managed": managed,
             "notes_url": manifest.get("notes_url"),
         }
-    version = apply_managed_update(manifest, root=root)
+    if on_event is not None:
+        on_event(
+            "client_update_started",
+            message="Job Agent is updating before the requested command.",
+            **event_details,
+        )
+    try:
+        version = apply_managed_update(manifest, root=root)
+    except Exception as exc:
+        if on_event is not None:
+            on_event(
+                "client_update_failed",
+                message=str(exc),
+                next_suggested="Resolve the reported update error, then run the same command again.",
+                **event_details,
+            )
+        raise
+    if on_event is not None:
+        on_event(
+            "client_update_completed",
+            message="Job Agent updated successfully.",
+            **event_details,
+        )
     return {"status": "updated", "from_version": __version__, "to_version": version}
 
 
-def maybe_auto_update() -> dict[str, Any]:
-    return check_for_update(auto_apply=True)
+def maybe_auto_update(*, on_event: UpdateEventHandler | None = None) -> dict[str, Any]:
+    return check_for_update(auto_apply=True, on_event=on_event)

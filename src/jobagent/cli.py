@@ -12,6 +12,9 @@ from typing import Any
 from jobagent import __version__
 
 
+_UPDATE_RESUME_ENV = "JOBAGENT_UPDATE_RESUME"
+
+
 def _print(payload: Any, *, stream=None) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2), file=stream or sys.stdout)
 
@@ -545,12 +548,44 @@ def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _maybe_update(args: argparse.Namespace) -> None:
+    from jobagent.infra.diagnostics import emit_stage
+
+    resume_raw = os.environ.pop(_UPDATE_RESUME_ENV, None)
+    if resume_raw:
+        try:
+            resume = json.loads(resume_raw)
+        except json.JSONDecodeError:
+            resume = None
+        if isinstance(resume, dict):
+            from_version = resume.get("from_version")
+            to_version = resume.get("to_version")
+            command = resume.get("command")
+            if all(
+                isinstance(value, str) and value
+                for value in (from_version, to_version, command)
+            ):
+                emit_stage(
+                    "client_command_resumed",
+                    from_version=from_version,
+                    to_version=to_version,
+                    command=command,
+                    message="Job Agent is continuing the requested command after updating.",
+                )
+                setattr(args, "_client_update_resume_reported", True)
     if os.environ.get("JOBAGENT_SKIP_UPDATE") == "1" or args.command == "update":
         return
     from jobagent.infra.release_update import maybe_auto_update
 
-    result = maybe_auto_update()
+    result = maybe_auto_update(on_event=emit_stage)
     if result.get("status") == "updated":
+        os.environ[_UPDATE_RESUME_ENV] = json.dumps(
+            {
+                "from_version": result["from_version"],
+                "to_version": result["to_version"],
+                "command": f"jobagent {args.command}",
+            },
+            separators=(",", ":"),
+        )
         os.execv(sys.executable, [sys.executable, "-m", "jobagent", *sys.argv[1:]])
     if result.get("status") == "update_required":
         _print(result, stream=sys.stderr)
@@ -567,10 +602,46 @@ def _prepare_client_upgrade(args: argparse.Namespace) -> dict[str, Any]:
 
     report = run_client_upgrade()
     setattr(args, "_client_upgrade_report", report)
+    bootstrap_from_version = report.get("from_version") if report.get("version_changed") else None
+    if (
+        not bootstrap_from_version
+        and report.get("upgrade_detected")
+        and report.get("from_version") == "unknown"
+        and not getattr(args, "_client_update_resume_reported", False)
+    ):
+        from jobagent.infra.release_update import previous_managed_version
+
+        bootstrap_from_version = previous_managed_version()
+    bootstrap_update = bool(
+        bootstrap_from_version
+        and bootstrap_from_version != report.get("to_version")
+        and not getattr(args, "_client_update_resume_reported", False)
+    )
+    if bootstrap_update:
+        from jobagent.infra.diagnostics import emit_stage
+
+        emit_stage(
+            "client_update_completed",
+            from_version=bootstrap_from_version,
+            to_version=report["to_version"],
+            automatic=True,
+            bootstrap_compatibility=True,
+            message="Job Agent updated successfully.",
+        )
     command = args.command
     if command == "round":
         command = f"round-{args.round_command}"
-    return enforce_upgrade_for_command(command, report)
+    result = enforce_upgrade_for_command(command, report)
+    if bootstrap_update:
+        emit_stage(
+            "client_command_resumed",
+            from_version=bootstrap_from_version,
+            to_version=report["to_version"],
+            command=f"jobagent {args.command}",
+            bootstrap_compatibility=True,
+            message="Job Agent is continuing the requested command after updating.",
+        )
+    return result
 
 
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:

@@ -2,6 +2,17 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.2] - 2026-07-17
+
+### Added
+
+- Managed clients now emit machine-readable `client_update_detected`, `client_update_started`, `client_update_completed`, and `client_command_resumed` events while applying a signed release and continuing the original command.
+- The first upgrade from a client that predates these events emits a compatibility completion/resume receipt after the new client starts.
+
+### Changed
+
+- Agent guides now require one brief update report, automatic continuation after success, and user intervention only when `client_update_failed` is returned.
+
 ## [0.4.1] - 2026-07-17
 
 ### Fixed
