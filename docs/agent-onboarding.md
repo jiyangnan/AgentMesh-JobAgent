@@ -13,6 +13,7 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 7. Do not stop after one platform. Read the `workflow` object after every command and continue while `workflow.continue_required=true`.
 8. Report the overall round complete only when `workflow.workflow_complete=true`. Skipping a platform requires the user's explicit approval and `jobagent round skip --platform <platform> --confirm-skip`.
 9. Create a round only with `jobagent round start`. `doctor env`, `round status` and platform commands must never be treated as implicit authorization to create another round.
+10. When a cloud command returns `retryable=true` and `request_preserved=true`, immediately execute its `next_suggested` command. Do not ask the user to click retry, re-login or recollect jobs; the same signed Discover request is resumed without another charge.
 
 ## Goal, Actions and Acceptance
 
@@ -34,6 +35,8 @@ The CLI persists the four-platform order and returns one `next_suggested` comman
 Do not collect logins as a separate setup phase. At round start, log in to Boss only. Do not open or request the Liepin login until Boss audit has advanced `workflow.current_platform` to `liepin`; apply the same rule to Zhilian and 51Job.
 
 One completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds: pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice. Registration, API Key creation, and the open-source client are free; new accounts start with zero cloud credits. The optional AgentMesh360 monthly pass costs CNY 29, lasts 30 days, and includes 1,000 shared credits without automatic renewal. Previously issued signup-trial credits remain usable until their original expiry.
+
+Discover automatically retries bounded transient TLS, connection and gateway failures. After retries are exhausted, `request_preserved=true` means the signed plan and collected candidate set are still available locally. Run the returned `next_suggested` command immediately; it resumes cloud decision before any new browser collection. Do not replace this handoff with repeated health checks or a request for user confirmation.
 
 ## 1. Install
 

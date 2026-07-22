@@ -25,7 +25,7 @@
 | `state/support_state.json` | 保留 | 首次投递后的单次提示状态不得因升级重置 |
 | `state/current_round.json` | 按 schema 迁移 | 迁移记录来源 schema 和原因；含义不明确的旧平台状态重置为安全的待执行状态；损坏 JSON 保留到 archive 后重建 |
 | `state/rounds/` | 保留 | 历史轮次不覆盖、不删除 |
-| `state/discoveries/` | 同协议保留，协议变化时归档 | 归档到 `state/archive/`，不得连同 audit 一起删除 |
+| `state/discoveries/` | 同协议保留，协议变化时归档 | 归档到 `state/archive/`，不得连同 audit 一起删除；`0.4.5` 起新增的 `pending-decision.json` 属于账户绑定的可恢复请求，成功后删除，旧安装缺失该文件无需迁移 |
 | release manifest cache | 自动清理 | 新版本重新获取并验证签名策略 |
 | platform tab / browser-session marker | 自动清理 | 只清理可重建的 CDP 映射，不触碰 Chrome cookies/profile |
 | last doctor / probe 输出 | 自动清理 | 旧诊断结论不应冒充新版状态 |

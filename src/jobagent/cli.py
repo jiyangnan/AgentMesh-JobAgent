@@ -830,6 +830,9 @@ def main() -> None:
                 "error": exc.code or "cloud_error",
                 "status": exc.status,
                 "message": str(exc),
+                "retryable": exc.retryable,
+                "attempts": exc.attempts,
+                **exc.details,
             }
         elif isinstance(exc, ProtocolError):
             payload = {"ok": False, "error": "protocol_verification_failed", "message": str(exc)}

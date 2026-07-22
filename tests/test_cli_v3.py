@@ -659,6 +659,22 @@ def test_public_agent_docs_cover_account_recovery_browser_diagnostics_and_compac
         assert "jobagent round audit" in text
 
 
+def test_public_agent_docs_require_automatic_discover_transport_recovery():
+    root = Path(__file__).resolve().parents[1]
+    docs = [
+        (root / "AGENTS.md").read_text(encoding="utf-8"),
+        (root / "README.md").read_text(encoding="utf-8"),
+        (root / "docs/agent-onboarding.md").read_text(encoding="utf-8"),
+        (root / "skills/claude-code/SKILL.md").read_text(encoding="utf-8"),
+        (root / "skills/openclaw-job-agent/SKILL.md").read_text(encoding="utf-8"),
+    ]
+
+    for text in docs:
+        assert "retryable=true" in text
+        assert "request_preserved=true" in text
+        assert "next_suggested" in text
+
+
 def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch, capsys):
     import jobagent.application.discover as application
     import jobagent.infra.protocol as protocol
@@ -727,6 +743,19 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(application, "collect_from_search_plan", lambda *_args, **_kwargs: candidates)
     monkeypatch.setattr(application, "active_command", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext())
+    pending_writes: list[dict] = []
+    pending_clears: list[str | None] = []
+    monkeypatch.setattr(application, "load_pending_decision", lambda _platform: None)
+    monkeypatch.setattr(
+        application,
+        "save_pending_decision",
+        lambda platform, **payload: pending_writes.append({"platform": platform, **payload}),
+    )
+    monkeypatch.setattr(
+        application,
+        "clear_pending_decision",
+        lambda _platform, *, discover_id=None: pending_clears.append(discover_id),
+    )
     statuses: list[tuple[str, str]] = []
     monkeypatch.setattr(
         application.rounds,
@@ -747,7 +776,12 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(application, "save_manifest", save)
     result = application.run_discover("51job", page_delay=0)
     assert result["selected"] == 1 and result["credits"] == 10
+    assert result["resumed"] is False
     assert statuses == [("51job", "discovered")]
+    assert pending_writes == [
+        {"platform": "51job", "plan": plan, "jobs": candidates}
+    ]
+    assert pending_clears == [discover_id]
     assert result["workflow"]["round_id"] == "round-1"
     persisted = json.loads(output.read_text(encoding="utf-8"))
     assert "candidates" not in persisted
@@ -756,6 +790,33 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     assert '"stage": "search_plan_requested"' in progress
     assert '"stage": "browser_collection_started"' in progress
     assert '"stage": "cloud_decision_requested"' in progress
+
+    monkeypatch.setattr(
+        application,
+        "load_pending_decision",
+        lambda _platform: {
+            "platform": "51job",
+            "discover_id": discover_id,
+            "plan": plan,
+            "jobs": candidates,
+        },
+    )
+    monkeypatch.setattr(
+        application.cloud_client,
+        "discovery_start",
+        lambda **_kwargs: pytest.fail("pending decision started a new discovery"),
+    )
+    monkeypatch.setattr(
+        application,
+        "collect_from_search_plan",
+        lambda *_args, **_kwargs: pytest.fail("pending decision recollected browser jobs"),
+    )
+
+    recovered = application.run_discover("51job", page_delay=0)
+
+    assert recovered["resumed"] is True
+    assert recovered["discover_id"] == discover_id
+    assert pending_clears == [discover_id, discover_id]
 
 
 def test_unexpected_cli_error_writes_diagnostic_log(tmp_path, monkeypatch, capsys):

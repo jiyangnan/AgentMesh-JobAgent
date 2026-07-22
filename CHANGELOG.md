@@ -2,6 +2,18 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.5] - 2026-07-22
+
+### Fixed
+
+- Retry idempotent Discover start/decision requests after bounded transient TLS, connection and gateway failures.
+- Preserve a pending signed Discover and its local candidate set so the next identical platform command resumes cloud decision without reopening the recruiting platform or recollecting jobs.
+- Return machine-readable `retryable`, `attempts`, `request_preserved` and `next_suggested` recovery fields for Agents.
+
+### Compatibility
+
+- Existing credentials, browser login state, profiles, rounds, decisions and audits are preserved. The additive account-bound pending file is created only after a new Discover collects candidates and is removed after a verified decision.
+
 ## [0.4.4] - 2026-07-17
 
 ### Fixed

@@ -24,6 +24,60 @@ def review_path(platform: str, discover_id: str) -> Path:
     return _platform_dir(platform) / f"{discover_id}.review.json"
 
 
+def pending_decision_path(platform: str) -> Path:
+    return _platform_dir(platform) / "pending-decision.json"
+
+
+def save_pending_decision(
+    platform: str,
+    *,
+    plan: dict[str, Any],
+    jobs: list[dict[str, Any]],
+) -> Path:
+    path = pending_decision_path(platform)
+    payload = {
+        "schema_version": 1,
+        "platform": platform,
+        "discover_id": plan["discover_id"],
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "plan": plan,
+        "jobs": jobs,
+    }
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
+def load_pending_decision(platform: str) -> dict[str, Any] | None:
+    path = pending_decision_path(platform)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read pending discovery file: {path}") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("platform") != platform
+        or not isinstance(payload.get("plan"), dict)
+        or not isinstance(payload.get("jobs"), list)
+    ):
+        raise ValueError(f"Invalid pending discovery file: {path}")
+    return payload
+
+
+def clear_pending_decision(platform: str, *, discover_id: str | None = None) -> None:
+    path = pending_decision_path(platform)
+    if not path.exists():
+        return
+    if discover_id is not None:
+        payload = load_pending_decision(platform)
+        if payload and str(payload.get("discover_id")) != discover_id:
+            return
+    path.unlink()
+
+
 def save_manifest(manifest: dict[str, Any]) -> Path:
     platform = str(manifest["platform"])
     path = discovery_path(platform, str(manifest["discover_id"]))

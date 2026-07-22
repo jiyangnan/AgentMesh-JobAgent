@@ -92,7 +92,9 @@ Every platform command returns a `workflow` object. A platform audit does not en
 jobagent round skip --platform <platform> --confirm-skip
 ```
 
-Long Discover and delivery operations emit timestamped stage events and periodic heartbeats. Audits are compact by default:
+Long Discover and delivery operations emit timestamped stage events and periodic heartbeats. Transient TLS, connection and gateway failures are retried automatically for idempotent Discover requests. If all bounded attempts fail, the CLI returns `retryable=true`, `request_preserved=true` and one `next_suggested` command. The Agent must execute it directly: Job Agent resumes the same signed Discover and locally preserved candidate set instead of reopening the platform, recollecting jobs or charging again.
+
+Audits are compact by default:
 
 ```bash
 jobagent round audit

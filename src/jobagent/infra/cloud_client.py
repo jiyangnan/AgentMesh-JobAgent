@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -11,13 +14,34 @@ from jobagent import __version__
 from jobagent.infra.credentials import api_base_url, load_api_key
 
 PROTOCOL_VERSION = 1
+_TRANSIENT_HTTP_STATUSES = frozenset({502, 503, 504})
+_NON_RETRYABLE_502_CODES = frozenset(
+    {
+        "decision_failed_no_charge",
+        "decision_failed_refunded",
+        "llm_parse_failed",
+    }
+)
+_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 
 
 class CloudError(Exception):
-    def __init__(self, message: str, *, status: int | None = None, code: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        code: str | None = None,
+        retryable: bool = False,
+        attempts: int = 1,
+        details: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.retryable = retryable
+        self.attempts = attempts
+        self.details = details or {}
 
 
 class NotConfiguredError(CloudError):
@@ -32,6 +56,7 @@ def _request(
     require_auth: bool = True,
     api_key: str | None = None,
     timeout: int = 180,
+    max_attempts: int = 1,
 ) -> dict[str, Any]:
     headers = {
         "Accept": "application/json",
@@ -46,32 +71,70 @@ def _request(
                 "AgentMesh API Key is required. Run `jobagent init --key <your_api_key>`."
             )
         headers["Authorization"] = f"Bearer {key}"
-    request = urllib.request.Request(
-        api_base_url() + path,
-        data=(json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None),
-        method=method,
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read()
-    except urllib.error.HTTPError as exc:
-        raw_error = exc.read().decode("utf-8", errors="replace")
-        code = None
-        message = raw_error
+    encoded_body = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+    max_attempts = max(1, max_attempts)
+    for attempt in range(1, max_attempts + 1):
+        request = urllib.request.Request(
+            api_base_url() + path,
+            data=encoded_body,
+            method=method,
+            headers=headers,
+        )
         try:
-            payload = json.loads(raw_error)
-            detail = payload.get("detail", payload)
-            if isinstance(detail, dict):
-                code = detail.get("code") or detail.get("reason")
-                message = detail.get("message") or json.dumps(detail, ensure_ascii=False)
-        except json.JSONDecodeError:
-            pass
-        raise CloudError(message, status=exc.code, code=code) from exc
-    except urllib.error.URLError as exc:
-        raise CloudError(f"Network error: {exc.reason}") from exc
-    except TimeoutError as exc:
-        raise CloudError(f"Request timed out after {timeout}s") from exc
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read()
+            break
+        except urllib.error.HTTPError as exc:
+            raw_error = exc.read().decode("utf-8", errors="replace")
+            code = None
+            message = raw_error
+            try:
+                payload = json.loads(raw_error)
+                detail = payload.get("detail", payload)
+                if isinstance(detail, dict):
+                    code = detail.get("code") or detail.get("reason")
+                    message = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+            except json.JSONDecodeError:
+                pass
+            retryable = exc.code in _TRANSIENT_HTTP_STATUSES and not (
+                exc.code == 502 and code in _NON_RETRYABLE_502_CODES
+            )
+            if retryable and attempt < max_attempts:
+                time.sleep(_RETRY_DELAYS_SECONDS[min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)])
+                continue
+            raise CloudError(
+                message,
+                status=exc.code,
+                code=code,
+                retryable=retryable,
+                attempts=attempt,
+            ) from exc
+        except urllib.error.URLError as exc:
+            reason = exc.reason
+            retryable = not isinstance(reason, ssl.SSLCertVerificationError)
+            if retryable and attempt < max_attempts:
+                time.sleep(_RETRY_DELAYS_SECONDS[min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)])
+                continue
+            raise CloudError(
+                f"Network error: {reason}",
+                retryable=retryable,
+                attempts=attempt,
+            ) from exc
+        except (TimeoutError, ssl.SSLError, ConnectionError, http.client.HTTPException) as exc:
+            retryable = not isinstance(exc, ssl.SSLCertVerificationError)
+            if retryable and attempt < max_attempts:
+                time.sleep(_RETRY_DELAYS_SECONDS[min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)])
+                continue
+            message = (
+                f"Request timed out after {timeout}s"
+                if isinstance(exc, TimeoutError)
+                else f"Network error: {exc}"
+            )
+            raise CloudError(
+                message,
+                retryable=retryable,
+                attempts=attempt,
+            ) from exc
     try:
         payload = json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError as exc:
@@ -82,11 +145,11 @@ def _request(
 
 
 def health() -> dict[str, Any]:
-    return _request("GET", "/v1/health", require_auth=False, timeout=15)
+    return _request("GET", "/v1/health", require_auth=False, timeout=15, max_attempts=2)
 
 
 def me(*, api_key: str | None = None) -> dict[str, Any]:
-    return _request("GET", "/v1/me", api_key=api_key, timeout=20)
+    return _request("GET", "/v1/me", api_key=api_key, timeout=20, max_attempts=2)
 
 
 def resume_analyze(
@@ -122,6 +185,7 @@ def discovery_start(
             "request_id": request_id,
         },
         timeout=60,
+        max_attempts=3,
     )
 
 
@@ -140,4 +204,5 @@ def discovery_decide(
             "jobs": jobs,
         },
         timeout=600,
+        max_attempts=3,
     )
