@@ -9,34 +9,27 @@ from jobagent.platforms.zhilian.collect import ZhilianReadOnlyCollector, build_z
 def test_build_zhilian_search_url_encodes_verified_beijing_city():
     url = build_zhilian_search_url("数据产品负责人", city="北京", page=1)
 
-    assert url == (
-        "https://sou.zhaopin.com/?jl=530&"
-        "kw=%E6%95%B0%E6%8D%AE%E4%BA%A7%E5%93%81%E8%B4%9F%E8%B4%A3%E4%BA%BA"
-    )
+    assert url == "https://www.zhaopin.com/"
+    assert "kw=" not in url
+    assert "jl=" not in url
 
 
 def test_build_zhilian_search_url_encodes_verified_shanghai_city_and_page():
     url = build_zhilian_search_url("AI 产品负责人", city="上海市", page=2)
 
-    assert url == (
-        "https://sou.zhaopin.com/?jl=538&"
-        "kw=AI%20%E4%BA%A7%E5%93%81%E8%B4%9F%E8%B4%A3%E4%BA%BA&p=2"
-    )
+    assert url == "https://www.zhaopin.com/"
 
 
 def test_build_zhilian_search_url_encodes_verified_shenzhen_city():
     url = build_zhilian_search_url("高级产品经理", city="深圳市", page=1)
 
-    assert url == (
-        "https://sou.zhaopin.com/?jl=489&"
-        "kw=%E9%AB%98%E7%BA%A7%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86"
-    )
+    assert url == "https://www.zhaopin.com/"
 
 
 def test_build_zhilian_search_url_keeps_ui_fallback_for_unknown_city():
     url = build_zhilian_search_url("BI负责人", city="杭州", page=1)
 
-    assert url == "https://sou.zhaopin.com/?kw=BI%E8%B4%9F%E8%B4%A3%E4%BA%BA"
+    assert url == "https://www.zhaopin.com/"
 
 
 def test_city_code_parser_accepts_query_and_canonical_path():
@@ -88,7 +81,21 @@ class _DynamicCityDriver:
         self.calls.append(url)
         return {"ok": True, "url": url}
 
+    def _click_at(self, x, y):
+        self.calls.append(f"click:{x}:{y}")
+
+    def dismiss_javascript_dialog(self):
+        return {"ok": True, "dismissed": False}
+
     def _exec_js(self, script: str):
+        if "zhilian_keyword_search" in script:
+            return {
+                "ok": True,
+                "mode": "zhilian_keyword_search",
+                "keyword": "AI产品经理",
+                "observedValue": "AI产品经理",
+                "clickPoint": {"x": 120, "y": 80},
+            }
         if "zhilian_city_filter" in script:
             return {
                 "ok": True,
@@ -100,12 +107,13 @@ class _DynamicCityDriver:
         return {
             "ok": True,
             "url": (
-                "https://sou.zhaopin.com/?jl=653&kw=AI"
+                "https://www.zhaopin.com/sou/jl653/kw01300K004004338VHKHKTEG/p1"
                 if self.verified
-                else "https://sou.zhaopin.com/?kw=AI"
+                else "https://www.zhaopin.com/sou/kw01300K004004338VHKHKTEG/p1"
             ),
             "title": "智联招聘",
             "loginRequired": False,
+            "searchKeyword": "AI产品经理",
             "cards": [
                 {
                     "positionId": "HZ-1",
@@ -128,6 +136,8 @@ def test_collector_discovers_unknown_city_code_before_returning_jobs(tmp_path):
 
     assert result.ok is True
     assert result.jobs[0].city == "杭州"
+    assert driver.calls[0] == "https://www.zhaopin.com/"
+    assert any(call.startswith("click:") for call in driver.calls)
     assert ZhilianCityResolver(cache).lookup("杭州") == ("653", "verified_cache")
 
 
@@ -148,15 +158,16 @@ class _StaleCityDriver(_DynamicCityDriver):
         self.snapshot_count = 0
 
     def _exec_js(self, script: str):
-        if "zhilian_city_filter" in script:
+        if "zhilian_keyword_search" in script or "zhilian_city_filter" in script:
             return super()._exec_js(script)
         self.snapshot_count += 1
         if self.snapshot_count == 1:
             return {
                 "ok": True,
-                "url": "https://sou.zhaopin.com/?jl=999&kw=AI",
+                "url": "https://www.zhaopin.com/sou/jl999/kw01300K004004338VHKHKTEG/p1",
                 "title": "智联招聘",
                 "loginRequired": False,
+                "searchKeyword": "AI产品经理",
                 "cards": [{"cityName": "上海"}],
             }
         return super()._exec_js(script)
@@ -177,6 +188,43 @@ def test_collector_replaces_stale_cached_city_code_after_visible_recovery(tmp_pa
     )
 
     assert result.ok is True
-    assert "jl=999" in driver.calls[0]
+    assert driver.calls[0] == "https://www.zhaopin.com/"
     assert driver.snapshot_count == 2
     assert resolver.lookup("杭州") == ("653", "verified_cache")
+
+
+class _RejectedKeywordDriver(_DynamicCityDriver):
+    def dismiss_javascript_dialog(self):
+        return {"ok": True, "dismissed": True}
+
+
+def test_collector_stops_when_platform_rejects_visible_keyword(tmp_path):
+    driver = _RejectedKeywordDriver()
+
+    result = ZhilianReadOnlyCollector(
+        driver=driver,
+        city_cache_path=tmp_path / "cities.json",
+    ).collect(query="财务总监", city="上海", limit=5, wait_seconds=1)
+
+    assert result.ok is False
+    assert result.error == "zhilian_keyword_rejected"
+    assert result.jobs == []
+    assert driver.calls == ["https://www.zhaopin.com/", "click:120:80"]
+
+
+def test_collector_rejects_mismatched_visible_keyword_before_returning_jobs(tmp_path):
+    class _MismatchedKeywordDriver(_DynamicCityDriver):
+        def _exec_js(self, script: str):
+            result = super()._exec_js(script)
+            if "zhilian_keyword_search" not in script and "zhilian_city_filter" not in script:
+                result["searchKeyword"] = "01300K004004338VHKHKTEG"
+            return result
+
+    result = ZhilianReadOnlyCollector(
+        driver=_MismatchedKeywordDriver(),
+        city_cache_path=tmp_path / "cities.json",
+    ).collect(query="AI产品经理", city="杭州", limit=5, wait_seconds=1)
+
+    assert result.ok is False
+    assert result.error == "zhilian_keyword_unverified"
+    assert result.jobs == []

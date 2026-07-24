@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from jobagent.domain.models import Job
 from jobagent.drivers.boss import create_driver
@@ -20,14 +19,18 @@ from .detail import (
     unwrap_zhilian_detail_js_result,
 )
 from .parser import parse_zhilian_job, zhilian_job_id
-from .selectors import build_zhilian_city_filter_script, build_zhilian_snapshot_script
+from .selectors import (
+    build_zhilian_city_filter_script,
+    build_zhilian_keyword_search_script,
+    build_zhilian_pagination_script,
+    build_zhilian_snapshot_script,
+)
 
 
-# Zhilian's public search endpoint accepts stable ``jl`` location codes and
-# redirects to the canonical ``/sou/jl<code>/...`` URL.  Prefer that route for
-# verified cities because the visible location panel is dynamically mounted
-# and can ignore otherwise valid native clicks while it is collapsed.
+# Keep the bundled city codes only as post-submit verification evidence. Search
+# itself starts from the public entry page and uses visible form controls.
 _ZHILIAN_CITY_CODES = BUNDLED_CITY_CODES
+ZHILIAN_SEARCH_ENTRY_URL = "https://www.zhaopin.com/"
 
 
 def build_zhilian_search_url(
@@ -37,19 +40,13 @@ def build_zhilian_search_url(
     *,
     city_code: str | None = None,
 ) -> str:
-    """Build a public Zhilian search URL.
+    """Return the stable entry page used before visible keyword submission.
 
-    Verified cities use Zhilian's public ``jl`` query parameter.  Other cities
-    continue through the visible filter-panel fallback in the collector.
+    Zhilian now owns the opaque ``kw...`` route encoding. The adapter must not
+    feed that internal identifier back into a keyword parameter.
     """
-    parts: list[str] = []
-    city_code = city_code or _ZHILIAN_CITY_CODES.get(normalize_city_name(city))
-    if city_code:
-        parts.append(f"jl={city_code}")
-    parts.append(f"kw={quote(query)}")
-    if page > 1:
-        parts.append(f"p={page}")
-    return "https://sou.zhaopin.com/?" + "&".join(parts)
+    del query, city, page, city_code
+    return ZHILIAN_SEARCH_ENTRY_URL
 
 
 @dataclass
@@ -88,6 +85,17 @@ class ZhilianCollectResult:
             payload["next_suggested"] = "jobagent zhilian login"
         elif self.ok:
             payload["next_suggested"] = "jobagent zhilian rank --input <zhilian.raw.json> --output <zhilian.ranked.json>"
+        elif self.error in {
+            "zhilian_keyword_input_not_found",
+            "zhilian_keyword_submit_not_found",
+            "zhilian_keyword_rejected",
+            "zhilian_keyword_unverified",
+            "zhilian_page_option_not_found",
+        }:
+            payload["message"] = (
+                "Zhilian did not accept or verify the requested readable job keyword; "
+                "no candidates were returned and no credits were charged."
+            )
         if include_snapshot:
             payload["snapshot"] = self.snapshot
         return payload
@@ -144,32 +152,76 @@ class ZhilianReadOnlyCollector:
                     city=city,
                     url=url,
                     jobs=jobs,
-                    snapshot=_combined_snapshot(snapshots, {"open_result": open_result, "page": current_page, "url": url}),
+                    snapshot=_combined_snapshot(
+                        snapshots,
+                        {
+                            "open_result": open_result,
+                            "page": current_page,
+                            "url": url,
+                        },
+                    ),
                     page=start_page,
                     pages=page_count,
                     ok=False,
                     error=str(open_result.get("error", "open_url_failed")),
                 )
+            keyword_search = self._submit_keyword(search_query, wait_seconds=wait_seconds)
+            if keyword_search.get("loginRequired"):
+                return ZhilianCollectResult(
+                    query=search_query,
+                    city=city,
+                    url=str(keyword_search.get("url") or open_result.get("url") or url),
+                    jobs=jobs,
+                    snapshot=_combined_snapshot(
+                        snapshots,
+                        {
+                            "error": "zhilian_login_required",
+                            "keywordSearch": keyword_search,
+                            "page": current_page,
+                        },
+                    ),
+                    page=start_page,
+                    pages=page_count,
+                    ok=False,
+                    error="zhilian_login_required",
+                )
+            if not keyword_search.get("ok"):
+                failure = str(keyword_search.get("error") or "zhilian_keyword_submit_failed")
+                return ZhilianCollectResult(
+                    query=search_query,
+                    city=city,
+                    url=str(keyword_search.get("url") or open_result.get("url") or url),
+                    jobs=jobs,
+                    snapshot=_combined_snapshot(
+                        snapshots,
+                        {
+                            "error": failure,
+                            "keywordSearch": keyword_search,
+                            "page": current_page,
+                        },
+                    ),
+                    page=start_page,
+                    pages=page_count,
+                    ok=False,
+                    error=failure,
+                )
             city_filter: dict[str, Any] = {}
             if city:
-                if resolved_city_code:
-                    city_filter = {
-                        "ok": True,
-                        "mode": "zhilian_city_filter",
-                        "city": city,
-                        "cityCode": resolved_city_code,
-                        "applied": True,
-                        "urlEncoded": True,
-                    }
-                else:
-                    city_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
+                city_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
                 if city_filter.get("loginRequired"):
                     return ZhilianCollectResult(
                         query=search_query,
                         city=city,
                         url=str(city_filter.get("url") or open_result.get("url") or url),
                         jobs=jobs,
-                        snapshot=_combined_snapshot(snapshots, {"error": "zhilian_login_required", "cityFilter": city_filter, "page": current_page}),
+                        snapshot=_combined_snapshot(
+                            snapshots,
+                            {
+                                "error": "zhilian_login_required",
+                                "cityFilter": city_filter,
+                                "page": current_page,
+                            },
+                        ),
                         page=start_page,
                         pages=page_count,
                         ok=False,
@@ -181,19 +233,56 @@ class ZhilianReadOnlyCollector:
                         city=city,
                         url=str(city_filter.get("url") or open_result.get("url") or url),
                         jobs=jobs,
-                        snapshot=_combined_snapshot(snapshots, {"error": "zhilian_city_filter_failed", "cityFilter": city_filter, "page": current_page}),
+                        snapshot=_combined_snapshot(
+                            snapshots,
+                            {
+                                "error": "zhilian_city_filter_failed",
+                                "cityFilter": city_filter,
+                                "page": current_page,
+                            },
+                        ),
                         page=start_page,
                         pages=page_count,
                         ok=False,
                         error="zhilian_city_filter_failed",
+                    )
+            pagination: dict[str, Any] = {}
+            if current_page > 1:
+                pagination = self._select_page(current_page, wait_seconds=wait_seconds)
+                if not pagination.get("ok"):
+                    failure = str(
+                        pagination.get("error") or "zhilian_page_option_not_found"
+                    )
+                    return ZhilianCollectResult(
+                        query=search_query,
+                        city=city,
+                        url=str(pagination.get("url") or open_result.get("url") or url),
+                        jobs=jobs,
+                        snapshot=_combined_snapshot(
+                            snapshots,
+                            {
+                                "error": failure,
+                                "keywordSearch": keyword_search,
+                                "cityFilter": city_filter,
+                                "pagination": pagination,
+                                "page": current_page,
+                            },
+                        ),
+                        page=start_page,
+                        pages=page_count,
+                        ok=False,
+                        error=failure,
                     )
 
             remaining = max(1, limit - len(jobs))
             snapshot = self._extract_snapshot(limit=remaining)
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
+            snapshot["keywordSearch"] = keyword_search
             if city_filter:
                 snapshot["cityFilter"] = city_filter
+            if pagination:
+                snapshot["pagination"] = pagination
             snapshots.append(snapshot)
             failure = _snapshot_failure(snapshot)
             if failure:
@@ -207,6 +296,26 @@ class ZhilianReadOnlyCollector:
                     pages=page_count,
                     ok=False,
                     error=failure,
+                )
+            if not _query_verified(search_query, snapshot):
+                return ZhilianCollectResult(
+                    query=search_query,
+                    city=city,
+                    url=str(snapshot.get("url") or open_result.get("url") or url),
+                    jobs=jobs,
+                    snapshot=_combined_snapshot(
+                        snapshots,
+                        {
+                            "error": "zhilian_keyword_unverified",
+                            "expectedKeyword": search_query,
+                            "observedKeyword": snapshot.get("searchKeyword"),
+                            "page": current_page,
+                        },
+                    ),
+                    page=start_page,
+                    pages=page_count,
+                    ok=False,
+                    error="zhilian_keyword_unverified",
                 )
 
             if city:
@@ -348,6 +457,49 @@ class ZhilianReadOnlyCollector:
                 return {"ok": False, "error": "snapshot_parse_failed", "raw": result["raw"]}
         return result if isinstance(result, dict) else {}
 
+    def _submit_keyword(self, keyword: str, wait_seconds: int = 8) -> dict[str, Any]:
+        result = self.driver._exec_js(build_zhilian_keyword_search_script(keyword))
+        data = _unwrap_js_result(result)
+        if not data.get("ok"):
+            return data
+        click_point = data.get("clickPoint") if isinstance(data.get("clickPoint"), dict) else None
+        if not click_point or not hasattr(self.driver, "_click_at"):
+            return {
+                **data,
+                "ok": False,
+                "error": "zhilian_keyword_submit_not_found",
+            }
+        self.driver._click_at(click_point.get("x"), click_point.get("y"))
+        data["nativeClicked"] = True
+        time.sleep(min(max(wait_seconds, 1), 5))
+        dialog = _dismiss_javascript_dialog(self.driver)
+        data["dialog"] = dialog
+        if dialog.get("dismissed"):
+            return {
+                **data,
+                "ok": False,
+                "error": "zhilian_keyword_rejected",
+                "url": data.get("urlBefore"),
+            }
+        return data
+
+    def _select_page(self, page: int, wait_seconds: int = 8) -> dict[str, Any]:
+        result = self.driver._exec_js(build_zhilian_pagination_script(page))
+        data = _unwrap_js_result(result)
+        if not data.get("ok") or data.get("alreadySelected"):
+            return data
+        click_point = data.get("clickPoint") if isinstance(data.get("clickPoint"), dict) else None
+        if not click_point or not hasattr(self.driver, "_click_at"):
+            return {
+                **data,
+                "ok": False,
+                "error": "zhilian_page_option_not_found",
+            }
+        self.driver._click_at(click_point.get("x"), click_point.get("y"))
+        data["nativeClicked"] = True
+        time.sleep(min(max(wait_seconds, 1), 5))
+        return data
+
     def _apply_city_filter(self, city: str, wait_seconds: int = 8) -> dict[str, Any]:
         last: dict[str, Any] = {}
         for attempt in range(2):
@@ -454,6 +606,8 @@ def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
 
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:
+    if snapshot.get("platformError"):
+        return str(snapshot["platformError"])
     if snapshot.get("loginRequired"):
         return "zhilian_login_required"
     url = str(snapshot.get("url", ""))
@@ -479,6 +633,23 @@ def _city_filter_applied(result: dict[str, Any]) -> bool:
     if result.get("mode") != "zhilian_city_filter":
         return False
     return bool(result.get("ok") and (result.get("applied") or result.get("alreadySelected") or result.get("skipped")))
+
+
+def _dismiss_javascript_dialog(driver: Any) -> dict[str, Any]:
+    handler = getattr(driver, "dismiss_javascript_dialog", None)
+    if not callable(handler):
+        return {"ok": True, "dismissed": False, "supported": False}
+    result = handler()
+    return result if isinstance(result, dict) else {"ok": True, "dismissed": bool(result)}
+
+
+def _query_verified(query: str, snapshot: dict[str, Any]) -> bool:
+    expected = " ".join(query.split()).casefold()
+    observed = " ".join(str(snapshot.get("searchKeyword") or "").split()).casefold()
+    if observed:
+        return observed == expected
+    title = " ".join(str(snapshot.get("title") or "").split()).casefold()
+    return bool(expected and expected in title)
 
 
 def normalize_zhilian_keyword(query: str, city: str = "") -> str:

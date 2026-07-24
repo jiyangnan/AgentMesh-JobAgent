@@ -20,7 +20,7 @@ class FakeCDP:
         self.last_value = value
         return {"result": {"value": value}}
 
-    def send(self, method: str, params: dict | None = None):
+    def send(self, method: str, params: dict | None = None, **_kwargs):
         self.send_calls.append((method, params))
         return {}
 
@@ -41,6 +41,31 @@ def test_exec_js_returns_raw_for_plain_string():
     driver = make_driver("not json")
 
     assert driver._exec_js("1") == {"ok": True, "raw": "not json"}
+
+
+def test_dismiss_javascript_dialog_uses_cdp():
+    driver = make_driver("{}")
+
+    result = driver.dismiss_javascript_dialog()
+
+    assert result == {"ok": True, "dismissed": True}
+    assert driver.cdp.send_calls == [
+        ("Page.handleJavaScriptDialog", {"accept": False})
+    ]
+
+
+def test_dismiss_javascript_dialog_tolerates_absent_dialog():
+    driver = make_driver("{}")
+
+    def no_dialog(*_args, **_kwargs):
+        raise RuntimeError("No dialog is showing")
+
+    driver.cdp.send = no_dialog
+
+    assert driver.dismiss_javascript_dialog() == {
+        "ok": True,
+        "dismissed": False,
+    }
 
 
 def test_exec_js_passes_through_json_object():

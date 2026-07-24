@@ -4,7 +4,159 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-07-09.0"
+ZHILIAN_SELECTOR_VERSION = "2026-07-24.0"
+
+
+def build_zhilian_keyword_search_script(keyword: str) -> str:
+    safe_keyword = json.dumps(keyword, ensure_ascii=False)
+    return f"""
+    (function(){{
+      const mode = 'zhilian_keyword_search';
+      const keyword = {safe_keyword};
+      const href = location.href || '';
+      const title = document.title || '';
+      const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
+      const loginRequired = /passport|login|登录[/]注册|请登录|扫码登录|验证码登录|手机验证码|安全验证|滑块/.test(href + '\\n' + title + '\\n' + bodyText.slice(0, 800));
+      function clean(value){{
+        return String(value || '').replace(/\\s+/g, ' ').trim();
+      }}
+      function visible(el){{
+        if (!el || !(el instanceof Element)) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || '1') !== 0
+          && rect.width > 8
+          && rect.height > 8;
+      }}
+      function clickPoint(el){{
+        const rect = el.getBoundingClientRect();
+        return {{
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          tag: el.tagName,
+          className: String(el.className || '').slice(0, 120),
+          text: clean(el.innerText || el.textContent || '')
+        }};
+      }}
+      if (loginRequired) {{
+        return JSON.stringify({{ok: false, mode, error: 'zhilian_login_required', loginRequired: true, url: href, title}});
+      }}
+      const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])'))
+        .filter(visible)
+        .map((el) => {{
+          const placeholder = clean(el.getAttribute('placeholder') || '');
+          const name = clean(el.getAttribute('name') || '');
+          const id = clean(el.id || '');
+          const score =
+            (/职位|公司|搜索|关键/.test(placeholder) ? 8 : 0)
+            + (/keyword|search|kw/i.test(name + ' ' + id) ? 4 : 0)
+            + (el.getBoundingClientRect().top < 320 ? 2 : 0);
+          return {{el, score, placeholder}};
+        }})
+        .sort((a, b) => b.score - a.score);
+      const input = inputs[0] && inputs[0].score > 0 ? inputs[0].el : null;
+      if (!input) {{
+        return JSON.stringify({{ok: false, mode, error: 'zhilian_keyword_input_not_found', url: href, title}});
+      }}
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, keyword);
+      input.dispatchEvent(new Event('input', {{bubbles: true}}));
+      input.dispatchEvent(new Event('change', {{bubbles: true}}));
+      const inputRect = input.getBoundingClientRect();
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"], a'))
+        .filter(visible)
+        .map((el) => {{
+          const rect = el.getBoundingClientRect();
+          const text = clean(el.innerText || el.textContent || '');
+          const distance = Math.abs(rect.left - inputRect.right)
+            + Math.abs(rect.top - inputRect.top);
+          return {{el, text, rect, distance}};
+        }})
+        .filter((item) => /^(搜索|搜职位|找工作)$/.test(item.text))
+        .filter((item) => item.rect.top < 400)
+        .sort((a, b) => a.distance - b.distance);
+      const button = buttons[0] && buttons[0].el;
+      if (!button) {{
+        return JSON.stringify({{
+          ok: false,
+          mode,
+          error: 'zhilian_keyword_submit_not_found',
+          keyword,
+          observedValue: clean(input.value),
+          url: href,
+          title
+        }});
+      }}
+      return JSON.stringify({{
+        ok: true,
+        mode,
+        action: 'submit_keyword',
+        keyword,
+        observedValue: clean(input.value),
+        clickPoint: clickPoint(button),
+        urlBefore: href,
+        title
+      }});
+    }})()
+    """
+
+
+def build_zhilian_pagination_script(page: int) -> str:
+    safe_page = max(1, int(page))
+    return f"""
+    (function(){{
+      const mode = 'zhilian_pagination';
+      const targetPage = {safe_page};
+      function clean(value){{
+        return String(value || '').replace(/\\s+/g, ' ').trim();
+      }}
+      function visible(el){{
+        if (!el || !(el instanceof Element)) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || '1') !== 0
+          && rect.width > 8
+          && rect.height > 8;
+      }}
+      function point(el){{
+        const rect = el.getBoundingClientRect();
+        return {{x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2)}};
+      }}
+      if (targetPage <= 1) {{
+        return JSON.stringify({{ok: true, mode, alreadySelected: true, page: 1}});
+      }}
+      const candidates = Array.from(document.querySelectorAll('a, button, li, [role="button"]'))
+        .filter(visible)
+        .filter((el) => clean(el.innerText || el.textContent || '') === String(targetPage))
+        .map((el) => {{
+          const rect = el.getBoundingClientRect();
+          const selected = /active|selected|current/.test(String(el.className || ''))
+            || el.getAttribute('aria-current') === 'page';
+          return {{el, rect, selected}};
+        }})
+        .filter((item) => item.rect.top > 300)
+        .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
+      if (!candidates.length) {{
+        return JSON.stringify({{ok: false, mode, error: 'zhilian_page_option_not_found', page: targetPage, url: location.href || ''}});
+      }}
+      const item = candidates[0];
+      if (item.selected) {{
+        return JSON.stringify({{ok: true, mode, alreadySelected: true, page: targetPage, url: location.href || ''}});
+      }}
+      return JSON.stringify({{
+        ok: true,
+        mode,
+        action: 'select_page',
+        page: targetPage,
+        clickPoint: point(item.el),
+        urlBefore: location.href || ''
+      }});
+    }})()
+    """
 
 
 def build_zhilian_city_filter_script(city: str) -> str:
@@ -175,6 +327,14 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
       function clean(value){{
         return String(value || '').replace(/\\s+/g, ' ').trim();
       }}
+      function visibleSearchInput(el){{
+        if (!visible(el)) return false;
+        const placeholder = clean(el.getAttribute('placeholder') || '');
+        const name = clean(el.getAttribute('name') || '');
+        const id = clean(el.id || '');
+        return /职位|公司|搜索|关键/.test(placeholder)
+          || /keyword|search|kw/i.test(name + ' ' + id);
+      }}
       function lines(value){{
         return String(value || '').split(/\\n+/).map(clean).filter(Boolean);
       }}
@@ -215,6 +375,11 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         return best;
       }}
       const anchors = Array.from(document.querySelectorAll('a[href]')).filter(visible);
+      const searchInput = Array.from(document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])'))
+        .find(visibleSearchInput);
+      const platformError = /搜索内容.{0,12}(全部|全为|都是)特殊字符|关键词.{0,12}(全部|全为|都是)特殊字符|请重新输入搜索/.test(text.slice(0, 1200))
+        ? 'zhilian_keyword_rejected'
+        : '';
       const navLabels = new Set(['首页', '职位推荐', '城市频道', '政企招聘', '校园招聘', '高端职位', '海外招聘', '驻外专区', '测评及培训', '职Q社区', '我要招人']);
       const cards = [];
       const seen = new Set();
@@ -251,6 +416,9 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         url: href,
         title,
         loginRequired,
+        searchKeyword: searchInput ? clean(searchInput.value) : '',
+        searchKeywordVisible: !!searchInput,
+        platformError,
         candidateCount: cards.length,
         cards,
         bodySnippet: text.slice(0, 1200)

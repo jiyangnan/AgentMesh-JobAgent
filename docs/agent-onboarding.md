@@ -177,6 +177,8 @@ jobagent zhilian apply send
 jobagent zhilian audit
 ```
 
+智联结果页中的 `kw...` URL 片段属于平台内部状态，不代表云端签发的职位词。不要解析、回填或向用户展示它作为搜索条件；发生智联关键词错误时，报告 CLI 的可读 `query` 与机器错误，并遵循 `next_suggested`。没有用户明确批准，不得跳过智联。
+
 ### 前程无忧 / 51Job
 
 ```bash

@@ -197,6 +197,22 @@ class CDPBossDriver(BossActionDriver):
             },
         )
 
+    def dismiss_javascript_dialog(self) -> dict[str, Any]:
+        """Dismiss a blocking page alert without treating its text as user input."""
+        self._ensure_connected()
+        try:
+            self.cdp.send(
+                "Page.handleJavaScriptDialog",
+                {"accept": False},
+                timeout=2,
+            )
+        except Exception as exc:
+            message = str(exc)
+            if "No dialog is showing" in message or "No JavaScript dialog" in message:
+                return {"ok": True, "dismissed": False}
+            return {"ok": False, "dismissed": False, "error": message}
+        return {"ok": True, "dismissed": True}
+
     def reload_current_page(self, wait_seconds: float = 3) -> dict[str, Any]:
         """Reload the active platform tab and return its resulting location."""
         self._ensure_connected()
@@ -233,6 +249,8 @@ class CDPBossDriver(BossActionDriver):
         current_url = self._ensure_connected_for_url(url)
         reused = self._same_search_url(current_url, url)
         try:
+            if platform_for_url(url) == "zhilian":
+                self.dismiss_javascript_dialog()
             if not reused:
                 self.cdp.send("Page.navigate", {"url": url})
             is_boss_job = (

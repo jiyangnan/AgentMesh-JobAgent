@@ -21,7 +21,7 @@ PLATFORM_TAB_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "zhilian": {
         "domains": ("zhaopin.com", "sou.zhaopin.com", "passport.zhaopin.com"),
-        "initial_url": "https://sou.zhaopin.com/",
+        "initial_url": "https://www.zhaopin.com/",
     },
     "51job": {
         "domains": ("51job.com", "we.51job.com", "jobs.51job.com"),

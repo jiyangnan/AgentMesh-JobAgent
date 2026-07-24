@@ -20,7 +20,13 @@ from jobagent.cli import (
     _with_login_workflow,
     build_parser,
 )
-from jobagent.infra.protocol import canonical_json_bytes, candidate_digest, digest_payload
+from jobagent.infra.protocol import (
+    ProtocolError,
+    canonical_json_bytes,
+    candidate_digest,
+    digest_payload,
+    verify_search_plan,
+)
 
 
 def _key_pair():
@@ -673,6 +679,83 @@ def test_public_agent_docs_require_automatic_discover_transport_recovery():
         assert "retryable=true" in text
         assert "request_preserved=true" in text
         assert "next_suggested" in text
+
+
+def test_public_agent_docs_treat_zhilian_route_keyword_as_opaque():
+    root = Path(__file__).resolve().parents[1]
+    docs = [
+        (root / "AGENTS.md").read_text(encoding="utf-8"),
+        (root / "README.md").read_text(encoding="utf-8"),
+        (root / "docs/agent-onboarding.md").read_text(encoding="utf-8"),
+        (root / "skills/claude-code/SKILL.md").read_text(encoding="utf-8"),
+        (root / "skills/openclaw-job-agent/SKILL.md").read_text(encoding="utf-8"),
+    ]
+
+    for text in docs:
+        assert "`kw...`" in text
+        assert "next_suggested" in text
+
+
+def test_search_plan_rejects_opaque_platform_keyword(monkeypatch):
+    import jobagent.infra.protocol as protocol
+
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    profile = {"preferences": {"targetRoles": [{"title": "财务总监"}]}}
+    plan = _sign(
+        private,
+        {
+            "manifest_type": "search_plan",
+            "protocol_version": 1,
+            "discover_id": "dis_opaque_keyword",
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "queries": [
+                {
+                    "keyword": "01300K004004338VHKHKTEG",
+                    "city": "上海",
+                    "page_limit": 2,
+                }
+            ],
+            "candidate_limit": 100,
+            "expires_at": _future(),
+        },
+    )
+
+    with pytest.raises(ProtocolError, match="opaque platform identifier"):
+        verify_search_plan(plan, platform="zhilian", profile=profile)
+
+
+@pytest.mark.parametrize("keyword", ["财务总监", "Business Finance Leader", "FP&A负责人"])
+def test_search_plan_accepts_readable_role_keywords(keyword, monkeypatch):
+    import jobagent.infra.protocol as protocol
+
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    profile = {"preferences": {"targetRoles": [{"title": keyword}]}}
+    plan = _sign(
+        private,
+        {
+            "manifest_type": "search_plan",
+            "protocol_version": 1,
+            "discover_id": f"dis_{keyword}",
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "queries": [
+                {
+                    "keyword": keyword,
+                    "city": "上海",
+                    "page_limit": 2,
+                }
+            ],
+            "candidate_limit": 100,
+            "expires_at": _future(),
+        },
+    )
+
+    verified = verify_search_plan(plan, platform="zhilian", profile=profile)
+
+    assert verified["queries"][0]["keyword"] == keyword
 
 
 def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch, capsys):

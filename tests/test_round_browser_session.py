@@ -376,7 +376,7 @@ def test_platform_tab_registry_creates_missing_platform_target(monkeypatch, tmp_
 
     target = platform_tabs.ensure_platform_tab(platform="zhilian", port=19222)
 
-    assert created == ["https://sou.zhaopin.com/"]
+    assert created == ["https://www.zhaopin.com/"]
     assert target["webSocketDebuggerUrl"] == "ws://new"
 
 

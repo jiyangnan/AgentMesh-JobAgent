@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.4.6] - 2026-07-24
+
+### Fixed
+
+- Zhilian discovery now enters the readable role keyword through the visible search form instead of rebuilding a legacy query URL.
+- Treat Zhilian `kw...` route segments as opaque platform state and verify the readable keyword from the visible search input before collecting candidates.
+- Dismiss and report a platform keyword alert as a no-candidate, no-charge failure instead of allowing the host Agent to misdiagnose the route token or skip the platform.
+- Reject signed search plans whose keyword resembles an opaque platform identifier while preserving normal Chinese and English role titles.
+
+### Compatibility
+
+- Existing API Keys, profiles, rounds, browser login state, signed decisions and audits are preserved. No local state migration or cache clearing is required.
+
 ## [0.4.5] - 2026-07-22
 
 ### Fixed

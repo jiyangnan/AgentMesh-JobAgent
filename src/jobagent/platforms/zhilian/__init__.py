@@ -17,7 +17,13 @@ from .detail import (
     parse_zhilian_detail_snapshot,
 )
 from .parser import collect_zhilian_fixture, parse_zhilian_job, zhilian_job_id
-from .selectors import ZHILIAN_SELECTOR_VERSION, build_zhilian_city_filter_script, build_zhilian_snapshot_script
+from .selectors import (
+    ZHILIAN_SELECTOR_VERSION,
+    build_zhilian_city_filter_script,
+    build_zhilian_keyword_search_script,
+    build_zhilian_pagination_script,
+    build_zhilian_snapshot_script,
+)
 from .city_resolver import ZhilianCityResolver, city_code_from_url
 from .session import ZhilianSessionGuide, ZhilianSessionStatus
 
@@ -38,6 +44,8 @@ __all__ = [
     "ZhilianSessionStatus",
     "build_zhilian_detail_snapshot_script",
     "build_zhilian_city_filter_script",
+    "build_zhilian_keyword_search_script",
+    "build_zhilian_pagination_script",
     "ZhilianCityResolver",
     "city_code_from_url",
     "build_zhilian_search_url",

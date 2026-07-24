@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.4.5
+version: 0.4.6
 metadata:
   openclaw:
     emoji: "💼"
@@ -102,6 +102,8 @@ jobagent zhilian apply review
 jobagent zhilian apply send
 jobagent zhilian audit
 ```
+
+Treat any Zhilian `kw...` URL segment as opaque platform state, never as the cloud-issued role keyword. Do not parse it, feed it back into search, or skip Zhilian because of it; follow the CLI's readable `query`, error and `next_suggested`.
 
 51Job:
 

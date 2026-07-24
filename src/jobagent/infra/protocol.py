@@ -104,6 +104,38 @@ def _is_expired(value: str) -> bool:
     return datetime.now(timezone.utc) >= expires.astimezone(timezone.utc)
 
 
+def _validate_search_queries(value: Any) -> None:
+    if not isinstance(value, list) or not 1 <= len(value) <= 12:
+        raise ProtocolError("search plan queries are invalid")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ProtocolError("search plan query is invalid")
+        keyword = str(item.get("keyword") or "").strip()
+        city = str(item.get("city") or "").strip()
+        try:
+            page_limit = int(item.get("page_limit", 0))
+        except (TypeError, ValueError) as exc:
+            raise ProtocolError("search plan page limit is invalid") from exc
+        if (
+            not 1 <= len(keyword) <= 80
+            or not any(character.isalpha() for character in keyword)
+            or any(ord(character) < 32 for character in keyword)
+        ):
+            raise ProtocolError("search plan keyword is invalid")
+        compact = "".join(keyword.split())
+        digit_count = sum(character.isdigit() for character in compact)
+        if (
+            len(compact) >= 16
+            and compact.isalnum()
+            and digit_count >= len(compact) // 4
+        ):
+            raise ProtocolError("search plan keyword looks like an opaque platform identifier")
+        if len(city) > 30 or any(ord(character) < 32 for character in city):
+            raise ProtocolError("search plan city is invalid")
+        if not 1 <= page_limit <= 5:
+            raise ProtocolError("search plan page limit is invalid")
+
+
 def verify_search_plan(
     plan: dict[str, Any],
     *,
@@ -123,6 +155,7 @@ def verify_search_plan(
         raise ProtocolError("search plan profile digest mismatch")
     if int(signed.get("candidate_limit", 0)) != 100:
         raise ProtocolError("search plan candidate limit mismatch")
+    _validate_search_queries(signed.get("queries"))
     if _is_expired(str(signed.get("expires_at", ""))):
         raise ProtocolError("search plan expired")
     return signed

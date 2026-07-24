@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, review and automatic selected delivery on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching, recruiter greetings and application audit.
-version: 0.4.5
+version: 0.4.6
 ---
 
 # Job Agent
@@ -91,6 +91,8 @@ jobagent zhilian apply review
 jobagent zhilian apply send
 jobagent zhilian audit
 ```
+
+Treat any Zhilian `kw...` URL segment as opaque platform state, never as the cloud-issued role keyword. Do not parse it, feed it back into search, or skip Zhilian because of it; follow the CLI's readable `query`, error and `next_suggested`.
 
 ## 51Job
 
