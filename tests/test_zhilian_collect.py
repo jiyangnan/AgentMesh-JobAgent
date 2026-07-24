@@ -4,6 +4,10 @@ import json
 
 from jobagent.platforms.zhilian.city_resolver import ZhilianCityResolver, city_code_from_url
 from jobagent.platforms.zhilian.collect import ZhilianReadOnlyCollector, build_zhilian_search_url
+from jobagent.platforms.zhilian.selectors import (
+    build_zhilian_city_filter_script,
+    build_zhilian_keyword_search_script,
+)
 
 
 def test_build_zhilian_search_url_encodes_verified_beijing_city():
@@ -30,6 +34,25 @@ def test_build_zhilian_search_url_keeps_ui_fallback_for_unknown_city():
     url = build_zhilian_search_url("BI负责人", city="杭州", page=1)
 
     assert url == "https://www.zhaopin.com/"
+
+
+def test_keyword_search_keeps_platform_route_in_managed_tab():
+    script = build_zhilian_keyword_search_script("AI产品经理")
+
+    assert "originalTarget.toLowerCase() === '_blank'" in script
+    assert "button.setAttribute('target', '_self')" in script
+    assert "button.href =" not in script
+    assert "/sou/" not in script
+
+
+def test_city_filter_checks_visible_selected_city_before_expanding():
+    script = build_zhilian_city_filter_script("深圳")
+    selected_city_branch = script.index("source: 'visible_current_city'")
+    expand_city_branch = script.index("findLocationHeader() || currentCityControl")
+
+    assert selected_city_branch < expand_city_branch
+    assert "currentCity === targetCity" in script
+    assert "alreadySelected: true" in script
 
 
 def test_city_code_parser_accepts_query_and_canonical_path():

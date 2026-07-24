@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-07-24.0"
+ZHILIAN_SELECTOR_VERSION = "2026-07-24.1"
 
 
 def build_zhilian_keyword_search_script(keyword: str) -> str:
@@ -89,12 +89,19 @@ def build_zhilian_keyword_search_script(keyword: str) -> str:
           title
         }});
       }}
+      const originalTarget = clean(button.getAttribute('target') || '');
+      const targetNormalized = originalTarget.toLowerCase() === '_blank';
+      if (targetNormalized) {{
+        button.setAttribute('target', '_self');
+      }}
       return JSON.stringify({{
         ok: true,
         mode,
         action: 'submit_keyword',
         keyword,
         observedValue: clean(input.value),
+        originalTarget,
+        targetNormalized,
         clickPoint: clickPoint(button),
         urlBefore: href,
         title
@@ -222,6 +229,41 @@ def build_zhilian_city_filter_script(city: str) -> str:
           .sort((a, b) => a.area - b.area);
         return matches[0] && matches[0].el;
       }}
+      function findCurrentCityControl(){{
+        const matches = visibleElements
+          .filter((el) => {{
+            const rect = el.getBoundingClientRect();
+            const className = String(el.className || '');
+            const parentClass = String(el.parentElement && el.parentElement.className || '');
+            const text = directText(el);
+            return rect.top < 320
+              && cityNames.includes(text)
+              && (
+                className.includes('content-s__item__text')
+                || parentClass.includes('content-s__item')
+              );
+          }})
+          .map((el) => {{
+            const rect = el.getBoundingClientRect();
+            return {{el, rect, area: rect.width * rect.height}};
+          }})
+          .sort((a, b) => a.area - b.area);
+        return matches[0] && matches[0].el;
+      }}
+      const currentCityControl = findCurrentCityControl();
+      const currentCity = currentCityControl ? directText(currentCityControl) : '';
+      if (currentCityControl && currentCity === targetCity) {{
+        return JSON.stringify({{
+          ok: true,
+          mode,
+          city: targetCity,
+          observedCity: currentCity,
+          alreadySelected: true,
+          source: 'visible_current_city',
+          url: href,
+          title
+        }});
+      }}
       function findLocationRoot(){{
         const header = findLocationHeader();
         if (header) {{
@@ -253,7 +295,7 @@ def build_zhilian_city_filter_script(city: str) -> str:
       let root = findLocationRoot();
       let expanded = false;
       if (!root || !clean(root.innerText || root.textContent || '').includes(targetCity) || cityCount(clean(root.innerText || root.textContent || '')) < 4) {{
-        const header = findLocationHeader();
+        const header = findLocationHeader() || currentCityControl;
         if (header) {{
           expanded = true;
         }}
