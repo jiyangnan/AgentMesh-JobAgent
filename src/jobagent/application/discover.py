@@ -19,7 +19,12 @@ from jobagent.infra.discovery_state import (
 from jobagent.infra.diagnostics import emit_stage, progress_heartbeat
 from jobagent.infra.platform_lock import PlatformSessionLock
 from jobagent.infra.profile_contract import require_compatible_profile
-from jobagent.infra.protocol import digest_payload, verify_decision_manifest, verify_search_plan
+from jobagent.infra.protocol import (
+    SearchPlanExpiredError,
+    digest_payload,
+    verify_decision_manifest,
+    verify_search_plan,
+)
 from jobagent.infra.state import load_json, profile_path
 from jobagent.platforms.discovery import CollectionError, collect_from_search_plan
 
@@ -30,6 +35,10 @@ def _decision_result(
     plan: dict[str, Any],
     candidates: list[dict[str, Any]],
     resumed: bool,
+    profile: dict[str, Any] | None = None,
+    round_intent: dict[str, Any] | None = None,
+    request_id: str | None = None,
+    expiry_recovery_attempted: bool = False,
 ) -> dict[str, Any]:
     discover_id = str(plan["discover_id"])
     emit_stage(
@@ -50,6 +59,37 @@ def _decision_result(
                 jobs=candidates,
             )
     except cloud_client.CloudError as exc:
+        if (
+            exc.code == "search_plan_expired"
+            and profile is not None
+            and not expiry_recovery_attempted
+        ):
+            renewed_plan = _renew_expired_plan(
+                platform,
+                expired_plan=plan,
+                profile=profile,
+                round_intent=round_intent,
+                request_id=request_id,
+            )
+            renewed_request_id = (
+                str(renewed_plan.get("request_id") or request_id or "") or None
+            )
+            save_pending_decision(
+                platform,
+                plan=renewed_plan,
+                jobs=candidates,
+                request_id=renewed_request_id,
+            )
+            return _decision_result(
+                platform,
+                plan=renewed_plan,
+                candidates=candidates,
+                resumed=True,
+                profile=profile,
+                round_intent=round_intent,
+                request_id=renewed_request_id,
+                expiry_recovery_attempted=True,
+            )
         exc.details.update(
             {
                 "request_preserved": True,
@@ -111,6 +151,141 @@ def _decision_result(
     }
 
 
+def _expiry_recovery_details(
+    platform: str,
+    *,
+    discover_id: str,
+    request_id: str | None,
+    retryable: bool,
+) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "recovery_reason": "search_plan_expired",
+        "request_preserved": True,
+        "discover_id": discover_id,
+        "next_suggested": f"jobagent {platform} discover",
+        "no_charge": True,
+        "billing_status": "not_charged",
+        "billing": {
+            "status": "not_charged",
+            "renewal_charge": 0,
+            "additional_charge_on_renewal": False,
+            "eventual_decision_charge_unchanged": True,
+        },
+        "requires_user_action": not retryable,
+    }
+    if request_id:
+        details["request_id"] = request_id
+        details["billing"]["retry_reuses_request_id"] = True
+    if not retryable:
+        details["user_prompt"] = (
+            "The signed SearchPlan expired and could not be safely renewed. "
+            "Keep the current round and Job Agent Chrome profile; contact AgentMesh support "
+            "with this error code. Do not create a new round or edit local state."
+        )
+    return details
+
+
+def _renew_expired_plan(
+    platform: str,
+    *,
+    expired_plan: dict[str, Any],
+    profile: dict[str, Any],
+    round_intent: dict[str, Any] | None,
+    request_id: str | None,
+) -> dict[str, Any]:
+    discover_id = str(expired_plan.get("discover_id") or "")
+    if not discover_id:
+        raise ValueError("expired search plan is missing discover_id")
+    intent_digest = (
+        digest_payload(round_intent)
+        if round_intent and round_intent.get("status") == "confirmed"
+        else None
+    )
+    emit_stage(
+        "search_plan_renewal_requested",
+        platform=platform,
+        discover_id=discover_id,
+    )
+    try:
+        renewed = cloud_client.discovery_renew(
+            discover_id=discover_id,
+            platform=platform,
+            profile_digest=digest_payload(profile),
+            intent_digest=intent_digest,
+        )
+    except cloud_client.CloudError as exc:
+        original_code = exc.code
+        retryable = bool(exc.retryable)
+        exc.code = (
+            "search_plan_expired_recovery_pending"
+            if retryable
+            else "search_plan_expired_recovery_required"
+        )
+        exc.args = (
+            "The signed SearchPlan expired; renewal is temporarily unavailable."
+            if retryable
+            else "The signed SearchPlan expired and could not be safely renewed.",
+        )
+        exc.details.update(
+            {
+                "renewal_failure_code": original_code,
+                **_expiry_recovery_details(
+                    platform,
+                    discover_id=discover_id,
+                    request_id=request_id,
+                    retryable=retryable,
+                ),
+            }
+        )
+        raise
+    from jobagent.infra.protocol import ProtocolError
+
+    try:
+        verified = verify_search_plan(
+            renewed,
+            platform=platform,
+            profile=profile,
+            round_intent=round_intent,
+            request_id=request_id,
+            require_request_id=True,
+        )
+        renewal = verified.get("renewal")
+        if (
+            not isinstance(renewal, dict)
+            or renewal.get("reason") != "search_plan_expired"
+            or renewal.get("request_id") != verified.get("request_id")
+            or renewal.get("discover_id") != discover_id
+            or renewal.get("request_preserved") is not True
+            or renewal.get("same_request_id") is not True
+            or renewal.get("same_discover_id") is not True
+            or renewal.get("additional_charge_on_renewal") is not False
+        ):
+            raise ProtocolError("renewed search plan recovery binding is invalid")
+    except ProtocolError as exc:
+        raise cloud_client.CloudError(
+            "The signed SearchPlan expired and the renewal response failed verification.",
+            code="search_plan_expired_recovery_required",
+            retryable=False,
+            details={
+                "renewal_failure_code": "renewed_plan_verification_failed",
+                **_expiry_recovery_details(
+                    platform,
+                    discover_id=discover_id,
+                    request_id=request_id,
+                    retryable=False,
+                ),
+            },
+        ) from exc
+    emit_stage(
+        "search_plan_renewed",
+        platform=platform,
+        discover_id=discover_id,
+        request_id=verified["request_id"],
+        no_charge=True,
+    )
+    return renewed
+
+
 def _resume_pending_decision(
     platform: str,
     *,
@@ -120,19 +295,20 @@ def _resume_pending_decision(
     pending = load_pending_decision(platform)
     if pending is None:
         return None
+    request_id = (
+        str(pending.get("request_id") or pending["plan"].get("request_id") or "")
+        or None
+    )
     try:
         plan = verify_search_plan(
             pending["plan"],
             platform=platform,
             profile=profile,
             round_intent=round_intent,
+            request_id=request_id,
         )
-    except ValueError as exc:
-        if "expired" not in str(exc).casefold():
-            raise
-        clear_pending_decision(platform, discover_id=str(pending.get("discover_id") or ""))
-        emit_stage("pending_decision_expired", platform=platform)
-        return None
+    except SearchPlanExpiredError as exc:
+        plan = exc.signed_plan
     candidates = pending["jobs"]
     try:
         return _decision_result(
@@ -140,9 +316,12 @@ def _resume_pending_decision(
             plan=plan,
             candidates=candidates,
             resumed=True,
+            profile=profile,
+            round_intent=round_intent,
+            request_id=request_id,
         )
     except cloud_client.CloudError as exc:
-        if exc.code not in {"discover_failed_start_new", "search_plan_expired"}:
+        if exc.code not in {"discover_failed_start_new"}:
             raise
         clear_pending_decision(platform, discover_id=str(plan["discover_id"]))
         emit_stage(
@@ -180,7 +359,9 @@ def _preserved_request_id(context: dict[str, Any]) -> str:
     platform = str(context["platform"])
     pending = load_pending_start(platform)
     comparable = ("round_id", "profile_digest", "intent_digest", "account_ref")
-    if pending and all(pending.get(field) == context.get(field) for field in comparable):
+    if pending and all(
+        pending.get(field) == context.get(field) for field in comparable
+    ):
         return str(pending["request_id"])
     if pending:
         clear_pending_start(platform, request_id=str(pending.get("request_id") or ""))
@@ -193,7 +374,9 @@ def _preserved_request_id(context: dict[str, Any]) -> str:
         intent_digest=(
             str(context["intent_digest"]) if context.get("intent_digest") else None
         ),
-        account_ref=(str(context["account_ref"]) if context.get("account_ref") else None),
+        account_ref=(
+            str(context["account_ref"]) if context.get("account_ref") else None
+        ),
     )
     return request_id
 
@@ -206,7 +389,9 @@ def run_discover(
 ) -> dict[str, Any]:
     profile = load_json(profile_path())
     if not profile:
-        raise ValueError("No resume profile found. Run `jobagent resume analyze --file <resume>` first.")
+        raise ValueError(
+            "No resume profile found. Run `jobagent resume analyze --file <resume>` first."
+        )
     require_compatible_profile(profile)
     active_round = rounds.ensure_current_round()
     round_intent = active_round.get("intent")
@@ -249,12 +434,30 @@ def run_discover(
             }
         )
         raise
-    verified_plan = verify_search_plan(
-        plan,
-        platform=platform,
-        profile=profile,
-        round_intent=round_intent,
-    )
+    try:
+        verified_plan = verify_search_plan(
+            plan,
+            platform=platform,
+            profile=profile,
+            round_intent=round_intent,
+            request_id=request_id,
+        )
+    except SearchPlanExpiredError as exc:
+        plan = _renew_expired_plan(
+            platform,
+            expired_plan=exc.signed_plan,
+            profile=profile,
+            round_intent=round_intent,
+            request_id=request_id,
+        )
+        verified_plan = verify_search_plan(
+            plan,
+            platform=platform,
+            profile=profile,
+            round_intent=round_intent,
+            request_id=request_id,
+            require_request_id=True,
+        )
     emit_stage(
         "search_plan_received",
         platform=platform,
@@ -264,7 +467,9 @@ def run_discover(
     try:
         with progress_heartbeat("browser_collection_in_progress", platform=platform):
             with active_command(f"jobagent {platform} discover"):
-                with PlatformSessionLock(platform=platform, command=f"jobagent {platform} discover"):
+                with PlatformSessionLock(
+                    platform=platform, command=f"jobagent {platform} discover"
+                ):
                     candidates = collect_from_search_plan(
                         verified_plan,
                         wait_seconds=wait_seconds,
@@ -289,14 +494,26 @@ def run_discover(
         details.setdefault("retryable", _collection_error_retryable(exc.code))
         exc.details = details
         raise
-    emit_stage("browser_collection_completed", platform=platform, candidate_count=len(candidates))
-    save_pending_decision(platform, plan=plan, jobs=candidates)
+    emit_stage(
+        "browser_collection_completed",
+        platform=platform,
+        candidate_count=len(candidates),
+    )
+    save_pending_decision(
+        platform,
+        plan=plan,
+        jobs=candidates,
+        request_id=request_id,
+    )
     clear_pending_start(platform, request_id=request_id)
     return _decision_result(
         platform,
         plan=verified_plan,
         candidates=candidates,
         resumed=False,
+        profile=profile,
+        round_intent=round_intent,
+        request_id=request_id,
     )
 
 

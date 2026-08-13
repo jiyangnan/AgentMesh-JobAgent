@@ -53,7 +53,9 @@ def save_pending_start(
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     temporary.replace(path)
     return path
 
@@ -93,18 +95,22 @@ def save_pending_decision(
     *,
     plan: dict[str, Any],
     jobs: list[dict[str, Any]],
+    request_id: str | None = None,
 ) -> Path:
     path = pending_decision_path(platform)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "platform": platform,
         "discover_id": plan["discover_id"],
+        "request_id": request_id or plan.get("request_id"),
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "plan": plan,
         "jobs": jobs,
     }
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     temporary.replace(path)
     return path
 
@@ -147,7 +153,9 @@ def save_manifest(manifest: dict[str, Any]) -> Path:
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "manifest": manifest,
     }
-    path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return path
 
 
@@ -175,15 +183,25 @@ def latest_path(platform: str, *, reviewed: bool | None = None) -> Path:
         candidates.append(path)
     if not candidates:
         kind = "reviewed decision" if reviewed else "decision"
-        raise ValueError(f"No {kind} found for {platform}. Run `jobagent {platform} discover` first.")
+        raise ValueError(
+            f"No {kind} found for {platform}. Run `jobagent {platform} discover` first."
+        )
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def load_envelope(platform: str, input_path: str | None = None, *, reviewed: bool | None = None) -> dict[str, Any]:
-    path = Path(input_path).expanduser() if input_path else latest_path(platform, reviewed=reviewed)
+def load_envelope(
+    platform: str, input_path: str | None = None, *, reviewed: bool | None = None
+) -> dict[str, Any]:
+    path = (
+        Path(input_path).expanduser()
+        if input_path
+        else latest_path(platform, reviewed=reviewed)
+    )
     payload = _load(path)
     if payload.get("platform") != platform:
-        raise ValueError(f"Decision belongs to {payload.get('platform')}, not {platform}")
+        raise ValueError(
+            f"Decision belongs to {payload.get('platform')}, not {platform}"
+        )
     payload["source_path"] = str(path)
     return payload
 

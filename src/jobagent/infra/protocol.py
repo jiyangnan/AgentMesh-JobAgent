@@ -40,6 +40,14 @@ class ProtocolError(ValueError):
     pass
 
 
+class SearchPlanExpiredError(ProtocolError):
+    """A correctly signed and context-bound SearchPlan crossed its TTL."""
+
+    def __init__(self, signed_plan: dict[str, Any]):
+        super().__init__("search plan expired")
+        self.signed_plan = signed_plan
+
+
 def canonical_json_bytes(payload: Any) -> bytes:
     return json.dumps(
         payload,
@@ -55,7 +63,11 @@ def digest_payload(payload: Any) -> str:
 
 def canonical_candidates(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {key: value for key, value in job.items() if key in _CANDIDATE_FIELDS and value is not None}
+        {
+            key: value
+            for key, value in job.items()
+            if key in _CANDIDATE_FIELDS and value is not None
+        }
         for job in jobs
     ]
 
@@ -129,7 +141,9 @@ def _validate_search_queries(value: Any) -> None:
             and compact.isalnum()
             and digit_count >= len(compact) // 4
         ):
-            raise ProtocolError("search plan keyword looks like an opaque platform identifier")
+            raise ProtocolError(
+                "search plan keyword looks like an opaque platform identifier"
+            )
         if len(city) > 30 or any(ord(character) < 32 for character in city):
             raise ProtocolError("search plan city is invalid")
         if not 1 <= page_limit <= 5:
@@ -142,6 +156,8 @@ def verify_search_plan(
     platform: str,
     profile: dict[str, Any],
     round_intent: dict[str, Any] | None = None,
+    request_id: str | None = None,
+    require_request_id: bool = False,
 ) -> dict[str, Any]:
     signed = verify_signed_payload(
         plan,
@@ -162,9 +178,14 @@ def verify_search_plan(
             raise ProtocolError("search plan round intent mismatch")
     if int(signed.get("candidate_limit", 0)) != 100:
         raise ProtocolError("search plan candidate limit mismatch")
+    signed_request_id = signed.get("request_id")
+    if require_request_id and not signed_request_id:
+        raise ProtocolError("search plan request binding is missing")
+    if request_id is not None and signed_request_id not in {None, request_id}:
+        raise ProtocolError("search plan request binding mismatch")
     _validate_search_queries(signed.get("queries"))
     if _is_expired(str(signed.get("expires_at", ""))):
-        raise ProtocolError("search plan expired")
+        raise SearchPlanExpiredError(signed)
     return signed
 
 
@@ -197,12 +218,16 @@ def verify_decision_manifest(
         for item in signed.get(bucket, [])
     ]
     ids = [str(item.get("id")) for item in classified]
-    if len(ids) != len(set(ids)) or len(ids) != int(signed.get("deduplicated_count", -1)):
+    if len(ids) != len(set(ids)) or len(ids) != int(
+        signed.get("deduplicated_count", -1)
+    ):
         raise ProtocolError("decision categories are incomplete or duplicated")
     return signed
 
 
-def verify_stored_decision(manifest: dict[str, Any], *, platform: str) -> dict[str, Any]:
+def verify_stored_decision(
+    manifest: dict[str, Any], *, platform: str
+) -> dict[str, Any]:
     """Verify a persisted manifest when raw candidates have already been discarded."""
     signed = verify_signed_payload(
         manifest,
@@ -221,6 +246,8 @@ def verify_stored_decision(manifest: dict[str, Any], *, platform: str) -> dict[s
         for item in signed.get(bucket, [])
     ]
     ids = [str(item.get("id")) for item in classified]
-    if len(ids) != len(set(ids)) or len(ids) != int(signed.get("deduplicated_count", -1)):
+    if len(ids) != len(set(ids)) or len(ids) != int(
+        signed.get("deduplicated_count", -1)
+    ):
         raise ProtocolError("decision categories are incomplete or duplicated")
     return signed

@@ -91,14 +91,20 @@ def _transport_failure(error: BaseException) -> tuple[str, str, bool, str]:
     """Map transport exceptions to stable, non-secret client error contracts."""
 
     normalized = str(error).upper()
-    if isinstance(error, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in normalized:
+    if (
+        isinstance(error, ssl.SSLCertVerificationError)
+        or "CERTIFICATE_VERIFY_FAILED" in normalized
+    ):
         return (
             "tls_certificate_verification_failed",
             "tls_certificate",
             False,
             "TLS certificate verification failed.",
         )
-    if isinstance(error, ssl.SSLEOFError) or "UNEXPECTED_EOF_WHILE_READING" in normalized:
+    if (
+        isinstance(error, ssl.SSLEOFError)
+        or "UNEXPECTED_EOF_WHILE_READING" in normalized
+    ):
         return (
             "tls_connection_eof",
             "tls_eof",
@@ -159,7 +165,11 @@ def _request(
                 "AgentMesh API Key is required. Run `jobagent init --key <your_api_key>`."
             )
         headers["Authorization"] = f"Bearer {key}"
-    encoded_body = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+    encoded_body = (
+        json.dumps(body, ensure_ascii=False).encode("utf-8")
+        if body is not None
+        else None
+    )
     max_attempts = max(1, max_attempts)
     started_at = time.monotonic()
     for attempt in range(1, max_attempts + 1):
@@ -182,14 +192,20 @@ def _request(
                 detail = payload.get("detail", payload)
                 if isinstance(detail, dict):
                     code = detail.get("code") or detail.get("reason")
-                    message = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+                    message = detail.get("message") or json.dumps(
+                        detail, ensure_ascii=False
+                    )
             except json.JSONDecodeError:
                 pass
             retryable = exc.code in _TRANSIENT_HTTP_STATUSES and not (
                 exc.code == 502 and code in _NON_RETRYABLE_502_CODES
             )
             if retryable and attempt < max_attempts:
-                time.sleep(_RETRY_DELAYS_SECONDS[min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)])
+                time.sleep(
+                    _RETRY_DELAYS_SECONDS[
+                        min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)
+                    ]
+                )
                 continue
             semantic_failure = bool(
                 exc.code == 502 and code in _NON_RETRYABLE_502_CODES
@@ -223,7 +239,11 @@ def _request(
             reason = exc.reason
             code, failure_type, retryable, message = _transport_failure(reason)
             if retryable and attempt < max_attempts:
-                time.sleep(_RETRY_DELAYS_SECONDS[min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)])
+                time.sleep(
+                    _RETRY_DELAYS_SECONDS[
+                        min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)
+                    ]
+                )
                 continue
             raise CloudError(
                 message,
@@ -240,10 +260,19 @@ def _request(
                     )
                 },
             ) from exc
-        except (TimeoutError, ssl.SSLError, ConnectionError, http.client.HTTPException) as exc:
+        except (
+            TimeoutError,
+            ssl.SSLError,
+            ConnectionError,
+            http.client.HTTPException,
+        ) as exc:
             code, failure_type, retryable, message = _transport_failure(exc)
             if retryable and attempt < max_attempts:
-                time.sleep(_RETRY_DELAYS_SECONDS[min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)])
+                time.sleep(
+                    _RETRY_DELAYS_SECONDS[
+                        min(attempt - 1, len(_RETRY_DELAYS_SECONDS) - 1)
+                    ]
+                )
                 continue
             raise CloudError(
                 message,
@@ -338,6 +367,32 @@ def discovery_start(
         max_attempts=3,
         operation="discovery_start",
         request_id=request_id,
+    )
+
+
+def discovery_renew(
+    *,
+    discover_id: str,
+    platform: str,
+    profile_digest: str,
+    intent_digest: str | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "platform": platform,
+        "profile_digest": profile_digest,
+        "client_version": __version__,
+        "protocol_version": PROTOCOL_VERSION,
+    }
+    if intent_digest is not None:
+        body["intent_digest"] = intent_digest
+    return _request(
+        "POST",
+        f"/v1/discovery/{discover_id}/renew",
+        body,
+        timeout=60,
+        max_attempts=3,
+        operation="search_plan_renewal",
+        request_id=discover_id,
     )
 
 

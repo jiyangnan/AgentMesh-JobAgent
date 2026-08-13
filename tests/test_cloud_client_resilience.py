@@ -49,7 +49,9 @@ def test_discovery_decide_retries_tls_eof_with_same_request(monkeypatch):
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", flaky)
     monkeypatch.setattr(cloud_client.time, "sleep", sleeps.append)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     result = cloud_client.discovery_decide(
         discover_id="dis_test",
@@ -76,10 +78,43 @@ def test_discovery_decide_retries_gateway_503(monkeypatch):
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", flaky)
     monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
-    assert cloud_client.discovery_decide(discover_id="dis_test", jobs=[]) == {"ok": True}
+    assert cloud_client.discovery_decide(discover_id="dis_test", jobs=[]) == {
+        "ok": True
+    }
     assert attempts == 3
+
+
+def test_search_plan_renewal_retries_with_same_bound_request(monkeypatch):
+    calls: list[dict] = []
+
+    def flaky(request, *, timeout):
+        calls.append(json.loads(request.data))
+        assert timeout == 60
+        if len(calls) < 3:
+            raise _http_error(503, {"message": "temporary gateway failure"})
+        return _Response({"manifest_type": "search_plan", "discover_id": "dis_stable"})
+
+    monkeypatch.setattr(cloud_client.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
+
+    result = cloud_client.discovery_renew(
+        discover_id="dis_stable",
+        platform="zhilian",
+        profile_digest="sha256:" + "1" * 64,
+        intent_digest="sha256:" + "2" * 64,
+    )
+
+    assert result["discover_id"] == "dis_stable"
+    assert len(calls) == 3
+    assert calls[0] == calls[1] == calls[2]
 
 
 def test_semantic_decision_failure_is_not_retried(monkeypatch):
@@ -92,9 +127,13 @@ def test_semantic_decision_failure_is_not_retried(monkeypatch):
         raise _http_error(502, {"code": "decision_failed_refunded"})
 
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", fail)
-    monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: pytest.fail("unexpected retry"))
+    monkeypatch.setattr(
+        cloud_client.time, "sleep", lambda _delay: pytest.fail("unexpected retry")
+    )
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.discovery_decide(discover_id="dis_test", jobs=[])
@@ -111,13 +150,13 @@ def test_resume_analyze_does_not_retry_without_request_idempotency(monkeypatch):
         nonlocal attempts
         attempts += 1
         assert timeout == 180
-        raise urllib.error.URLError(
-            ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING")
-        )
+        raise urllib.error.URLError(ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING"))
 
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", fail)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.resume_analyze("A sufficiently long resume body for this test")
@@ -132,14 +171,14 @@ def test_tls_eof_has_stable_code_and_safe_discovery_diagnostic(monkeypatch):
 
     def fail(_request, *, timeout):
         assert timeout == 60
-        raise urllib.error.URLError(
-            ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING")
-        )
+        raise urllib.error.URLError(ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING"))
 
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", fail)
     monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: api_key)
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.discovery_start(
@@ -166,14 +205,18 @@ def test_timeout_has_stable_code(monkeypatch):
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", fail)
     monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.me()
 
     assert error.value.code == "network_timeout"
     assert error.value.retryable is True
-    assert error.value.details["network_diagnostic"]["operation"] == "account_verification"
+    assert (
+        error.value.details["network_diagnostic"]["operation"] == "account_verification"
+    )
 
 
 @pytest.mark.parametrize("status", [502, 503, 504])
@@ -185,7 +228,9 @@ def test_gateway_failures_have_stable_code(status, monkeypatch):
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", fail)
     monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.discovery_start(
@@ -209,7 +254,9 @@ def test_gateway_status_replaces_generic_server_code(monkeypatch):
     monkeypatch.setattr(cloud_client.urllib.request, "urlopen", fail)
     monkeypatch.setattr(cloud_client.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.me()
@@ -236,7 +283,9 @@ def test_certificate_verification_failure_is_not_retried(monkeypatch):
         lambda _delay: pytest.fail("certificate failures must not retry"),
     )
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.me()
@@ -260,7 +309,9 @@ def test_certificate_verification_string_reason_is_not_retried(monkeypatch):
         lambda _delay: pytest.fail("certificate failures must not retry"),
     )
     monkeypatch.setattr(cloud_client, "load_api_key", lambda: "agentmesh_test_key")
-    monkeypatch.setattr(cloud_client, "api_base_url", lambda: "https://api.example.test")
+    monkeypatch.setattr(
+        cloud_client, "api_base_url", lambda: "https://api.example.test"
+    )
 
     with pytest.raises(cloud_client.CloudError) as error:
         cloud_client.me()

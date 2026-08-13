@@ -23,6 +23,7 @@ from jobagent.cli import (
 )
 from jobagent.infra.protocol import (
     ProtocolError,
+    SearchPlanExpiredError,
     canonical_json_bytes,
     candidate_digest,
     digest_payload,
@@ -52,16 +53,29 @@ def _sign(private, payload):
 
 
 def _future(hours=1):
-    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+    return (
+        (datetime.now(timezone.utc) + timedelta(hours=hours))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _past(minutes=1):
+    return (
+        (datetime.now(timezone.utc) - timedelta(minutes=minutes))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def test_public_parser_exposes_only_v3_platform_commands():
     parser = build_parser()
     assert parser.parse_args(["upgrade-check"]).command == "upgrade-check"
     assert parser.parse_args(["account", "status"]).account_command == "status"
-    assert parser.parse_args(
-        ["account", "bind", "--confirm-legacy"]
-    ).confirm_legacy is True
+    assert (
+        parser.parse_args(["account", "bind", "--confirm-legacy"]).confirm_legacy
+        is True
+    )
     assert parser.parse_args(["account", "switch", "--new-state"]).new_state is True
     assert parser.parse_args(["round", "status"]).round_command == "status"
     assert parser.parse_args(["round", "start"]).round_command == "start"
@@ -76,19 +90,25 @@ def test_public_parser_exposes_only_v3_platform_commands():
     )
     assert round_start.accept_suggested is True
     assert round_start.target_role == ["数据运营经理"]
-    assert parser.parse_args(["round", "audit", "--failures-only"]).failures_only is True
-    assert parser.parse_args(
-        ["round", "skip", "--platform", "liepin", "--confirm-skip"]
-    ).confirm_skip is True
+    assert (
+        parser.parse_args(["round", "audit", "--failures-only"]).failures_only is True
+    )
+    assert (
+        parser.parse_args(
+            ["round", "skip", "--platform", "liepin", "--confirm-skip"]
+        ).confirm_skip
+        is True
+    )
     assert parser.parse_args(["boss", "discover"]).platform_command == "discover"
     assert parser.parse_args(["boss", "greet", "send", "--dry-run"]).limit == 100
     assert parser.parse_args(["liepin", "apply", "review"]).apply_command == "review"
     assert parser.parse_args(["zhilian", "apply", "send", "--dry-run"]).dry_run is True
     assert parser.parse_args(["51job", "audit"]).platform_command == "audit"
     assert parser.parse_args(["boss", "audit", "--details"]).details is True
-    assert parser.parse_args(
-        ["browser", "diagnose", "--platform", "boss"]
-    ).browser_command == "diagnose"
+    assert (
+        parser.parse_args(["browser", "diagnose", "--platform", "boss"]).browser_command
+        == "diagnose"
+    )
 
     for retired in (
         ["boss", "collect"],
@@ -114,9 +134,7 @@ def test_discover_rejects_incompatible_profile_before_cloud(tmp_path, monkeypatc
             "stability": {"avgTenure": ""},
         },
         "preferences": {
-            "targetRoles": [
-                {"title": "AI产品经理", "confidence": 0.98, "priority": 1}
-            ]
+            "targetRoles": [{"title": "AI产品经理", "confidence": 0.98, "priority": 1}]
         },
         "qualitySignals": {
             "language": "zh-CN",
@@ -129,7 +147,9 @@ def test_discover_rejects_incompatible_profile_before_cloud(tmp_path, monkeypatc
     def unexpected_cloud_call(**_kwargs):
         pytest.fail("incompatible profile reached the cloud")
 
-    monkeypatch.setattr(application.cloud_client, "discovery_start", unexpected_cloud_call)
+    monkeypatch.setattr(
+        application.cloud_client, "discovery_start", unexpected_cloud_call
+    )
 
     with pytest.raises(ValueError, match="resume analyze"):
         application.run_discover("boss")
@@ -139,9 +159,14 @@ def test_resume_analyze_stamps_profile_schema_version(tmp_path, monkeypatch):
     from jobagent import cli
 
     source = tmp_path / "resume.txt"
-    source.write_text("A sufficiently long resume body for schema testing.", encoding="utf-8")
+    source.write_text(
+        "A sufficiently long resume body for schema testing.", encoding="utf-8"
+    )
     output = tmp_path / "profile.json"
-    monkeypatch.setattr("jobagent.domain.resume_parser.ResumeParser.parse", lambda self, path: source.read_text())
+    monkeypatch.setattr(
+        "jobagent.domain.resume_parser.ResumeParser.parse",
+        lambda self, path: source.read_text(),
+    )
     monkeypatch.setattr(
         cli,
         "_resume_analyze",
@@ -182,8 +207,10 @@ def test_init_verifies_new_api_key_before_saving(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "jobagent.infra.cloud_client.me",
-        lambda *, api_key=None: calls.append(("verify", api_key))
-        or {"account": {"id": 1, "account_ref": "acct_test_account"}},
+        lambda *, api_key=None: (
+            calls.append(("verify", api_key))
+            or {"account": {"id": 1, "account_ref": "acct_test_account"}}
+        ),
     )
     monkeypatch.setattr(
         "jobagent.infra.credentials.save_api_key",
@@ -229,11 +256,15 @@ def test_doctor_env_verifies_current_api_key(monkeypatch):
     from jobagent import cli
     from jobagent.infra.cloud_client import CloudError
 
-    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: "jobagent_live_bad")
+    monkeypatch.setattr(
+        "jobagent.infra.credentials.load_api_key", lambda: "jobagent_live_bad"
+    )
     monkeypatch.setattr("jobagent.infra.cloud_client.health", lambda: {"status": "ok"})
     monkeypatch.setattr(
         "jobagent.infra.cloud_client.me",
-        lambda: (_ for _ in ()).throw(CloudError("invalid", status=401, code="invalid_api_key")),
+        lambda: (_ for _ in ()).throw(
+            CloudError("invalid", status=401, code="invalid_api_key")
+        ),
     )
 
     result = cli._doctor_env()
@@ -248,7 +279,9 @@ def test_doctor_env_verifies_current_api_key(monkeypatch):
 def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypatch):
     from jobagent import cli
 
-    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: "agentmesh_live_trial")
+    monkeypatch.setattr(
+        "jobagent.infra.credentials.load_api_key", lambda: "agentmesh_live_trial"
+    )
     monkeypatch.setattr("jobagent.infra.cloud_client.health", lambda: {"status": "ok"})
     monkeypatch.setattr(
         "jobagent.infra.cloud_client.me",
@@ -263,7 +296,9 @@ def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypa
             }
         },
     )
-    monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(
+        "jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json"
+    )
     monkeypatch.setattr(
         "jobagent.infra.account_state.ensure_account_state",
         lambda _account, **_kwargs: {"status": "ready", "ready": True},
@@ -298,7 +333,9 @@ def test_doctor_env_reports_healthy_environment_when_credits_are_insufficient(
 ):
     from jobagent import cli
 
-    monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: "agentmesh_live_empty")
+    monkeypatch.setattr(
+        "jobagent.infra.credentials.load_api_key", lambda: "agentmesh_live_empty"
+    )
     monkeypatch.setattr("jobagent.infra.cloud_client.health", lambda: {"status": "ok"})
     monkeypatch.setattr(
         "jobagent.infra.cloud_client.me",
@@ -317,7 +354,9 @@ def test_doctor_env_reports_healthy_environment_when_credits_are_insufficient(
         "jobagent.infra.account_state.ensure_account_state",
         lambda _account, **_kwargs: {"status": "ready", "ready": True},
     )
-    monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(
+        "jobagent.infra.state.profile_path", lambda: tmp_path / "profile.json"
+    )
     monkeypatch.setattr(
         "jobagent.infra.rounds.round_status",
         lambda: {
@@ -610,7 +649,10 @@ def test_dispatch_checks_round_order_before_opening_platform_browser(monkeypatch
 
 
 def test_successful_login_check_advances_round_to_discover(monkeypatch):
-    from jobagent.platforms.liepin.session import LiepinSessionGuide, LiepinSessionStatus
+    from jobagent.platforms.liepin.session import (
+        LiepinSessionGuide,
+        LiepinSessionStatus,
+    )
 
     statuses: list[tuple[str, str]] = []
     monkeypatch.setattr(LiepinSessionGuide, "__init__", lambda self: None)
@@ -666,7 +708,9 @@ def test_successful_login_check_preserves_reviewed_progress(monkeypatch):
     assert statuses == [
         ("boss", "reviewed", "jobagent boss greet send --input /tmp/review.json")
     ]
-    assert result["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+    assert (
+        result["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+    )
 
 
 def test_login_reauthentication_restores_reviewed_progress(monkeypatch):
@@ -716,10 +760,15 @@ def test_login_reauthentication_restores_reviewed_progress(monkeypatch):
     assert blocked["next_suggested"] == "jobagent boss login --check"
     assert statuses[1][1] == "reviewed"
     assert statuses[1][2]["discover_id"] == "discover-1"
-    assert restored["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+    assert (
+        restored["next_suggested"]
+        == "jobagent boss greet send --input /tmp/review.json"
+    )
 
 
-def test_login_reauthentication_infers_reviewed_progress_after_interruption(monkeypatch):
+def test_login_reauthentication_infers_reviewed_progress_after_interruption(
+    monkeypatch,
+):
     statuses: list[tuple[str, str, str]] = []
     workflows = iter(
         [
@@ -732,9 +781,7 @@ def test_login_reauthentication_infers_reviewed_progress_after_interruption(monk
                     }
                 }
             },
-            {
-                "next_suggested": "jobagent boss greet send --input /tmp/review.json"
-            },
+            {"next_suggested": "jobagent boss greet send --input /tmp/review.json"},
         ]
     )
     monkeypatch.setattr("jobagent.infra.rounds.round_status", lambda: next(workflows))
@@ -750,22 +797,30 @@ def test_login_reauthentication_infers_reviewed_progress_after_interruption(monk
     assert statuses == [
         ("boss", "reviewed", "jobagent boss greet send --input /tmp/review.json")
     ]
-    assert result["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+    assert (
+        result["next_suggested"] == "jobagent boss greet send --input /tmp/review.json"
+    )
 
 
 @pytest.mark.parametrize(
     "guide_class",
     [
         pytest.param(
-            __import__("jobagent.platforms.liepin.session", fromlist=["LiepinSessionGuide"]).LiepinSessionGuide,
+            __import__(
+                "jobagent.platforms.liepin.session", fromlist=["LiepinSessionGuide"]
+            ).LiepinSessionGuide,
             id="liepin",
         ),
         pytest.param(
-            __import__("jobagent.platforms.zhilian.session", fromlist=["ZhilianSessionGuide"]).ZhilianSessionGuide,
+            __import__(
+                "jobagent.platforms.zhilian.session", fromlist=["ZhilianSessionGuide"]
+            ).ZhilianSessionGuide,
             id="zhilian",
         ),
         pytest.param(
-            __import__("jobagent.platforms.job51.session", fromlist=["Job51SessionGuide"]).Job51SessionGuide,
+            __import__(
+                "jobagent.platforms.job51.session", fromlist=["Job51SessionGuide"]
+            ).Job51SessionGuide,
             id="51job",
         ),
     ],
@@ -786,7 +841,9 @@ def test_browser_open_failure_is_not_misreported_as_login_required(guide_class):
 
 def test_send_dispatch_passes_delivery_authorization_handoff(monkeypatch):
     calls = []
-    monkeypatch.setattr("jobagent.infra.rounds.assert_platform_turn", lambda platform: None)
+    monkeypatch.setattr(
+        "jobagent.infra.rounds.assert_platform_turn", lambda platform: None
+    )
     monkeypatch.setattr(
         "jobagent.application.delivery.send_reviewed",
         lambda platform, **kwargs: calls.append((platform, kwargs)) or {"ok": True},
@@ -832,10 +889,7 @@ def test_public_readme_identifies_the_official_product_site():
     readme = (root / "README.md").read_text(encoding="utf-8")
 
     assert readme.startswith("# AgentMesh360 Job Agent\n")
-    assert (
-        "[jobagent.agentmesh360.com](https://jobagent.agentmesh360.com/)"
-        in readme
-    )
+    assert "[jobagent.agentmesh360.com](https://jobagent.agentmesh360.com/)" in readme
 
 
 def test_public_agent_docs_forbid_batch_login_and_require_vertical_completion():
@@ -1086,7 +1140,9 @@ def test_search_plan_rejects_changed_round_intent(monkeypatch):
         )
 
 
-@pytest.mark.parametrize("keyword", ["财务总监", "Business Finance Leader", "FP&A负责人"])
+@pytest.mark.parametrize(
+    "keyword", ["财务总监", "Business Finance Leader", "FP&A负责人"]
+)
 def test_search_plan_accepts_readable_role_keywords(keyword, monkeypatch):
     import jobagent.infra.protocol as protocol
 
@@ -1118,7 +1174,448 @@ def test_search_plan_accepts_readable_role_keywords(keyword, monkeypatch):
     assert verified["queries"][0]["keyword"] == keyword
 
 
-def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path, monkeypatch, capsys):
+def test_expired_search_plan_is_distinct_only_after_signature_and_binding_verification(
+    monkeypatch,
+):
+    import jobagent.infra.protocol as protocol
+
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    profile = {"preferences": {"targetRoles": [{"title": "数据运营经理"}]}}
+    request_id = "zhilian:request-expired"
+    plan = _sign(
+        private,
+        {
+            "manifest_type": "search_plan",
+            "protocol_version": 1,
+            "discover_id": "dis_expired",
+            "request_id": request_id,
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "queries": [{"keyword": "数据运营经理", "city": "深圳", "page_limit": 1}],
+            "candidate_limit": 100,
+            "expires_at": _past(),
+        },
+    )
+
+    with pytest.raises(SearchPlanExpiredError) as expired:
+        verify_search_plan(
+            plan,
+            platform="zhilian",
+            profile=profile,
+            request_id=request_id,
+        )
+    assert expired.value.signed_plan["discover_id"] == "dis_expired"
+
+    tampered = dict(plan)
+    tampered["request_id"] = "zhilian:tampered"
+    with pytest.raises(ProtocolError, match="signature verification failed"):
+        verify_search_plan(
+            tampered,
+            platform="zhilian",
+            profile=profile,
+            request_id=request_id,
+        )
+
+    with pytest.raises(ProtocolError, match="request binding mismatch"):
+        verify_search_plan(
+            plan,
+            platform="zhilian",
+            profile=profile,
+            request_id="zhilian:another-request",
+        )
+
+
+def test_discover_renews_expired_start_plan_with_same_request_and_no_browser_guessing(
+    tmp_path,
+    monkeypatch,
+):
+    import jobagent.application.discover as application
+    import jobagent.infra.discovery_state as discovery_state
+    import jobagent.infra.protocol as protocol
+
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    profile = {
+        "schema_version": 1,
+        "preferences": {"targetRoles": [{"title": "数据运营经理"}]},
+    }
+    intent = {"status": "confirmed", "target_roles": ["数据运营经理"]}
+    request_id = "zhilian:request-expired"
+    discover_id = "dis_expired_start"
+
+    def plan(*, expires_at: str, revision: int, renewed: bool):
+        payload = {
+            "manifest_type": "search_plan",
+            "protocol_version": 1,
+            "discover_id": discover_id,
+            "request_id": request_id,
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "intent_digest": digest_payload(intent),
+            "round_intent": intent,
+            "queries": [{"keyword": "数据运营经理", "city": "深圳", "page_limit": 1}],
+            "candidate_limit": 100,
+            "expires_at": expires_at,
+            "plan_revision": revision,
+            "reissued": renewed,
+        }
+        if renewed:
+            payload["renewal"] = {
+                "reason": "search_plan_expired",
+                "request_id": request_id,
+                "discover_id": discover_id,
+                "request_preserved": True,
+                "same_request_id": True,
+                "same_discover_id": True,
+                "additional_charge_on_renewal": False,
+            }
+        return _sign(private, payload)
+
+    expired_plan = plan(expires_at=_past(), revision=1, renewed=False)
+    renewed_plan = plan(expires_at=_future(), revision=2, renewed=True)
+    candidates = [{"id": "job-1", "title": "数据运营经理"}]
+    calls: dict[str, list] = {"start": [], "renew": [], "collect": [], "decision": []}
+    monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(application, "load_json", lambda _path: profile)
+    monkeypatch.setattr(
+        application, "require_compatible_profile", lambda _profile: None
+    )
+    monkeypatch.setattr(discovery_state, "discoveries_dir", lambda: tmp_path)
+    monkeypatch.setattr(application, "load_pending_decision", lambda _platform: None)
+    monkeypatch.setattr(
+        application.rounds,
+        "ensure_current_round",
+        lambda: {"round_id": "round-1", "intent": intent},
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.account_state.current_account_ref",
+        lambda: "acct_account_a",
+    )
+    discovery_state.save_pending_start(
+        "zhilian",
+        request_id=request_id,
+        round_id="round-1",
+        profile_digest=digest_payload(profile),
+        intent_digest=digest_payload(intent),
+        account_ref="acct_account_a",
+    )
+
+    def start(**kwargs):
+        calls["start"].append(kwargs)
+        return expired_plan
+
+    def renew(**kwargs):
+        calls["renew"].append(kwargs)
+        return renewed_plan
+
+    monkeypatch.setattr(application.cloud_client, "discovery_start", start)
+    monkeypatch.setattr(application.cloud_client, "discovery_renew", renew)
+    monkeypatch.setattr(
+        application,
+        "collect_from_search_plan",
+        lambda value, **_kwargs: calls["collect"].append(value) or candidates,
+    )
+    monkeypatch.setattr(
+        application, "active_command", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        application,
+        "_decision_result",
+        lambda platform, **kwargs: (
+            calls["decision"].append({"platform": platform, **kwargs})
+            or {"ok": True, "discover_id": kwargs["plan"]["discover_id"]}
+        ),
+    )
+
+    result = application.run_discover("zhilian", page_delay=0)
+
+    assert result == {"ok": True, "discover_id": discover_id}
+    assert calls["start"][0]["request_id"] == request_id
+    assert calls["renew"] == [
+        {
+            "discover_id": discover_id,
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "intent_digest": digest_payload(intent),
+        }
+    ]
+    assert len(calls["collect"]) == 1
+    assert calls["collect"][0]["discover_id"] == discover_id
+    assert calls["collect"][0]["request_id"] == request_id
+    assert calls["collect"][0]["plan_revision"] == 2
+    assert "signature" not in calls["collect"][0]
+    assert calls["decision"][0]["request_id"] == request_id
+    assert calls["decision"][0]["plan"]["plan_revision"] == 2
+
+
+def test_expired_plan_renewal_failure_returns_complete_safe_recovery_contract(
+    monkeypatch,
+):
+    import jobagent.application.discover as application
+
+    expired_plan = {"discover_id": "dis_expired", "request_id": "zhilian:req"}
+
+    def fail_renewal(**_kwargs):
+        raise application.cloud_client.CloudError(
+            "gateway unavailable",
+            status=503,
+            code="cloud_gateway_unavailable",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(application.cloud_client, "discovery_renew", fail_renewal)
+    with pytest.raises(application.cloud_client.CloudError) as error:
+        application._renew_expired_plan(
+            "zhilian",
+            expired_plan=expired_plan,
+            profile={"schema_version": 1},
+            round_intent=None,
+            request_id="zhilian:req",
+        )
+
+    assert error.value.code == "search_plan_expired_recovery_pending"
+    assert error.value.retryable is True
+    assert error.value.details["request_preserved"] is True
+    assert error.value.details["request_id"] == "zhilian:req"
+    assert error.value.details["discover_id"] == "dis_expired"
+    assert error.value.details["next_suggested"] == "jobagent zhilian discover"
+    assert error.value.details["no_charge"] is True
+    assert error.value.details["billing_status"] == "not_charged"
+    assert error.value.details["requires_user_action"] is False
+    assert error.value.details["billing"]["additional_charge_on_renewal"] is False
+
+
+def test_tampered_renewed_plan_requires_user_action_and_never_becomes_recoverable(
+    monkeypatch,
+):
+    import jobagent.application.discover as application
+
+    monkeypatch.setattr(
+        application.cloud_client,
+        "discovery_renew",
+        lambda **_kwargs: {
+            "manifest_type": "search_plan",
+            "discover_id": "dis_expired",
+            "request_id": "zhilian:req",
+            "signature_algorithm": "Ed25519",
+            "signature": "tampered",
+        },
+    )
+
+    with pytest.raises(application.cloud_client.CloudError) as error:
+        application._renew_expired_plan(
+            "zhilian",
+            expired_plan={"discover_id": "dis_expired"},
+            profile={"schema_version": 1},
+            round_intent=None,
+            request_id="zhilian:req",
+        )
+
+    assert error.value.code == "search_plan_expired_recovery_required"
+    assert error.value.retryable is False
+    assert (
+        error.value.details["renewal_failure_code"]
+        == "renewed_plan_verification_failed"
+    )
+    assert error.value.details["requires_user_action"] is True
+    assert error.value.details["request_preserved"] is True
+    assert error.value.details["no_charge"] is True
+
+
+def test_expired_pending_decision_renews_without_recollecting_or_replacing_request(
+    tmp_path,
+    monkeypatch,
+):
+    import jobagent.application.discover as application
+    import jobagent.infra.protocol as protocol
+
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    profile = {
+        "schema_version": 1,
+        "preferences": {"targetRoles": [{"title": "数据运营经理"}]},
+    }
+    intent = {"status": "confirmed", "target_roles": ["数据运营经理"]}
+    request_id = "zhilian:preserved-after-collection"
+    discover_id = "dis_preserved_after_collection"
+    candidates = [
+        {
+            "id": "job-1",
+            "title": "数据运营经理",
+            "company": "Example",
+            "salary": "20-30K",
+            "url": "https://example.test/jobs/1",
+        }
+    ]
+
+    def search_plan(*, expires_at: str, revision: int, renewed: bool):
+        payload = {
+            "manifest_type": "search_plan",
+            "protocol_version": 1,
+            "discover_id": discover_id,
+            "request_id": request_id,
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "intent_digest": digest_payload(intent),
+            "round_intent": intent,
+            "queries": [{"keyword": "数据运营经理", "city": "深圳", "page_limit": 1}],
+            "candidate_limit": 100,
+            "expires_at": expires_at,
+            "plan_revision": revision,
+            "reissued": renewed,
+        }
+        if renewed:
+            payload["renewal"] = {
+                "reason": "search_plan_expired",
+                "request_id": request_id,
+                "discover_id": discover_id,
+                "request_preserved": True,
+                "same_request_id": True,
+                "same_discover_id": True,
+                "additional_charge_on_renewal": False,
+            }
+        return _sign(private, payload)
+
+    expired_plan = search_plan(expires_at=_past(), revision=1, renewed=False)
+    renewed_plan = search_plan(expires_at=_future(), revision=2, renewed=True)
+    manifest = _sign(
+        private,
+        {
+            "manifest_type": "decision_manifest",
+            "protocol_version": 1,
+            "manifest_id": "dm_preserved_after_collection",
+            "discover_id": discover_id,
+            "platform": "zhilian",
+            "candidate_digest": candidate_digest(candidates),
+            "intent_digest": digest_payload(intent),
+            "input_count": 1,
+            "deduplicated_count": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": _future(24),
+            "selected": [
+                {
+                    **candidates[0],
+                    "classification": "selected",
+                    "score": 91,
+                    "reason": "匹配",
+                    "risk": "",
+                }
+            ],
+            "review": [],
+            "rejected": [],
+            "billing": {
+                "action": "jobagent.discover",
+                "credits": 10,
+                "transaction_id": "77",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        application,
+        "load_pending_decision",
+        lambda _platform: {
+            "platform": "zhilian",
+            "discover_id": discover_id,
+            "request_id": request_id,
+            "plan": expired_plan,
+            "jobs": candidates,
+        },
+    )
+    monkeypatch.setattr(
+        application.cloud_client,
+        "discovery_start",
+        lambda **_kwargs: pytest.fail("pending decision created a replacement request"),
+    )
+    monkeypatch.setattr(
+        application,
+        "collect_from_search_plan",
+        lambda *_args, **_kwargs: pytest.fail("pending decision recollected jobs"),
+    )
+    decisions: list[dict] = []
+
+    def decide(**kwargs):
+        decisions.append(kwargs)
+        if len(decisions) == 1:
+            raise application.cloud_client.CloudError(
+                "search plan expired",
+                status=410,
+                code="search_plan_expired",
+            )
+        return manifest
+
+    renewals: list[dict] = []
+    monkeypatch.setattr(application.cloud_client, "discovery_decide", decide)
+    monkeypatch.setattr(
+        application.cloud_client,
+        "discovery_renew",
+        lambda **kwargs: renewals.append(kwargs) or renewed_plan,
+    )
+    pending_writes: list[dict] = []
+    pending_clears: list[str | None] = []
+    monkeypatch.setattr(
+        application,
+        "save_pending_decision",
+        lambda platform, **payload: pending_writes.append(
+            {"platform": platform, **payload}
+        ),
+    )
+    monkeypatch.setattr(
+        application,
+        "clear_pending_decision",
+        lambda _platform, *, discover_id=None: pending_clears.append(discover_id),
+    )
+    monkeypatch.setattr(
+        application,
+        "save_manifest",
+        lambda _manifest: tmp_path / "decision.json",
+    )
+    monkeypatch.setattr(
+        application.rounds, "set_platform_status", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        application.rounds,
+        "round_status",
+        lambda: {"round_id": "round-1", "status": "active"},
+    )
+
+    result = application._resume_pending_decision(
+        "zhilian",
+        profile=profile,
+        round_intent=intent,
+    )
+
+    assert result is not None and result["resumed"] is True
+    assert result["discover_id"] == discover_id
+    assert decisions == [
+        {"discover_id": discover_id, "jobs": candidates},
+        {"discover_id": discover_id, "jobs": candidates},
+    ]
+    assert renewals == [
+        {
+            "discover_id": discover_id,
+            "platform": "zhilian",
+            "profile_digest": digest_payload(profile),
+            "intent_digest": digest_payload(intent),
+        }
+    ]
+    assert pending_writes == [
+        {
+            "platform": "zhilian",
+            "plan": renewed_plan,
+            "jobs": candidates,
+            "request_id": request_id,
+        }
+    ]
+    assert pending_clears == [discover_id]
+
+
+def test_discover_verifies_both_signatures_and_discards_raw_candidates(
+    tmp_path, monkeypatch, capsys
+):
     import jobagent.application.discover as application
     import jobagent.infra.protocol as protocol
 
@@ -1176,16 +1673,30 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
             ],
             "review": [],
             "rejected": [],
-            "billing": {"action": "jobagent.discover", "credits": 10, "transaction_id": "77"},
+            "billing": {
+                "action": "jobagent.discover",
+                "credits": 10,
+                "transaction_id": "77",
+            },
         },
     )
     monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
     monkeypatch.setattr(application, "load_json", lambda _path: profile)
-    monkeypatch.setattr(application.cloud_client, "discovery_start", lambda **_kwargs: plan)
-    monkeypatch.setattr(application.cloud_client, "discovery_decide", lambda **_kwargs: manifest)
-    monkeypatch.setattr(application, "collect_from_search_plan", lambda *_args, **_kwargs: candidates)
-    monkeypatch.setattr(application, "active_command", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        application.cloud_client, "discovery_start", lambda **_kwargs: plan
+    )
+    monkeypatch.setattr(
+        application.cloud_client, "discovery_decide", lambda **_kwargs: manifest
+    )
+    monkeypatch.setattr(
+        application, "collect_from_search_plan", lambda *_args, **_kwargs: candidates
+    )
+    monkeypatch.setattr(
+        application, "active_command", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext()
+    )
     pending_writes: list[dict] = []
     pending_clears: list[str | None] = []
     pending_start_writes: list[dict] = []
@@ -1207,7 +1718,9 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(
         application,
         "save_pending_decision",
-        lambda platform, **payload: pending_writes.append({"platform": platform, **payload}),
+        lambda platform, **payload: pending_writes.append(
+            {"platform": platform, **payload}
+        ),
     )
     monkeypatch.setattr(
         application,
@@ -1223,7 +1736,10 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(
         application.rounds,
         "round_status",
-        lambda: {"round_id": "round-1", "next_suggested": "jobagent 51job apply review"},
+        lambda: {
+            "round_id": "round-1",
+            "next_suggested": "jobagent 51job apply review",
+        },
     )
     monkeypatch.setattr(
         application.rounds,
@@ -1247,9 +1763,11 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     assert result["selected"] == 1 and result["credits"] == 10
     assert result["resumed"] is False
     assert statuses == [("51job", "discovered")]
-    assert pending_writes == [
-        {"platform": "51job", "plan": plan, "jobs": candidates}
-    ]
+    assert len(pending_writes) == 1
+    assert pending_writes[0]["platform"] == "51job"
+    assert pending_writes[0]["plan"] == plan
+    assert pending_writes[0]["jobs"] == candidates
+    assert pending_writes[0]["request_id"] == pending_start_writes[0]["request_id"]
     assert len(pending_start_writes) == 1
     assert pending_start_writes[0]["request_id"].startswith("51job:")
     assert pending_start_clears == [pending_start_writes[0]["request_id"]]
@@ -1281,7 +1799,9 @@ def test_discover_verifies_both_signatures_and_discards_raw_candidates(tmp_path,
     monkeypatch.setattr(
         application,
         "collect_from_search_plan",
-        lambda *_args, **_kwargs: pytest.fail("pending decision recollected browser jobs"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "pending decision recollected browser jobs"
+        ),
     )
 
     recovered = application.run_discover("51job", page_delay=0)
@@ -1305,7 +1825,9 @@ def test_discover_start_failure_preserves_and_reuses_request_id(
     request_ids: list[str] = []
     monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
     monkeypatch.setattr(application, "load_json", lambda _path: profile)
-    monkeypatch.setattr(application, "require_compatible_profile", lambda _profile: None)
+    monkeypatch.setattr(
+        application, "require_compatible_profile", lambda _profile: None
+    )
     monkeypatch.setattr(application, "load_pending_decision", lambda _platform: None)
     monkeypatch.setattr(discovery_state, "discoveries_dir", lambda: tmp_path)
     monkeypatch.setattr(
@@ -1336,7 +1858,9 @@ def test_discover_start_failure_preserves_and_reuses_request_id(
     monkeypatch.setattr(
         application,
         "collect_from_search_plan",
-        lambda *_args, **_kwargs: pytest.fail("failed start reached browser collection"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "failed start reached browser collection"
+        ),
     )
 
     errors = []
@@ -1374,12 +1898,17 @@ def test_discover_collection_failure_preserves_request_and_no_charge(
     import jobagent.application.discover as application
     import jobagent.infra.discovery_state as discovery_state
 
-    profile = {"schema_version": 1, "preferences": {"targetRoles": [{"title": "产品经理"}]}}
+    profile = {
+        "schema_version": 1,
+        "preferences": {"targetRoles": [{"title": "产品经理"}]},
+    }
     plan = {"platform": "zhilian", "discover_id": "dis_city_recovery", "queries": [{}]}
     request_ids: list[str] = []
     monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
     monkeypatch.setattr(application, "load_json", lambda _path: profile)
-    monkeypatch.setattr(application, "require_compatible_profile", lambda _profile: None)
+    monkeypatch.setattr(
+        application, "require_compatible_profile", lambda _profile: None
+    )
     monkeypatch.setattr(application, "load_pending_decision", lambda _platform: None)
     monkeypatch.setattr(discovery_state, "discoveries_dir", lambda: tmp_path)
     monkeypatch.setattr(
@@ -1399,8 +1928,12 @@ def test_discover_collection_failure_preserves_request_and_no_charge(
         "verify_search_plan",
         lambda value, **_kwargs: value,
     )
-    monkeypatch.setattr(application, "active_command", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        application, "active_command", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext()
+    )
 
     def start(**kwargs):
         request_ids.append(kwargs["request_id"])
@@ -1483,7 +2016,9 @@ def test_unexpected_cli_error_writes_diagnostic_log(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(cli, "_maybe_update", lambda _args: None)
     monkeypatch.setattr(cli, "_prepare_client_upgrade", lambda _args: None)
     monkeypatch.setattr(cli, "_verify_state_owner_for_command", lambda _args: None)
-    monkeypatch.setattr(cli, "_dispatch", lambda _args: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        cli, "_dispatch", lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
     monkeypatch.setattr("sys.argv", ["jobagent", "profile", "show"])
 
     with pytest.raises(SystemExit) as exc:
@@ -1574,7 +2109,9 @@ def test_cli_reports_collection_recovery_contract(monkeypatch, capsys):
     assert reported["billing"]["additional_charge_on_retry"] is False
 
 
-def test_cli_blocks_platform_dispatch_when_upgrade_requires_recovery(monkeypatch, capsys):
+def test_cli_blocks_platform_dispatch_when_upgrade_requires_recovery(
+    monkeypatch, capsys
+):
     from jobagent import cli
     from jobagent.infra.client_upgrade import UpgradeCompatibilityError
 
@@ -1608,7 +2145,9 @@ def test_cli_blocks_platform_dispatch_when_upgrade_requires_recovery(monkeypatch
     assert "diagnostic_log" not in payload
 
 
-def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp_path, monkeypatch):
+def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(
+    tmp_path, monkeypatch
+):
     import jobagent.infra.protocol as protocol
     from jobagent.application.review import review_decision
 
@@ -1643,13 +2182,21 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
                     "greeting": "您好，review 个性化招呼语。",
                 }
             ],
-            "rejected": [{"id": "x", "title": "Rejected", "classification": "rejected"}],
-            "billing": {"action": "jobagent.discover", "credits": 10, "transaction_id": "1"},
+            "rejected": [
+                {"id": "x", "title": "Rejected", "classification": "rejected"}
+            ],
+            "billing": {
+                "action": "jobagent.discover",
+                "credits": 10,
+                "transaction_id": "1",
+            },
         },
     )
     source = tmp_path / "decision.json"
     source.write_text(
-        json.dumps({"platform": "liepin", "discover_id": "dis_review", "manifest": manifest}),
+        json.dumps(
+            {"platform": "liepin", "discover_id": "dis_review", "manifest": manifest}
+        ),
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="confirm-promote"):
@@ -1697,16 +2244,23 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(tmp
         "Review",
     ]
     assert result["interaction"]["kind"] == "delivery_confirmation"
-    assert result["delivery_preview"]["preview_id"] in result["interaction"]["interaction_id"]
+    assert (
+        result["delivery_preview"]["preview_id"]
+        in result["interaction"]["interaction_id"]
+    )
     assert reviewed["delivery_preview"] == result["delivery_preview"]
     assert "delivery_authorization" not in reviewed
     assert [item["id"] for item in reviewed["send_candidates"]] == ["s", "r"]
-    assert reviewed["user_overrides"] == [{"job_id": "r", "from": "review", "to": "selected"}]
+    assert reviewed["user_overrides"] == [
+        {"job_id": "r", "from": "review", "to": "selected"}
+    ]
     assert statuses == [("liepin", "awaiting_delivery_confirmation")]
     assert result["workflow"]["round_id"] == "round-1"
 
 
-def test_reviewing_an_old_review_file_preserves_existing_promotions(tmp_path, monkeypatch):
+def test_reviewing_an_old_review_file_preserves_existing_promotions(
+    tmp_path, monkeypatch
+):
     import jobagent.infra.protocol as protocol
     from jobagent.application.review import review_decision
 
@@ -1740,7 +2294,11 @@ def test_reviewing_an_old_review_file_preserves_existing_promotions(tmp_path, mo
                 }
             ],
             "rejected": [],
-            "billing": {"action": "jobagent.discover", "credits": 10, "transaction_id": "1"},
+            "billing": {
+                "action": "jobagent.discover",
+                "credits": 10,
+                "transaction_id": "1",
+            },
         },
     )
     old_review = tmp_path / "old.review.json"
@@ -1817,7 +2375,11 @@ def test_reviewing_an_adjusted_review_file_preserves_delivery_exclusions(
             ],
             "review": [],
             "rejected": [],
-            "billing": {"action": "jobagent.discover", "credits": 10, "transaction_id": "1"},
+            "billing": {
+                "action": "jobagent.discover",
+                "credits": 10,
+                "transaction_id": "1",
+            },
         },
     )
     old_review = tmp_path / "adjusted.review.json"
@@ -1861,9 +2423,7 @@ def test_reviewing_an_adjusted_review_file_preserves_delivery_exclusions(
         "数据分析师"
     ]
     assert [item["id"] for item in reviewed["send_candidates"]] == ["keep"]
-    assert [item["id"] for item in reviewed["user_delivery_exclusions"]] == [
-        "exclude"
-    ]
+    assert [item["id"] for item in reviewed["user_delivery_exclusions"]] == ["exclude"]
 
 
 def test_send_marks_platform_sent_and_audit_advances_to_next_platform(monkeypatch):
@@ -1873,7 +2433,10 @@ def test_send_marks_platform_sent_and_audit_advances_to_next_platform(monkeypatc
     reviewed = {
         "discover_id": "dis_boss",
         "send_candidates": [
-            {"url": "https://www.zhipin.com/job_detail/1.html", "cloud_greeting": "您好"}
+            {
+                "url": "https://www.zhipin.com/job_detail/1.html",
+                "cloud_greeting": "您好",
+            }
         ],
     }
     statuses: list[tuple[str, str]] = []
@@ -1890,9 +2453,15 @@ def test_send_marks_platform_sent_and_audit_advances_to_next_platform(monkeypatc
         ],
     )
     monkeypatch.setattr(delivery, "_append_boss_audit", lambda _attempts: None)
-    monkeypatch.setattr(delivery, "active_command", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(delivery, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(delivery, "print_first_delivery_star_prompt_once", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        delivery, "active_command", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        delivery, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext()
+    )
+    monkeypatch.setattr(
+        delivery, "print_first_delivery_star_prompt_once", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         delivery.rounds,
         "set_platform_status",
@@ -1909,11 +2478,21 @@ def test_send_marks_platform_sent_and_audit_advances_to_next_platform(monkeypatc
     assert statuses == [("boss", "sent")]
     assert sent["workflow"]["next_suggested"] == "jobagent boss audit"
 
-    monkeypatch.setattr(delivery, "AuditLog", lambda: type("Log", (), {"summary": lambda self: {}, "list_recent": lambda self, _n: []})())
+    monkeypatch.setattr(
+        delivery,
+        "AuditLog",
+        lambda: type(
+            "Log", (), {"summary": lambda self: {}, "list_recent": lambda self, _n: []}
+        )(),
+    )
     monkeypatch.setattr(
         delivery.rounds,
         "complete_platform_after_audit",
-        lambda platform: {"round_id": "round-1", "current_platform": "liepin", "next_suggested": "jobagent liepin login --check"},
+        lambda platform: {
+            "round_id": "round-1",
+            "current_platform": "liepin",
+            "next_suggested": "jobagent liepin login --check",
+        },
     )
     audited = delivery.audit_platform("boss")
 
@@ -1948,7 +2527,9 @@ def test_round_audit_is_compact_by_default_and_details_are_opt_in(monkeypatch):
     assert compact["failure_count"] == 12
     assert all("records" not in report for report in compact["platforms"].values())
     assert failures["platforms"]["boss"]["record_count"] == 1
-    assert failures["platforms"]["boss"]["records"][0]["error"] == "delivery_not_verified"
+    assert (
+        failures["platforms"]["boss"]["records"][0]["error"] == "delivery_not_verified"
+    )
 
 
 def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
@@ -1958,7 +2539,9 @@ def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
 
     private, public = _key_pair()
     monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
-    delivered_url = "https://www.zhipin.com/job_detail/already.html?ka=search_list_jname_1"
+    delivered_url = (
+        "https://www.zhipin.com/job_detail/already.html?ka=search_list_jname_1"
+    )
     pending_url = "https://www.zhipin.com/job_detail/pending.html"
     manifest = _sign(
         private,
@@ -1991,12 +2574,18 @@ def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
             ],
             "review": [],
             "rejected": [],
-            "billing": {"action": "jobagent.discover", "credits": 0, "transaction_id": "1"},
+            "billing": {
+                "action": "jobagent.discover",
+                "credits": 0,
+                "transaction_id": "1",
+            },
         },
     )
     source = tmp_path / "decision.json"
     source.write_text(
-        json.dumps({"platform": "boss", "discover_id": "dis_boss_review", "manifest": manifest}),
+        json.dumps(
+            {"platform": "boss", "discover_id": "dis_boss_review", "manifest": manifest}
+        ),
         encoding="utf-8",
     )
     audit_path = tmp_path / "audit.json"
@@ -2024,7 +2613,9 @@ def test_boss_review_excludes_previously_delivered_jobs(tmp_path, monkeypatch):
     assert [item["id"] for item in reviewed["skipped_delivered"]] == ["already"]
 
 
-def test_boss_send_skips_previously_delivered_jobs_before_opening_browser(tmp_path, monkeypatch):
+def test_boss_send_skips_previously_delivered_jobs_before_opening_browser(
+    tmp_path, monkeypatch
+):
     import jobagent.infra.audit as audit
     from jobagent.application.delivery import _boss_send
     from jobagent.domain.models import SendAttempt
@@ -2094,8 +2685,14 @@ def test_boss_send_persists_attempt_and_stops_after_platform_default_only(monkey
     )
     attempts = _boss_send(
         [
-            {"url": "https://www.zhipin.com/job_detail/first.html", "cloud_greeting": "one"},
-            {"url": "https://www.zhipin.com/job_detail/second.html", "cloud_greeting": "two"},
+            {
+                "url": "https://www.zhipin.com/job_detail/first.html",
+                "cloud_greeting": "one",
+            },
+            {
+                "url": "https://www.zhipin.com/job_detail/second.html",
+                "cloud_greeting": "two",
+            },
         ],
         dry_run=False,
         on_attempt=lambda attempt, _index, _total: persisted.append(attempt),
@@ -2132,8 +2729,14 @@ def test_boss_send_stops_after_first_generic_failure(monkeypatch):
 
     attempts = _boss_send(
         [
-            {"url": "https://www.zhipin.com/job_detail/first.html", "cloud_greeting": "one"},
-            {"url": "https://www.zhipin.com/job_detail/second.html", "cloud_greeting": "two"},
+            {
+                "url": "https://www.zhipin.com/job_detail/first.html",
+                "cloud_greeting": "one",
+            },
+            {
+                "url": "https://www.zhipin.com/job_detail/second.html",
+                "cloud_greeting": "two",
+            },
         ],
         dry_run=False,
     )
@@ -2143,7 +2746,9 @@ def test_boss_send_stops_after_first_generic_failure(monkeypatch):
     assert attempts[0].error == "chat_entry_failed"
 
 
-def test_boss_audit_does_not_treat_platform_default_only_as_personalized_delivery(tmp_path):
+def test_boss_audit_does_not_treat_platform_default_only_as_personalized_delivery(
+    tmp_path,
+):
     from jobagent.infra.audit import AuditLog
 
     audit_path = tmp_path / "audit.json"
@@ -2261,7 +2866,9 @@ def test_managed_update_emits_bounded_lifecycle_events(tmp_path, monkeypatch):
     monkeypatch.setattr(updates, "fetch_release_manifest", lambda **_kwargs: manifest)
     monkeypatch.setattr(updates, "_package_root", lambda: tmp_path)
     monkeypatch.setattr(updates, "_install_metadata", lambda _root: {"managed": True})
-    monkeypatch.setattr(updates, "apply_managed_update", lambda *_args, **_kwargs: "0.4.2")
+    monkeypatch.setattr(
+        updates, "apply_managed_update", lambda *_args, **_kwargs: "0.4.2"
+    )
 
     result = updates.check_for_update(
         auto_apply=True,
@@ -2279,7 +2886,9 @@ def test_managed_update_emits_bounded_lifecycle_events(tmp_path, monkeypatch):
         "client_update_completed",
     ]
     assert all(details["automatic"] is True for _stage, details in events)
-    assert all(details["notes_url"] == manifest["notes_url"] for _stage, details in events)
+    assert all(
+        details["notes_url"] == manifest["notes_url"] for _stage, details in events
+    )
 
 
 def test_managed_update_emits_failure_event(tmp_path, monkeypatch):
@@ -2312,10 +2921,14 @@ def test_managed_update_emits_failure_event(tmp_path, monkeypatch):
         "client_update_started",
         "client_update_failed",
     ]
-    assert events[-1][1]["next_suggested"].startswith("Resolve the reported update error")
+    assert events[-1][1]["next_suggested"].startswith(
+        "Resolve the reported update error"
+    )
 
 
-def test_managed_update_hash_failure_emits_safe_installer_recovery(tmp_path, monkeypatch):
+def test_managed_update_hash_failure_emits_safe_installer_recovery(
+    tmp_path, monkeypatch
+):
     import jobagent.infra.release_update as updates
 
     monkeypatch.setattr(updates, "__version__", "0.5.1")
@@ -2347,9 +2960,10 @@ def test_managed_update_hash_failure_emits_safe_installer_recovery(tmp_path, mon
         failure["recovery_commands"]["windows_powershell"]
         == updates.WINDOWS_INSTALL_COMMAND
     )
-    assert "preserves Job Agent account state and browser sessions" in failure[
-        "next_suggested"
-    ]
+    assert (
+        "preserves Job Agent account state and browser sessions"
+        in failure["next_suggested"]
+    )
 
 
 def test_current_release_does_not_emit_update_events(monkeypatch):
@@ -2426,7 +3040,9 @@ def test_cli_update_restart_receipt_is_safe_and_emitted_once(monkeypatch, capsys
         (sys.executable, [sys.executable, "-m", "jobagent", "doctor", "env"])
     ]
 
-    monkeypatch.setattr(updates, "maybe_auto_update", lambda **_kwargs: {"status": "current"})
+    monkeypatch.setattr(
+        updates, "maybe_auto_update", lambda **_kwargs: {"status": "current"}
+    )
     _maybe_update(args)
     first = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
     assert [event["stage"] for event in first] == ["client_command_resumed"]

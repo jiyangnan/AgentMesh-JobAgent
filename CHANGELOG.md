@@ -2,6 +2,18 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.11] - 2026-08-13
+
+### Fixed
+
+- Renew an expired, validly signed SearchPlan against the same preserved request and Discover IDs instead of returning a bare protocol error.
+- Reuse already collected candidates and the original billing idempotency relationship after renewal; renewal itself has zero charge.
+- Return complete machine-readable recovery fields when renewal is temporarily unavailable, while signature, account and context mismatches remain non-recoverable.
+
+### Compatibility
+
+- Existing API Keys, account binding, profiles, rounds, pending candidates, browser sessions and audits are preserved. No cache clearing, repeated login, replacement round, recollection or duplicate Discover charge is required.
+
 ## [0.5.6] - 2026-08-04
 
 ### Fixed
