@@ -501,6 +501,7 @@ class ZhilianReadOnlyCollector:
                     error="zhilian_keyword_unverified",
                 )
 
+            city_resolution: dict[str, Any] = {}
             if city:
                 city_resolution = self.city_resolver.verify_snapshot(
                     city,
@@ -608,14 +609,19 @@ class ZhilianReadOnlyCollector:
                         ),
                     )
 
-            jobs.extend(
-                parse_zhilian_snapshot_jobs(
-                    snapshot,
-                    city_name=city,
-                    limit=max(1, limit - len(jobs)),
-                    seen=seen,
-                )
+            page_jobs = parse_zhilian_snapshot_jobs(
+                snapshot,
+                city_name=city,
+                limit=max(1, limit - len(jobs)),
+                seen=seen,
             )
+            jobs.extend(page_jobs)
+            if _verified_cross_city_fallback_only(city_resolution, page_jobs):
+                snapshot["crossCityFallbackOnly"] = True
+                snapshot["acceptedCandidateCount"] = 0
+                snapshot["paginationExhausted"] = True
+                snapshot["terminationReason"] = "no_results"
+                break
             if len(jobs) >= limit:
                 snapshot["candidateLimitReached"] = True
                 snapshot["terminationReason"] = "candidate_limit_reached"
@@ -1766,6 +1772,8 @@ def _combined_snapshot(snapshots: list[dict[str, Any]], fallback: dict[str, Any]
             "pageLimitReached",
             "paginationExhausted",
             "candidateLimitReached",
+            "crossCityFallbackOnly",
+            "acceptedCandidateCount",
         ):
             if key in final_page:
                 payload[key] = final_page[key]
@@ -1987,6 +1995,22 @@ def _query_page_exhausted(snapshot: dict[str, Any], current_page: int) -> bool:
         return False
     return observed_page == current_page and (
         not available_pages or max(available_pages) <= current_page
+    )
+
+
+def _verified_cross_city_fallback_only(
+    city_resolution: dict[str, Any],
+    page_jobs: list[Job],
+) -> bool:
+    """Recognize rejected recommendation cards on an independently verified route."""
+
+    return bool(
+        not page_jobs
+        and city_resolution.get("verified") is True
+        and city_resolution.get("allCardsOtherCity") is True
+        and city_resolution.get("crossCityFallbackOnly") is True
+        and city_resolution.get("visibleCityConflict") is not True
+        and city_resolution.get("codeEvidenceConflict") is not True
     )
 
 
@@ -2290,6 +2314,7 @@ def _safe_city_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
         "titleMatchesCity": "title_city_match",
         "visibleCityConflict": "visible_city_conflict",
         "allCardsOtherCity": "all_cards_other_city",
+        "crossCityFallbackOnly": "cross_city_fallback_only",
     }
     if isinstance(resolution, dict):
         for source, target in resolution_mapping.items():
@@ -2387,11 +2412,7 @@ def _city_route_snapshot_resolution(
         return None
     if any(
         bool(base_resolution.get(key))
-        for key in (
-            "codeEvidenceConflict",
-            "visibleCityConflict",
-            "allCardsOtherCity",
-        )
+        for key in ("codeEvidenceConflict", "visibleCityConflict")
     ):
         return None
     current_city_sources = {
@@ -2405,6 +2426,7 @@ def _city_route_snapshot_resolution(
     evidence_sources = sorted(
         current_city_sources | {"verified_city_route", "verified_search_route"}
     )
+    cross_city_fallback_only = bool(base_resolution.get("allCardsOtherCity"))
     return {
         **base_resolution,
         "ok": True,
@@ -2419,6 +2441,7 @@ def _city_route_snapshot_resolution(
         "evidenceStatus": "verified",
         "reason": "verified_city_route_continuity",
         "evidenceSources": evidence_sources,
+        "crossCityFallbackOnly": cross_city_fallback_only,
         "verificationSource": (
             "verified_city_route_with_numeric_code"
             if observed_code.isdigit()

@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.22] - 2026-08-15
+
+### Fixed
+
+- Treat cross-city fallback cards on an independently verified Zhilian query and city route as that query's safe empty result instead of a city-evidence conflict.
+- Keep rejecting every cross-city fallback card while preserving valid candidates already collected by earlier signed SearchPlan queries.
+- Keep visible selected-city conflicts and route/control code conflicts fail-closed, and stop the safe empty query without probing another page.
+- Keep job-card text scoped to its explicit card surface so page-level city labels cannot contaminate candidate-city parsing.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, round, preserved `request_id`, signed SearchPlan, Discover ID, candidates and audits remain in place. Resume with `jobagent zhilian discover`; the exact preserved request continues without another Discover charge.
+
 ## [0.5.21] - 2026-08-14
 
 ### Fixed

@@ -137,6 +137,9 @@ class ZhilianCityResolver:
         if matching:
             evidence_sources.append("job_cards")
         evidence_sources.sort()
+        non_card_city_sources = {
+            value for value in evidence_sources if value in {"page_title", "visible_city"}
+        }
 
         code_changed = bool(observed_code and expected_code and observed_code != expected_code)
         trusted_code_match = bool(
@@ -145,8 +148,26 @@ class ZhilianCityResolver:
             and observed_code == expected_code
             and source in {"bundled_seed", "verified_cache"}
         )
+        result_surface_city_consistent = bool(
+            observed_code
+            and (
+                (trusted_code_match and non_card_city_sources)
+                or (
+                    (code_changed or not expected_code)
+                    and len(non_card_city_sources) >= 2
+                )
+            )
+        )
+        cross_city_fallback_only = bool(
+            all_cards_other_city
+            and result_surface_city_consistent
+            and not visible_city_conflict
+            and not code_evidence_conflict
+        )
         evidence_conflict = bool(
-            all_cards_other_city or visible_city_conflict or code_evidence_conflict
+            visible_city_conflict
+            or code_evidence_conflict
+            or (all_cards_other_city and not cross_city_fallback_only)
         )
         if not observed_code or evidence_conflict:
             verified = False
@@ -195,6 +216,7 @@ class ZhilianCityResolver:
             "matchingCards": matching,
             "mismatchedCardCities": sorted(set(mismatches)),
             "allCardsOtherCity": all_cards_other_city,
+            "crossCityFallbackOnly": cross_city_fallback_only,
             "titleMatchesCity": title_matches_city,
             "visibleCityConflict": visible_city_conflict,
             "evidenceStatus": evidence_status,

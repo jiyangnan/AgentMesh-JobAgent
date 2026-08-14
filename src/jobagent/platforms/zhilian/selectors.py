@@ -1443,8 +1443,13 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         return cleanLabel;
       }}
       function cardRoot(anchor){{
+        const explicitSurface = anchor.closest(
+          '[data-position-id],[data-positionid],[data-job-id],[data-jobid],[data-job-number],'
+            + '[class*="job-card"],[class*="jobCard"],[class*="job-item"],[class*="jobItem"],'
+            + '[class*="position-card"],[class*="positionCard"],[class*="position-item"],[class*="positionItem"]'
+        );
         let root = anchor;
-        let best = anchor;
+        let best = explicitSurface || anchor;
         for (let i = 0; i < 9 && root.parentElement; i++) {{
           root = root.parentElement;
           const raw = clean(root.innerText || root.textContent || '');
@@ -1453,6 +1458,7 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
           const hasCompanySignal = /公司|集团|有限公司|股份|科技|信息|咨询|人力资源/.test(raw);
           if (raw.length >= 20 && hasJobSignal) {{
             best = root;
+            if (explicitSurface && root === explicitSurface) break;
             const applyMentions = (raw.match(/立即投递/g) || []).length;
             if (raw.length >= 60 && raw.length <= 2200 && applyMentions <= 2 && (hasAction || hasCompanySignal)) break;
           }}

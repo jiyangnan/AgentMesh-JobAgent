@@ -136,6 +136,8 @@ def test_snapshot_selector_supports_current_job_surfaces_and_safe_diagnostics():
     assert "jobIdFromSurface" in script
     assert "jobUrlFromSurface" in script
     assert "collectableSurfaceCount" in script
+    assert "explicitSurface" in script
+    assert "root === explicitSurface" in script
 
 
 def test_next_page_failure_is_not_reported_as_keyword_rejection():
@@ -283,6 +285,45 @@ def test_city_resolver_reports_real_city_conflict_separately():
     assert resolution["verified"] is False
     assert resolution["evidenceStatus"] == "evidence_conflict"
     assert resolution["reason"] == "city_evidence_conflict"
+
+
+def test_city_resolver_does_not_treat_cross_city_fallback_cards_as_route_conflict():
+    resolution = ZhilianCityResolver().verify_snapshot(
+        "深圳",
+        {
+            "url": "https://www.zhaopin.com/jobs?jl=765&kw=产品经理",
+            "title": "深圳热门职位招聘 - 智联招聘",
+            "visibleCity": "深圳",
+            "cards": [{"cityName": "上海"}, {"cityName": "北京"}],
+        },
+        expected_code="765",
+        source="verified_cache",
+    )
+
+    assert resolution["verified"] is True
+    assert resolution["allCardsOtherCity"] is True
+    assert resolution["crossCityFallbackOnly"] is True
+    assert resolution["visibleCityConflict"] is False
+    assert resolution["codeEvidenceConflict"] is False
+    assert resolution["evidenceStatus"] == "verified"
+
+
+def test_city_resolver_keeps_strong_visible_city_conflict_fail_closed():
+    resolution = ZhilianCityResolver().verify_snapshot(
+        "深圳",
+        {
+            "url": "https://www.zhaopin.com/jobs?jl=765&kw=产品经理",
+            "title": "深圳热门职位招聘 - 智联招聘",
+            "visibleCity": "上海",
+            "cards": [{"cityName": "上海"}],
+        },
+        expected_code="765",
+        source="verified_cache",
+    )
+
+    assert resolution["verified"] is False
+    assert resolution["visibleCityConflict"] is True
+    assert resolution["evidenceStatus"] == "evidence_conflict"
 
 
 def test_city_resolver_rejects_conflicting_url_and_dom_candidate_codes():

@@ -293,6 +293,50 @@ class _AuthenticatedCityHomepageBootstrapDriver:
         }
 
 
+class _CrossCityFallbackAfterValidQueryDriver(_AuthenticatedCityHomepageBootstrapDriver):
+    """Model a valid first query followed by target-city fallback recommendations."""
+
+    def _exec_js(self, script: str):
+        result = super()._exec_js(script)
+        if (
+            self.page == "search_results"
+            and "zhilian_keyword_search" not in script
+            and "zhilian_search_transition" not in script
+            and "zhilian_city_filter" not in script
+            and "zhilian_pagination" not in script
+        ):
+            if self.current_query == "产品经理":
+                cards = [
+                    {
+                        "positionId": "JOB-LOCAL-1",
+                        "jobTitle": "产品经理",
+                        "companyName": "深圳示例科技",
+                        "cityName": "深圳",
+                        "jobUrl": "https://www.zhaopin.com/jobdetail/JOB-LOCAL-1.htm",
+                    }
+                ]
+            else:
+                cards = [
+                    {
+                        "positionId": "JOB-FALLBACK-1",
+                        "jobTitle": "数据产品经理",
+                        "companyName": "外地推荐示例",
+                        "cityName": "上海",
+                        "jobUrl": "https://www.zhaopin.com/jobdetail/JOB-FALLBACK-1.htm",
+                    }
+                ]
+            result.update(
+                {
+                    "searchPageEvidence": ["search_route", "search_input", "job_surface"],
+                    "candidateCount": len(cards),
+                    "jobSurfaceCount": len(cards),
+                    "noResults": False,
+                    "cards": cards,
+                }
+            )
+        return result
+
+
 class _NativeEnterCDP:
     def __init__(self, driver):
         self.driver = driver
@@ -1070,6 +1114,74 @@ def test_scheduler_bootstraps_authenticated_city_homepage_and_runs_both_queries(
         cache["cities"]["深圳"]["verification_source"]
         == "verified_city_route_with_numeric_code"
     )
+
+
+def test_scheduler_preserves_earlier_candidates_when_later_query_has_only_cross_city_fallbacks(
+    monkeypatch,
+    tmp_path,
+):
+    driver = _CrossCityFallbackAfterValidQueryDriver()
+    monkeypatch.setattr(
+        "jobagent.platforms.zhilian.city_resolver.APP_DIR",
+        tmp_path,
+    )
+    monkeypatch.setattr("jobagent.platforms.zhilian.collect.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "jobagent.platforms.zhilian.collect.ZHILIAN_SEARCH_NAVIGATION_TIMEOUT_SECONDS",
+        0,
+    )
+    plan = {
+        "platform": "zhilian",
+        "candidate_limit": 100,
+        "queries": [
+            {"keyword": "产品经理", "city": "深圳", "page_limit": 2},
+            {"keyword": "数据产品经理", "city": "深圳", "page_limit": 2},
+        ],
+    }
+
+    candidates = discovery.collect_from_search_plan(
+        plan,
+        driver=driver,
+        wait_seconds=0,
+        page_delay=0,
+        login_verification=_login_verification(),
+    )
+
+    assert [candidate["id"] for candidate in candidates] == ["JOB-LOCAL-1"]
+    assert driver.pagination_calls == []
+    assert all(candidate["id"] != "JOB-FALLBACK-1" for candidate in candidates)
+
+
+def test_collector_treats_verified_cross_city_fallback_surface_as_safe_empty_query(
+    monkeypatch,
+    tmp_path,
+):
+    driver = _CrossCityFallbackAfterValidQueryDriver()
+    monkeypatch.setattr("jobagent.platforms.zhilian.collect.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "jobagent.platforms.zhilian.collect.ZHILIAN_SEARCH_NAVIGATION_TIMEOUT_SECONDS",
+        0,
+    )
+
+    result = ZhilianReadOnlyCollector(
+        driver=driver,
+        city_cache_path=tmp_path / "cities.json",
+        login_verification=_login_verification(),
+    ).collect(
+        query="数据产品经理",
+        city="深圳",
+        pages=2,
+        wait_seconds=0,
+        page_delay=0,
+    )
+
+    assert result.ok is True
+    assert result.jobs == []
+    assert result.snapshot["terminationReason"] == "no_results"
+    assert result.snapshot["paginationExhausted"] is True
+    assert result.snapshot["crossCityFallbackOnly"] is True
+    assert result.snapshot["acceptedCandidateCount"] == 0
+    assert driver.pagination_calls == []
 
 
 def test_scheduler_submits_both_queries_from_verified_city_slug_without_numeric_code(
