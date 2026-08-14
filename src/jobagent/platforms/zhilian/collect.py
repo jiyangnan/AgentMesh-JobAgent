@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,19 @@ ZHILIAN_SEARCH_NAVIGATION_TIMEOUT_SECONDS = 75
 ZHILIAN_SEARCH_ACTION_OBSERVE_SECONDS = 8
 ZHILIAN_SEARCH_INPUT_COMMIT_TIMEOUT_SECONDS = 2
 ZHILIAN_PAGE_POLL_INTERVAL_SECONDS = 0.5
+ZHILIAN_CANDIDATE_SUCCESS_TERMINATIONS = frozenset(
+    {
+        "candidate_limit_reached",
+        "page_limit_reached",
+        "pagination_exhausted",
+    }
+)
+
+
+def zhilian_candidate_collection_completed(reason: Any) -> bool:
+    """Return whether a non-empty collection ended at an allowed boundary."""
+
+    return str(reason or "") in ZHILIAN_CANDIDATE_SUCCESS_TERMINATIONS
 
 
 def build_zhilian_search_url(
@@ -195,11 +209,26 @@ class ZhilianCollectResult:
             "zhilian_keyword_submit_not_found",
             "zhilian_keyword_rejected",
             "zhilian_keyword_unverified",
-            "zhilian_page_option_not_found",
         }:
             payload["message"] = (
                 "Zhilian did not accept or verify the requested readable job keyword; "
                 "no candidates were returned and no credits were charged."
+            )
+        elif self.error == "zhilian_page_option_not_found":
+            payload.update(
+                {
+                    "message": (
+                        "Zhilian verified the current result page, but the requested "
+                        "next-page control was not available; no candidates from an "
+                        "unverified page were "
+                        "returned and no credits were charged."
+                    ),
+                    "retryable": False,
+                    "requires_user_action": True,
+                    "next_suggested": "jobagent browser diagnose --platform zhilian",
+                    "no_charge": True,
+                    "diagnostics": _safe_selector_diagnostics(self.snapshot),
+                }
             )
         if include_snapshot:
             payload["snapshot"] = self.snapshot
@@ -215,9 +244,11 @@ class ZhilianReadOnlyCollector:
         *,
         city_cache_path: Path | None = None,
         login_verification: dict[str, Any] | None = None,
+        progress_callback: Callable[..., None] | None = None,
     ):
         self.driver = driver or create_driver(platform="zhilian")
         self.city_resolver = ZhilianCityResolver(city_cache_path)
+        self.progress_callback = progress_callback
         self.login_verification = (
             dict(login_verification)
             if _valid_login_verification(login_verification, persisted_only=True)
@@ -577,25 +608,29 @@ class ZhilianReadOnlyCollector:
                         ),
                     )
 
-            cards = snapshot.get("cards", []) if isinstance(snapshot, dict) else []
-            for card in cards:
-                if not isinstance(card, dict):
-                    continue
-                job = parse_zhilian_job(card, city_name=city)
-                if city and job.city and normalize_city_name(job.city) != normalize_city_name(city):
-                    continue
-                key = _job_dedupe_key(job, card)
-                if key in seen:
-                    continue
-                seen.add(key)
-                jobs.append(job)
-                if len(jobs) >= limit:
-                    break
+            jobs.extend(
+                parse_zhilian_snapshot_jobs(
+                    snapshot,
+                    city_name=city,
+                    limit=max(1, limit - len(jobs)),
+                    seen=seen,
+                )
+            )
             if len(jobs) >= limit:
+                snapshot["candidateLimitReached"] = True
+                snapshot["terminationReason"] = "candidate_limit_reached"
                 break
             if _query_page_exhausted(snapshot, current_page):
                 snapshot["paginationExhausted"] = True
+                snapshot["terminationReason"] = (
+                    "no_results"
+                    if snapshot.get("noResults") is True
+                    else "pagination_exhausted"
+                )
                 break
+            if index == page_count - 1:
+                snapshot["pageLimitReached"] = True
+                snapshot["terminationReason"] = "page_limit_reached"
             if index < page_count - 1 and page_delay > 0:
                 time.sleep(page_delay)
 
@@ -1637,11 +1672,21 @@ class ZhilianReadOnlyCollector:
         if remaining <= 0:
             return {"jobs": hydrated, "snapshots": snapshots}
 
-        for index, job in _detail_hydration_order(hydrated):
+        ordered = [
+            (index, job)
+            for index, job in _detail_hydration_order(hydrated)
+            if job.url
+        ][:remaining]
+        detail_count = len(ordered)
+        for detail_number, (index, job) in enumerate(ordered, start=1):
             if remaining <= 0:
                 break
-            if not job.url:
-                continue
+            self._emit_progress(
+                "collection_job_detail_started",
+                platform="zhilian",
+                job_detail=detail_number,
+                job_detail_count=detail_count,
+            )
             open_result = self.driver.open_url_in_new_tab(job.url, wait_seconds=wait_seconds)
             if not open_result.get("ok"):
                 snapshots.append({
@@ -1652,6 +1697,13 @@ class ZhilianReadOnlyCollector:
                     "openResult": open_result,
                 })
                 remaining -= 1
+                self._emit_progress(
+                    "collection_job_detail_completed",
+                    platform="zhilian",
+                    job_detail=detail_number,
+                    job_detail_count=detail_count,
+                    ok=False,
+                )
                 continue
             snapshot = self._extract_detail_snapshot()
             snapshot["jobIndex"] = index
@@ -1659,11 +1711,29 @@ class ZhilianReadOnlyCollector:
             snapshots.append(snapshot)
             failure = _snapshot_failure(snapshot)
             if failure:
+                self._emit_progress(
+                    "collection_job_detail_completed",
+                    platform="zhilian",
+                    job_detail=detail_number,
+                    job_detail_count=detail_count,
+                    ok=False,
+                )
                 return {"jobs": hydrated, "snapshots": snapshots, "error": failure}
             if snapshot.get("ok") is not False:
                 hydrated[index] = merge_zhilian_detail_into_job(job, snapshot)
             remaining -= 1
+            self._emit_progress(
+                "collection_job_detail_completed",
+                platform="zhilian",
+                job_detail=detail_number,
+                job_detail_count=detail_count,
+                ok=True,
+            )
         return {"jobs": hydrated, "snapshots": snapshots}
+
+    def _emit_progress(self, stage: str, **details: Any) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(stage, **details)
 
     def _extract_detail_snapshot(self) -> dict[str, Any]:
         js = build_zhilian_detail_snapshot_script()
@@ -1690,6 +1760,15 @@ def _combined_snapshot(snapshots: list[dict[str, Any]], fallback: dict[str, Any]
         return snapshots[0]
     if snapshots:
         payload: dict[str, Any] = {"ok": True, "pages": snapshots}
+        final_page = snapshots[-1]
+        for key in (
+            "terminationReason",
+            "pageLimitReached",
+            "paginationExhausted",
+            "candidateLimitReached",
+        ):
+            if key in final_page:
+                payload[key] = final_page[key]
         if fallback is not None:
             payload["ok"] = False
             payload["failure"] = fallback
@@ -1704,6 +1783,38 @@ def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
     if job.url:
         return f"url:{job.url}"
     return f"text:{job.name}|{job.company}|{job.city}"
+
+
+def parse_zhilian_snapshot_jobs(
+    snapshot: dict[str, Any],
+    *,
+    city_name: str = "",
+    limit: int = 20,
+    seen: set[str] | None = None,
+) -> list[Job]:
+    """Parse verified result-card snapshots using the collector's production rules."""
+
+    accepted: list[Job] = []
+    dedupe = seen if seen is not None else set()
+    cards = snapshot.get("cards", []) if isinstance(snapshot, dict) else []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        job = parse_zhilian_job(card, city_name=city_name)
+        if (
+            city_name
+            and job.city
+            and normalize_city_name(job.city) != normalize_city_name(city_name)
+        ):
+            continue
+        key = _job_dedupe_key(job, card)
+        if key in dedupe:
+            continue
+        dedupe.add(key)
+        accepted.append(job)
+        if len(accepted) >= max(1, int(limit)):
+            break
+    return accepted
 
 
 def _snapshot_failure(
@@ -1848,7 +1959,17 @@ def _query_page_exhausted(snapshot: dict[str, Any], current_page: int) -> bool:
     if snapshot.get("noResults") is True:
         return True
     if snapshot.get("paginationDetected") is not True:
-        return False
+        cards = snapshot.get("cards")
+        try:
+            candidate_count = int(snapshot.get("candidateCount") or 0)
+        except (TypeError, ValueError):
+            candidate_count = 0
+        return bool(
+            candidate_count > 0
+            and isinstance(cards, list)
+            and cards
+            and str(snapshot.get("readyState") or "") == "complete"
+        )
     if snapshot.get("hasNextPage") is not False:
         return False
     available_pages: list[int] = []

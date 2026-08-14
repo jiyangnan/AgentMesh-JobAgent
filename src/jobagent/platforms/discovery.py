@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -147,6 +148,7 @@ def _collect_web_platform(
     driver,
     wait_seconds: int,
     login_verification: dict[str, Any] | None = None,
+    progress_callback: Callable[..., None] | None = None,
 ) -> CollectedPage:
     if platform == "liepin":
         from jobagent.platforms.liepin.collect import LiepinReadOnlyCollector
@@ -158,6 +160,7 @@ def _collect_web_platform(
         collector = ZhilianReadOnlyCollector(
             driver=driver,
             login_verification=login_verification,
+            progress_callback=progress_callback,
         )
     elif platform == "51job":
         from jobagent.platforms.job51.collect import Job51ReadOnlyCollector
@@ -187,7 +190,11 @@ def _collect_web_platform(
         jobs=result.jobs,
         exhausted=(
             platform == "zhilian"
-            and bool(snapshot.get("paginationExhausted"))
+            and (
+                str(snapshot.get("terminationReason") or "")
+                in {"pagination_exhausted", "no_results"}
+                or bool(snapshot.get("paginationExhausted"))
+            )
         ),
     )
 
@@ -199,6 +206,7 @@ def collect_from_search_plan(
     page_delay: float = 2.0,
     driver=None,
     login_verification: dict[str, Any] | None = None,
+    progress_callback: Callable[..., None] | None = None,
 ) -> list[dict[str, Any]]:
     from jobagent.drivers.boss import create_driver
     from jobagent.infra.exceptions import (
@@ -228,6 +236,18 @@ def collect_from_search_plan(
                 remaining = candidate_limit - len(candidates)
                 if remaining <= 0:
                     return candidates
+                progress_details = {
+                    "platform": platform,
+                    "query_index": query_index + 1,
+                    "query_count": len(queries),
+                    "page": page,
+                    "page_limit": int(query.get("page_limit", 1)),
+                }
+                if progress_callback is not None:
+                    progress_callback(
+                        "collection_query_page_started",
+                        **progress_details,
+                    )
                 if platform == "boss":
                     jobs = _collect_boss(
                         query,
@@ -237,15 +257,27 @@ def collect_from_search_plan(
                         wait_seconds,
                     )
                 else:
-                    collected_page = _collect_web_platform(
-                        platform,
-                        query,
-                        page,
-                        remaining,
-                        driver,
-                        wait_seconds,
-                        login_verification,
-                    )
+                    if progress_callback is None:
+                        collected_page = _collect_web_platform(
+                            platform,
+                            query,
+                            page,
+                            remaining,
+                            driver,
+                            wait_seconds,
+                            login_verification,
+                        )
+                    else:
+                        collected_page = _collect_web_platform(
+                            platform,
+                            query,
+                            page,
+                            remaining,
+                            driver,
+                            wait_seconds,
+                            login_verification,
+                            progress_callback,
+                        )
                     if isinstance(collected_page, CollectedPage):
                         jobs = collected_page.jobs
                         query_exhausted = collected_page.exhausted
@@ -258,6 +290,15 @@ def collect_from_search_plan(
                     # verified pagination boundaries retire only this query.
                     if query_exhausted:
                         exhausted_queries.add(query_index)
+                if progress_callback is not None:
+                    progress_callback(
+                        "collection_query_page_completed",
+                        **progress_details,
+                        candidate_count=len(jobs),
+                        query_exhausted=bool(
+                            platform == "zhilian" and query_index in exhausted_queries
+                        ),
+                    )
                 for job in jobs:
                     candidate = job_to_candidate(platform, job)
                     if candidate["id"] in seen:

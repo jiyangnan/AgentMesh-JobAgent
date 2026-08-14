@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-14.7"
+ZHILIAN_SELECTOR_VERSION = "2026-08-14.9"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -1459,9 +1459,42 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         }}
         return best;
       }}
+      function jobIdFromSurface(surface){{
+        if (!surface || !(surface instanceof Element)) return '';
+        const nodes = [surface, ...Array.from(surface.querySelectorAll(
+          '[data-position-id],[data-positionid],[data-job-id],[data-jobid],[data-job-number]'
+        )).slice(0, 20)];
+        const attributes = [
+          'data-position-id', 'data-positionid', 'data-job-id', 'data-jobid',
+          'data-job-number'
+        ];
+        for (const node of nodes) {{
+          for (const name of attributes) {{
+            const value = clean(node.getAttribute(name) || '');
+            if (/^[A-Za-z0-9_-]{{4,160}}$/.test(value)) return value;
+          }}
+        }}
+        return '';
+      }}
+      function jobUrlFromSurface(surface, jobId){{
+        if (!surface || !(surface instanceof Element)) return '';
+        const link = Array.from(surface.querySelectorAll('a[href]'))
+          .find((anchor) => isJobUrl(anchor.href || anchor.getAttribute('href') || ''));
+        if (link) return link.href || link.getAttribute('href') || '';
+        if (!jobId) return '';
+        try {{
+          return new URL('/jobdetail/' + encodeURIComponent(jobId) + '.htm', href).href;
+        }} catch (_error) {{
+          return '';
+        }}
+      }}
       const anchors = Array.from(document.querySelectorAll('a[href]')).filter(visible);
       const jobSurfaces = Array.from(document.querySelectorAll(
-        '[data-position-id],[data-positionid],[data-job-id],[data-jobid],[data-job-number],[class*="job-card"],[class*="jobCard"],[class*="position-card"],[class*="positionCard"]'
+        '[data-position-id],[data-positionid],[data-job-id],[data-jobid],[data-job-number],'
+          + '[class*="job-card"],[class*="jobCard"],[class*="job-item"],[class*="jobItem"],'
+          + '[class*="position-card"],[class*="positionCard"],[class*="position-item"],[class*="positionItem"],'
+          + '[class*="job-list"] > li,[class*="jobList"] > li,[class*="joblist"] > li,'
+          + '[class*="position-list"] > li,[class*="positionList"] > li,[class*="positionlist"] > li'
       )).filter(visible);
       const linkedSurfaces = jobSurfaces
         .map((surface) => Array.from(surface.querySelectorAll('a[href]')).find((anchor) => isJobUrl(anchor.href)))
@@ -1520,6 +1553,43 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
           rawText: rawText.slice(0, 1200)
         }});
         if (cards.length >= limit) break;
+      }}
+      const surfaceCardCandidates = jobSurfaces.map((surface) => {{
+        const jobId = jobIdFromSurface(surface);
+        const url = jobUrlFromSurface(surface, jobId);
+        const titleNode = surface.querySelector(
+          '[class*="job-name"],[class*="jobName"],[class*="position-name"],'
+            + '[class*="positionName"],[class*="title"],h2,h3'
+        );
+        return {{
+          surface,
+          jobId,
+          url,
+          label: clean(titleNode && (titleNode.innerText || titleNode.textContent) || '')
+        }};
+      }}).filter((item) => item.url);
+      for (const item of surfaceCardCandidates) {{
+        if (cards.length >= limit) break;
+        const rawText = clean(item.surface.innerText || item.surface.textContent || '');
+        if (!rawText || rawText.length < 20) continue;
+        const hasJobSignal = /立即投递|立即沟通|今日回复|刚刚活跃|高回复率|\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?(?:万|千|[kK]|元)|面议/.test(rawText);
+        if (!hasJobSignal) continue;
+        const title = titleFrom(item.surface, item.label);
+        if (!title || ctaLabels.has(title)) continue;
+        const key = item.jobId ? 'id:' + item.jobId : item.url.split('?')[0];
+        if (seen.has(key) || seen.has(item.url.split('?')[0])) continue;
+        seen.add(key);
+        const salary = (rawText.match(/\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?万(?:·\\d+薪)?|\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?千(?:·\\d+薪)?|\\d+[kK][-~—至]\\d+[kK](?:·\\d+薪)?|\\d+-\\d+元(?:[/]月)?|面议/) || [''])[0];
+        const city = (rawText.match(/北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|郑州|天津|重庆/) || [''])[0];
+        cards.push({{
+          positionId: item.jobId,
+          jobTitle: title,
+          jobUrl: item.url,
+          salary,
+          cityName: city,
+          rawText: rawText.slice(0, 1200),
+          cardSource: 'job_surface'
+        }});
       }}
       const jobActions = Array.from(document.querySelectorAll('a,button,[role="button"]'))
         .filter(visible)
@@ -1596,6 +1666,9 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         currentPage,
         hasNextPage,
         candidateCount: cards.length,
+        collectableSurfaceCount: cards.length,
+        surfaceCandidateCount: surfaceCardCandidates.length,
+        surfaceOnlyCandidateCount: cards.filter((card) => card.cardSource === 'job_surface').length,
         cards,
         bodySnippet: text.slice(0, 1200)
       }});

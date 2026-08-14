@@ -2,6 +2,20 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.21] - 2026-08-14
+
+### Fixed
+
+- Finish a verified Zhilian query after its first result page when the page exposes no pagination control, so an upper page limit never causes an unsupported page-two probe.
+- Parse current Zhilian result cards from stable card metadata even when the logged-in page omits a directly usable detail anchor, while retaining the adopted search target and rejecting unverified recommendation surfaces.
+- Report missing next-page controls, unaccepted keywords and loaded result pages with unparsed cards as separate machine-readable failures instead of reusing the keyword-rejection message.
+- Emit redacted query index, query count, page and job-detail progress during long browser collection without exposing keywords, routes, account data or page content.
+- Distinguish a satisfied page budget from a truly exhausted site pagination boundary or an explicit empty result, so a one-page request completes without probing page two even when more pages exist.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, round, preserved `request_id`, signed SearchPlan, Discover ID, candidates and audits remain in place. Resume with `jobagent zhilian discover`; the exact preserved request continues without another Discover charge.
+
 ## [0.5.20] - 2026-08-14
 
 ### Fixed

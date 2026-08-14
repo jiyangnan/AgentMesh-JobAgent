@@ -2,8 +2,15 @@
 
 import json
 
-from jobagent.platforms.zhilian.city_resolver import ZhilianCityResolver, city_code_from_url
-from jobagent.platforms.zhilian.collect import ZhilianReadOnlyCollector, build_zhilian_search_url
+from jobagent.platforms.zhilian.city_resolver import (
+    ZhilianCityResolver,
+    city_code_from_url,
+)
+from jobagent.platforms.zhilian.collect import (
+    ZhilianCollectResult,
+    ZhilianReadOnlyCollector,
+    build_zhilian_search_url,
+)
 from jobagent.platforms.zhilian.selectors import (
     build_zhilian_city_filter_script,
     build_zhilian_keyword_search_script,
@@ -125,6 +132,25 @@ def test_snapshot_selector_supports_current_job_surfaces_and_safe_diagnostics():
     assert "jobActionCount" in script
     assert "noResults" in script
     assert "searchPageEvidence" in script
+    assert "surfaceCardCandidates" in script
+    assert "jobIdFromSurface" in script
+    assert "jobUrlFromSurface" in script
+    assert "collectableSurfaceCount" in script
+
+
+def test_next_page_failure_is_not_reported_as_keyword_rejection():
+    payload = ZhilianCollectResult(
+        query="产品经理",
+        city="深圳",
+        url="https://www.zhaopin.com/jobs",
+        jobs=[],
+        ok=False,
+        error="zhilian_page_option_not_found",
+    ).to_payload()
+
+    assert "next-page control" in payload["message"]
+    assert "did not accept" not in payload["message"]
+    assert payload["next_suggested"] == "jobagent browser diagnose --platform zhilian"
 
 
 def test_city_filter_checks_visible_selected_city_before_expanding():

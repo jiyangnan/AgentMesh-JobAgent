@@ -15,6 +15,8 @@ from jobagent.platforms.zhilian.collect import (
     _query_page_exhausted,
     _safe_search_action_receipt,
     _safe_zhilian_city_navigation_url,
+    parse_zhilian_snapshot_jobs,
+    zhilian_candidate_collection_completed,
 )
 from jobagent.platforms.zhilian.selectors import (
     ZHILIAN_SELECTOR_VERSION,
@@ -42,6 +44,7 @@ def _snapshot(
     no_results: bool = False,
     available_pages: list[int] | None = None,
     has_next_page: bool | None = None,
+    current_page: int | None = None,
 ) -> dict:
     cards = []
     if job_id:
@@ -79,7 +82,11 @@ def _snapshot(
             {
                 "paginationDetected": True,
                 "availablePages": available_pages,
-                "currentPage": available_pages[0] if available_pages else 1,
+                "currentPage": (
+                    current_page
+                    if current_page is not None
+                    else (available_pages[0] if available_pages else 1)
+                ),
                 "hasNextPage": bool(has_next_page),
             }
         )
@@ -737,6 +744,8 @@ def test_explicit_empty_first_page_does_not_attempt_second_page(tmp_path):
 
     assert result.ok is True
     assert result.jobs == []
+    assert result.snapshot["terminationReason"] == "no_results"
+    assert result.snapshot["paginationExhausted"] is True
     assert driver.pagination_calls == []
     assert driver.open_calls == 1
 
@@ -762,8 +771,95 @@ def test_verified_single_page_with_jobs_does_not_attempt_second_page(tmp_path):
 
     assert result.ok is True
     assert [job.name for job in result.jobs] == ["产品经理"]
+    assert result.snapshot["terminationReason"] == "pagination_exhausted"
+    assert result.snapshot["paginationExhausted"] is True
     assert driver.pagination_calls == []
     assert driver.open_calls == 1
+
+
+def test_verified_result_page_without_pagination_does_not_probe_page_two(tmp_path):
+    driver = _PagingDriver(
+        "产品经理",
+        [_snapshot("产品经理", job_id="JOB-1")],
+    )
+
+    result = ZhilianReadOnlyCollector(
+        driver=driver,
+        city_cache_path=tmp_path / "cities.json",
+        login_verification=_login_verification(),
+    ).collect(query="产品经理", pages=2, wait_seconds=0, page_delay=0)
+
+    assert result.ok is True
+    assert [job.url for job in result.jobs] == [
+        "https://www.zhaopin.com/jobdetail/JOB-1.htm"
+    ]
+    assert result.snapshot["paginationExhausted"] is True
+    assert result.snapshot["terminationReason"] == "pagination_exhausted"
+    assert driver.pagination_calls == []
+    assert driver.open_calls == 1
+
+
+def test_snapshot_parser_and_page_boundary_share_production_logic():
+    snapshot = _snapshot("产品经理", job_id="JOB-1")
+
+    jobs = parse_zhilian_snapshot_jobs(
+        snapshot,
+        city_name="深圳",
+        limit=5,
+    )
+
+    assert [job.url for job in jobs] == [
+        "https://www.zhaopin.com/jobdetail/JOB-1.htm"
+    ]
+    assert _query_page_exhausted(snapshot, current_page=1) is True
+
+
+def test_one_page_budget_never_probes_next_page_when_more_pages_exist(tmp_path):
+    driver = _PagingDriver(
+        "产品经理",
+        [
+            _snapshot(
+                "产品经理",
+                job_id="JOB-1",
+                available_pages=[1, 2],
+                has_next_page=True,
+            )
+        ],
+        page_two_available=True,
+    )
+
+    result = ZhilianReadOnlyCollector(
+        driver=driver,
+        city_cache_path=tmp_path / "cities.json",
+        login_verification=_login_verification(),
+    ).collect(query="产品经理", pages=1, wait_seconds=0, page_delay=0)
+
+    assert result.ok is True
+    assert [job.url for job in result.jobs] == [
+        "https://www.zhaopin.com/jobdetail/JOB-1.htm"
+    ]
+    assert driver.pagination_calls == []
+    assert driver.open_calls == 1
+    assert result.snapshot["terminationReason"] == "page_limit_reached"
+    assert result.snapshot["pageLimitReached"] is True
+    assert result.snapshot.get("paginationExhausted") is not True
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "candidate_limit_reached",
+        "page_limit_reached",
+        "pagination_exhausted",
+    ],
+)
+def test_non_empty_collection_accepts_each_safe_termination_reason(reason):
+    assert zhilian_candidate_collection_completed(reason) is True
+
+
+@pytest.mark.parametrize("reason", ["", "no_results", "unknown"])
+def test_non_empty_collection_rejects_empty_or_unknown_termination(reason):
+    assert zhilian_candidate_collection_completed(reason) is False
 
 
 def test_verified_second_page_is_collected_when_available(tmp_path, monkeypatch):
@@ -781,6 +877,7 @@ def test_verified_second_page_is_collected_when_available(tmp_path, monkeypatch)
                 job_id="JOB-2",
                 available_pages=[1, 2],
                 has_next_page=False,
+                current_page=2,
             ),
         ],
         page_two_available=True,
@@ -799,6 +896,74 @@ def test_verified_second_page_is_collected_when_available(tmp_path, monkeypatch)
         "https://www.zhaopin.com/jobdetail/JOB-2.htm",
     ]
     assert driver.pagination_calls == [2]
+    assert result.snapshot["terminationReason"] == "pagination_exhausted"
+    assert result.snapshot["paginationExhausted"] is True
+
+
+def test_search_plan_emits_sanitized_query_page_progress(monkeypatch):
+    events: list[tuple[str, dict]] = []
+
+    def collect_page(
+        _platform,
+        query,
+        page,
+        _limit,
+        _driver,
+        _wait_seconds,
+        _login_verification,
+        _progress_callback=None,
+    ):
+        assert query["keyword"] == "私密可读关键词"
+        return discovery.CollectedPage(
+            jobs=[
+                Job(
+                    name="公开职位标题",
+                    salary="",
+                    company="Example",
+                    city="深圳",
+                    url="https://www.zhaopin.com/jobdetail/JOB-1.htm",
+                    platform="zhilian",
+                    raw_data={"positionId": "JOB-1"},
+                )
+            ],
+            exhausted=True,
+        )
+
+    monkeypatch.setattr(discovery, "_collect_web_platform", collect_page)
+    plan = {
+        "platform": "zhilian",
+        "candidate_limit": 100,
+        "queries": [
+            {"keyword": "私密可读关键词", "city": "深圳", "page_limit": 1}
+        ],
+    }
+
+    candidates = discovery.collect_from_search_plan(
+        plan,
+        driver=object(),
+        page_delay=0,
+        login_verification=_login_verification(),
+        progress_callback=lambda stage, **details: events.append((stage, details)),
+    )
+
+    assert [candidate["id"] for candidate in candidates] == ["JOB-1"]
+    assert [stage for stage, _details in events] == [
+        "collection_query_page_started",
+        "collection_query_page_completed",
+    ]
+    assert events[0][1] == {
+        "platform": "zhilian",
+        "query_index": 1,
+        "query_count": 1,
+        "page": 1,
+        "page_limit": 1,
+    }
+    assert events[1][1]["candidate_count"] == 1
+    assert all(
+        "query" not in details and "keyword" not in details
+        for _, details in events
+    )
+    assert "私密可读关键词" not in json.dumps(events, ensure_ascii=False)
 
 
 def test_round_robin_continues_after_first_query_is_explicitly_empty(monkeypatch):
@@ -1428,7 +1593,7 @@ def test_snapshot_script_emits_real_no_result_and_pagination_evidence():
     assert "allowUnknownSession = true" in city_script
     assert "readable_city_anchor:" in city_script
     assert "navigate_city_homepage" in city_script
-    assert ZHILIAN_SELECTOR_VERSION == "2026-08-14.7"
+    assert ZHILIAN_SELECTOR_VERSION == "2026-08-14.9"
 
 
 @pytest.mark.parametrize(

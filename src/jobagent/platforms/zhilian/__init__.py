@@ -8,6 +8,7 @@ from .collect import (
     build_zhilian_search_url,
     normalize_zhilian_keyword,
     write_zhilian_snapshot,
+    zhilian_candidate_collection_completed,
 )
 from .constants import ZHILIAN_BROWSER_JS_USER_PROMPT, ZHILIAN_LOGIN_URL, ZHILIAN_LOGIN_USER_PROMPT
 from .detail import (
@@ -59,6 +60,7 @@ __all__ = [
     "collect_zhilian_fixture",
     "merge_zhilian_detail_into_job",
     "normalize_zhilian_keyword",
+    "zhilian_candidate_collection_completed",
     "parse_zhilian_detail_snapshot",
     "parse_zhilian_job",
     "write_zhilian_snapshot",

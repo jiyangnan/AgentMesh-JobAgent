@@ -8,6 +8,7 @@ from typing import Any
 from jobagent import __version__
 from jobagent.infra import cloud_client, rounds
 from jobagent.infra.activity import active_command
+from jobagent.infra.diagnostics import emit_stage, progress_heartbeat
 from jobagent.infra.discovery_state import (
     clear_pending_decision,
     clear_pending_start,
@@ -18,7 +19,6 @@ from jobagent.infra.discovery_state import (
     save_pending_decision,
     save_pending_start,
 )
-from jobagent.infra.diagnostics import emit_stage, progress_heartbeat
 from jobagent.infra.platform_lock import PlatformSessionLock
 from jobagent.infra.profile_contract import require_compatible_profile
 from jobagent.infra.protocol import (
@@ -29,7 +29,6 @@ from jobagent.infra.protocol import (
 )
 from jobagent.infra.state import load_json, profile_path
 from jobagent.platforms.discovery import CollectionError, collect_from_search_plan
-
 
 _ZHILIAN_CITY_RECOVERY_CODES = {
     "zhilian_city_evidence_pending",
@@ -493,6 +492,7 @@ def run_discover(
                         wait_seconds=wait_seconds,
                         page_delay=page_delay,
                         login_verification=login_verification,
+                        progress_callback=emit_stage,
                     )
     except CollectionError as exc:
         details = dict(exc.details or {})
