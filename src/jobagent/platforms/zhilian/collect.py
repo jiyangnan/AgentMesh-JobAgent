@@ -296,11 +296,17 @@ class ZhilianReadOnlyCollector:
             search_transition = (
                 search_transition if isinstance(search_transition, dict) else {}
             )
+            city_route_verification = search_transition.get("cityRouteVerification")
+            city_route_verification = (
+                city_route_verification
+                if _verified_city_route_matches(city_route_verification, city)
+                else None
+            )
             transition_candidate_code = str(
                 search_transition.get("candidateCityCode") or ""
             )
             city_filter: dict[str, Any] = {}
-            if city:
+            if city and not city_route_verification:
                 city_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
                 if transition_candidate_code and not city_filter.get("candidateCode"):
                     city_filter["candidateCode"] = transition_candidate_code
@@ -381,6 +387,8 @@ class ZhilianReadOnlyCollector:
                 snapshot.setdefault("visibleCity", city_filter.get("observedCity") or "")
                 if not _city_filter_applied(city_filter):
                     snapshot["cityFilterDegraded"] = True
+            if city_route_verification:
+                snapshot["cityRouteVerification"] = city_route_verification
             if pagination:
                 snapshot["pagination"] = pagination
             snapshots.append(snapshot)
@@ -428,6 +436,14 @@ class ZhilianReadOnlyCollector:
                     expected_code=resolved_city_code,
                     source=city_code_source,
                 )
+                route_resolution = _city_route_snapshot_resolution(
+                    city,
+                    snapshot,
+                    city_route_verification,
+                    city_resolution,
+                )
+                if route_resolution is not None:
+                    city_resolution = route_resolution
                 if not city_resolution["verified"] and resolved_city_code:
                     recovery_filter = self._apply_city_filter(city, wait_seconds=wait_seconds)
                     if _login_required(recovery_filter, self.login_verification):
@@ -499,12 +515,20 @@ class ZhilianReadOnlyCollector:
                     )
                 resolution_source = str(city_resolution.get("source") or city_code_source)
                 previous_city_code = resolved_city_code
-                resolved_city_code = str(city_resolution["observedCode"])
-                city_code_source = "verified_cache"
-                if resolution_source != "bundled_seed" or resolved_city_code != previous_city_code:
+                observed_city_code = str(city_resolution.get("observedCode") or "")
+                if observed_city_code.isdigit():
+                    resolved_city_code = observed_city_code
+                    city_code_source = "verified_cache"
+                else:
+                    resolved_city_code = None
+                    city_code_source = "verified_city_route"
+                if observed_city_code.isdigit() and (
+                    resolution_source != "bundled_seed"
+                    or observed_city_code != previous_city_code
+                ):
                     self.city_resolver.remember(
                         city,
-                        resolved_city_code,
+                        observed_city_code,
                         evidence_url=str(city_resolution["observedUrl"]),
                         evidence_sources=list(city_resolution.get("evidenceSources") or []),
                         verification_source=str(
@@ -666,6 +690,8 @@ class ZhilianReadOnlyCollector:
         last: dict[str, Any] = {}
         attempts = 0
         city_discovery_actions: set[tuple[str, str]] = set()
+        city_route_verification: dict[str, Any] | None = None
+        native_city_search_submitted = False
         while True:
             attempts += 1
             last = _unwrap_js_result_with_error(
@@ -681,78 +707,121 @@ class ZhilianReadOnlyCollector:
                     "settleTimeoutSeconds": timeout,
                 }
             if _search_transition_ready(last, keyword, city):
-                return {
+                result = {
                     **last,
                     "ok": True,
                     "settleAttempts": attempts,
                     "settleTimeoutSeconds": timeout,
                 }
+                if city_route_verification:
+                    result["cityRouteVerification"] = city_route_verification
+                return result
             if _search_transition_city_discovery_ready(last, keyword, city):
-                city_discovery = self._advance_city_discovery(
-                    city,
-                    attempted_actions=city_discovery_actions,
-                    wait_seconds=wait_seconds,
-                )
-                last["cityDiscovery"] = city_discovery
-                candidate_code = city_discovery.get("candidateCode")
-                if candidate_code:
-                    last["candidateCityCode"] = candidate_code
-                    last["candidateCitySource"] = (
-                        city_discovery.get("candidateCodeSource")
-                        or city_discovery.get("source")
-                        or "active_city_control"
-                    )
-                if _strong_login_evidence(city_discovery):
-                    return {
-                        **last,
-                        "ok": False,
-                        "error": "zhilian_login_required",
-                        "settleAttempts": attempts,
-                        "settleTimeoutSeconds": timeout,
-                    }
-                if city_discovery.get("navigated"):
-                    bootstrap = self._await_city_bootstrap_destination(
-                        keyword,
-                        city=city,
-                        expected_url=str(city_discovery.get("navigationUrl") or ""),
+                if city_route_verification:
+                    if not native_city_search_submitted:
+                        native_submit = self._submit_verified_city_keyword(
+                            keyword,
+                            wait_seconds=wait_seconds,
+                        )
+                        last["verifiedCityKeywordSubmit"] = native_submit
+                        if not native_submit.get("ok"):
+                            return {
+                                **last,
+                                "ok": False,
+                                "error": native_submit.get("error")
+                                or "zhilian_keyword_submit_not_found",
+                                "loginRequired": native_submit.get(
+                                    "loginRequired", False
+                                ),
+                                "settleAttempts": attempts,
+                                "settleTimeoutSeconds": timeout,
+                                "cityRouteVerification": city_route_verification,
+                            }
+                        native_city_search_submitted = True
+                        deadline = time.monotonic() + timeout
+                        continue
+                else:
+                    city_discovery = self._advance_city_discovery(
+                        city,
+                        attempted_actions=city_discovery_actions,
                         wait_seconds=wait_seconds,
                     )
-                    last["cityBootstrap"] = bootstrap
-                    if not bootstrap.get("ok"):
+                    last["cityDiscovery"] = city_discovery
+                    candidate_code = city_discovery.get("candidateCode")
+                    if candidate_code:
+                        last["candidateCityCode"] = candidate_code
+                        last["candidateCitySource"] = (
+                            city_discovery.get("candidateCodeSource")
+                            or city_discovery.get("source")
+                            or "active_city_control"
+                        )
+                    if _strong_login_evidence(city_discovery):
                         return {
                             **last,
                             "ok": False,
-                            "error": bootstrap.get("error")
-                            or "zhilian_city_evidence_pending",
-                            "loginRequired": bootstrap.get("loginRequired", False),
-                            "retryable": bootstrap.get("retryable", True),
+                            "error": "zhilian_login_required",
                             "settleAttempts": attempts,
                             "settleTimeoutSeconds": timeout,
                         }
-                    restart = self._click_keyword_control(
-                        keyword,
-                        wait_seconds=wait_seconds,
-                    )
-                    last["cityBootstrapKeyword"] = restart
-                    if not restart.get("ok"):
+                    if city_discovery.get("navigated"):
+                        bootstrap = self._await_city_bootstrap_destination(
+                            keyword,
+                            city=city,
+                            expected_url=str(city_discovery.get("navigationUrl") or ""),
+                            wait_seconds=wait_seconds,
+                        )
+                        last["cityBootstrap"] = bootstrap
+                        if not bootstrap.get("ok"):
+                            return {
+                                **last,
+                                "ok": False,
+                                "error": bootstrap.get("error")
+                                or "zhilian_city_evidence_pending",
+                                "loginRequired": bootstrap.get("loginRequired", False),
+                                "retryable": bootstrap.get("retryable", True),
+                                "settleAttempts": attempts,
+                                "settleTimeoutSeconds": timeout,
+                            }
+                        city_route_verification = bootstrap.get(
+                            "cityRouteVerification"
+                        )
+                        if not _verified_city_route_matches(
+                            city_route_verification,
+                            city,
+                        ):
+                            return {
+                                **last,
+                                "ok": False,
+                                "error": "zhilian_city_evidence_pending",
+                                "loginRequired": False,
+                                "retryable": True,
+                                "settleAttempts": attempts,
+                                "settleTimeoutSeconds": timeout,
+                            }
+                        restart = self._click_keyword_control(
+                            keyword,
+                            wait_seconds=wait_seconds,
+                        )
+                        last["cityBootstrapKeyword"] = restart
+                        if not restart.get("ok"):
+                            return {
+                                **last,
+                                "ok": False,
+                                "error": restart.get("error")
+                                or "zhilian_keyword_submit_failed",
+                                "loginRequired": restart.get("loginRequired", False),
+                                "settleAttempts": attempts,
+                                "settleTimeoutSeconds": timeout,
+                            }
+                        deadline = time.monotonic() + timeout
+                        continue
+                    if _search_transition_ready(last, keyword, city):
                         return {
                             **last,
-                            "ok": False,
-                            "error": restart.get("error")
-                            or "zhilian_keyword_submit_failed",
-                            "loginRequired": restart.get("loginRequired", False),
+                            "ok": True,
                             "settleAttempts": attempts,
                             "settleTimeoutSeconds": timeout,
                         }
-                    deadline = time.monotonic() + timeout
-                    continue
-                if _search_transition_ready(last, keyword, city):
-                    return {
-                        **last,
-                        "ok": True,
-                        "settleAttempts": attempts,
-                        "settleTimeoutSeconds": timeout,
-                    }
             if _search_transition_keyword_conflict(last, keyword):
                 return {
                     **last,
@@ -763,7 +832,11 @@ class ZhilianReadOnlyCollector:
                     "settleTimeoutSeconds": timeout,
                 }
             if time.monotonic() >= deadline:
-                error = _search_transition_failure(last, city)
+                error = _search_transition_failure(
+                    last,
+                    city,
+                    city_route_verified=bool(city_route_verification),
+                )
                 return {
                     **last,
                     "ok": False,
@@ -772,6 +845,11 @@ class ZhilianReadOnlyCollector:
                     "retryable": True,
                     "settleAttempts": attempts,
                     "settleTimeoutSeconds": timeout,
+                    **(
+                        {"cityRouteVerification": city_route_verification}
+                        if city_route_verification
+                        else {}
+                    ),
                 }
             time.sleep(ZHILIAN_PAGE_POLL_INTERVAL_SECONDS)
 
@@ -879,11 +957,17 @@ class ZhilianReadOnlyCollector:
                 self.login_verification,
                 expected_url=expected_url,
             ):
+                receipt = _build_verified_city_route_receipt(
+                    last,
+                    city,
+                    expected_url=expected_url,
+                )
                 return {
                     **last,
                     "ok": True,
                     "bootstrapVerified": True,
                     "bootstrapAttempts": attempts,
+                    "cityRouteVerification": receipt,
                 }
             if time.monotonic() >= deadline:
                 return {
@@ -895,6 +979,55 @@ class ZhilianReadOnlyCollector:
                     "bootstrapAttempts": attempts,
                 }
             time.sleep(ZHILIAN_PAGE_POLL_INTERVAL_SECONDS)
+
+    def _submit_verified_city_keyword(
+        self,
+        keyword: str,
+        *,
+        wait_seconds: int,
+    ) -> dict[str, Any]:
+        data = self._exec_ui_script_until_settled(
+            build_zhilian_keyword_search_script(
+                keyword,
+                allow_unknown_session=_valid_login_verification(
+                    self.login_verification
+                ),
+            ),
+            wait_seconds=wait_seconds,
+            parse_error="zhilian_js_parse_failed",
+        )
+        if not data.get("ok"):
+            return data
+        input_point = (
+            data.get("inputClickPoint")
+            if isinstance(data.get("inputClickPoint"), dict)
+            else None
+        )
+        click_at = getattr(self.driver, "_click_at", None)
+        cdp = getattr(self.driver, "cdp", None)
+        send = getattr(cdp, "send", None)
+        if not input_point or not callable(click_at) or not callable(send):
+            return {
+                **data,
+                "ok": False,
+                "error": "zhilian_keyword_submit_not_found",
+            }
+        click_at(input_point.get("x"), input_point.get("y"))
+        _dispatch_native_enter(send)
+        dialog = _dismiss_javascript_dialog(self.driver)
+        if dialog.get("dismissed"):
+            return {
+                **data,
+                "ok": False,
+                "error": "zhilian_keyword_rejected",
+                "dialog": dialog,
+            }
+        return {
+            **data,
+            "ok": True,
+            "nativeEnterSubmitted": True,
+            "dialog": dialog,
+        }
 
     def _select_page(self, page: int, wait_seconds: int = 8) -> dict[str, Any]:
         result = self.driver._exec_js(build_zhilian_pagination_script(page))
@@ -1366,6 +1499,104 @@ def _safe_zhilian_city_navigation_url(value: Any) -> str | None:
     return parsed.geturl()
 
 
+def _build_verified_city_route_receipt(
+    result: dict[str, Any],
+    city: str,
+    *,
+    expected_url: str,
+) -> dict[str, Any]:
+    observed_url = _safe_zhilian_city_navigation_url(result.get("url"))
+    expected = _safe_zhilian_city_navigation_url(expected_url)
+    verified_url = observed_url or expected
+    if not verified_url:
+        return {}
+    return {
+        "schemaVersion": 1,
+        "verified": True,
+        "city": normalize_city_name(city),
+        "url": verified_url,
+        "path": urlparse(verified_url).path.rstrip("/") or "/",
+        "source": "readable_city_route",
+        "evidenceSources": [
+            "official_city_navigation",
+            "matching_city_title",
+            "search_input",
+            "account_bound_session",
+        ],
+    }
+
+
+def _verified_city_route_matches(value: Any, city: str) -> bool:
+    if not isinstance(value, dict) or value.get("verified") is not True:
+        return False
+    if int(value.get("schemaVersion") or 0) != 1:
+        return False
+    if normalize_city_name(str(value.get("city") or "")) != normalize_city_name(city):
+        return False
+    route_url = _safe_zhilian_city_navigation_url(value.get("url"))
+    if not route_url or _is_zhilian_search_route(route_url):
+        return False
+    path = urlparse(route_url).path.rstrip("/") or "/"
+    return path != "/" and path == str(value.get("path") or "")
+
+
+def _city_route_snapshot_resolution(
+    city: str,
+    snapshot: dict[str, Any],
+    route_verification: dict[str, Any] | None,
+    base_resolution: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Verify a result page through an independently proven city slug route."""
+
+    if not _verified_city_route_matches(route_verification, city):
+        return None
+    if not _is_zhilian_search_route(str(snapshot.get("url") or "")):
+        return None
+    if _strong_login_evidence(snapshot):
+        return None
+    if any(
+        bool(base_resolution.get(key))
+        for key in (
+            "codeEvidenceConflict",
+            "visibleCityConflict",
+            "allCardsOtherCity",
+        )
+    ):
+        return None
+    current_city_sources = {
+        str(value)
+        for value in (base_resolution.get("evidenceSources") or [])
+        if value
+    }
+    if not current_city_sources:
+        return None
+    observed_code = str(base_resolution.get("observedCode") or "")
+    evidence_sources = sorted(
+        current_city_sources | {"verified_city_route", "verified_search_route"}
+    )
+    return {
+        **base_resolution,
+        "ok": True,
+        "verified": True,
+        "source": "verified_city_route",
+        "observedCode": observed_code if observed_code.isdigit() else None,
+        "observedCodeSource": (
+            base_resolution.get("observedCodeSource")
+            if observed_code.isdigit()
+            else "none"
+        ),
+        "evidenceStatus": "verified",
+        "reason": "verified_city_route_continuity",
+        "evidenceSources": evidence_sources,
+        "verificationSource": (
+            "verified_city_route_with_numeric_code"
+            if observed_code.isdigit()
+            else "verified_city_route_without_numeric_code"
+        ),
+        "routeVerification": route_verification,
+    }
+
+
 def _city_bootstrap_destination_verified(
     result: dict[str, Any],
     city: str,
@@ -1466,14 +1697,19 @@ def _search_transition_city_discovery_ready(
     )
 
 
-def _search_transition_failure(result: dict[str, Any], city: str) -> str:
+def _search_transition_failure(
+    result: dict[str, Any],
+    city: str,
+    *,
+    city_route_verified: bool = False,
+) -> str:
     normalized = normalize_city_name(city)
     title = normalize_city_name(str(result.get("title") or ""))
     title_matches = bool(
         result.get("titleCityMatch")
         or (normalized and normalized in title)
     )
-    if title_matches and not (
+    if not city_route_verified and title_matches and not (
         result.get("observedCityCode") or result.get("candidateCityCode")
     ):
         return "zhilian_city_evidence_pending"
@@ -1533,6 +1769,31 @@ def _dismiss_javascript_dialog(driver: Any) -> dict[str, Any]:
         return {"ok": True, "dismissed": False, "supported": False}
     result = handler()
     return result if isinstance(result, dict) else {"ok": True, "dismissed": bool(result)}
+
+
+def _dispatch_native_enter(send: Any) -> None:
+    send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyDown",
+            "key": "Enter",
+            "code": "Enter",
+            "windowsVirtualKeyCode": 13,
+            "nativeVirtualKeyCode": 13,
+            "unmodifiedText": "\r",
+            "text": "\r",
+        },
+    )
+    send(
+        "Input.dispatchKeyEvent",
+        {
+            "type": "keyUp",
+            "key": "Enter",
+            "code": "Enter",
+            "windowsVirtualKeyCode": 13,
+            "nativeVirtualKeyCode": 13,
+        },
+    )
 
 
 def _query_verified(query: str, snapshot: dict[str, Any]) -> bool:

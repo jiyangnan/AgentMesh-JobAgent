@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.5.17
+version: 0.5.18
 metadata:
   openclaw:
     emoji: "💼"
@@ -47,7 +47,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - `round status` and a user-confirmed `round skip` may return `offline=true, stale=true` during a transient cloud outage after the CLI verifies the current API Key against its local account proof. Continue from the returned local workflow. Never claim a platform was skipped unless the skip command itself returns `ok=true`. On `offline_account_proof_required` or `offline_account_proof_mismatch`, stop and follow the declared recovery without editing or deleting local state.
 - Profiles, rounds, decisions and audits are account-bound. On `local_state_owner_required`, ask the user to confirm ownership and run `jobagent account bind --confirm-legacy`. On `local_state_account_mismatch`, ask the user to confirm switching accounts and run `jobagent account switch --new-state`. Never edit account-state files manually.
 - Diagnose browser slowness or conflicting login evidence with `jobagent browser diagnose --platform <platform>` before asking for another login. Treat `login.state=unknown` or `conflicting` as inconclusive.
-- On Zhilian, a recent login check bound to the current round and managed Chrome may bridge a search-results page that omits the account header. Strong login forms still stop the flow. Treat `zhilian_job_cards_not_found` as a retryable selector diagnostic with no charge, not as proof that the user logged out.
+- On Zhilian, a recent login check bound to the current round and managed Chrome may bridge a search-results page that omits the account header. Strong login forms still stop the flow. An independently verified readable city route may proceed without a numeric city code, but city-homepage recommendations are never search results; the readable query and city must be verified again after the search route changes. Treat `zhilian_job_cards_not_found` as a retryable selector diagnostic with no charge, not as proof that the user logged out.
 - Forward CLI progress stages and heartbeats. Use compact `jobagent round audit` by default; expand only failures or explicitly requested details.
 
 ## Install and Profile

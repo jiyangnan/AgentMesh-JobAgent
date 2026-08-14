@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-14.4"
+ZHILIAN_SELECTOR_VERSION = "2026-08-14.5"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -448,6 +448,7 @@ def build_zhilian_keyword_search_script(
       if (!input) {{
         return JSON.stringify({{ok: false, mode, error: 'zhilian_keyword_input_not_found', url: href, title}});
       }}
+      input.focus();
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(input, keyword);
       input.dispatchEvent(new Event('input', {{bubbles: true}}));
@@ -490,6 +491,7 @@ def build_zhilian_keyword_search_script(
         observedValue: clean(input.value),
         originalTarget,
         targetNormalized,
+        inputClickPoint: clickPoint(input),
         clickPoint: clickPoint(button),
         urlBefore: href,
         ...session

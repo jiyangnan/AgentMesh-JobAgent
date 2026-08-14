@@ -217,6 +217,8 @@ jobagent zhilian audit
 
 智联搜索结果页不一定重复展示首页账户区。当前轮次和同一受管 Chrome 中未过期的成功登录检查可以作为辅助证据，但强登录表单或验证界面始终优先。`zhilian_job_cards_not_found` 表示结果页已就绪但岗位 DOM 无法安全解析，不表示用户掉线；按其 `retryable`、`request_preserved` 和精确 `next_suggested` 恢复，不要重新登录、新建轮次或删除 profile。签名 SearchPlan 的 `page_limit` 是上限而不是必须采满的页数：明确无结果或页面证据确认最后一页时立即结束当前可读查询，后续签名查询继续执行。全部查询耗尽时显示 `no_candidates` 与 `search_exhausted=true`，停下等待用户明确决定是否执行返回的 `round skip --confirm-skip`；不得重复同一 Discover。智联 URL 的 `kw...` 永远不能作为可读查询或恢复输入。
 
+智联城市页可能只有可读 slug 而没有数值 city code。CLI 会先独立验证官方城市路由，再从该页提交原始可读 query；城市首页的推荐岗位不属于搜索结果。只有搜索路由已改变，并再次验证可读 query 与城市后，岗位才能进入候选。若结果页随后暴露数值 city code，CLI 会交叉验证后缓存；Agent 不得自行补码或跳过验证。
+
 ### 前程无忧 / 51Job
 
 ```bash
