@@ -7,6 +7,7 @@ from jobagent.platforms.zhilian.collect import ZhilianReadOnlyCollector, build_z
 from jobagent.platforms.zhilian.selectors import (
     build_zhilian_city_filter_script,
     build_zhilian_keyword_search_script,
+    build_zhilian_search_transition_script,
     build_zhilian_snapshot_script,
 )
 
@@ -85,6 +86,16 @@ def test_city_filter_discovers_candidate_codes_from_current_dom_metadata():
     assert "data-city-code" in script
     assert "data-city-id" in script
     assert "aria-label*=\"城市\"" in script
+
+
+def test_search_transition_discovers_candidate_code_from_target_city_navigation():
+    script = build_zhilian_search_transition_script("AI产品经理", "深圳")
+
+    assert "candidateCityCode" in script
+    assert "data-city-code" in script
+    assert "data-city-id" in script
+    assert "data-href" in script
+    assert "querySelectorAll" in script
 
 
 def test_city_code_parser_accepts_query_and_canonical_path():
@@ -514,6 +525,94 @@ class _DomCandidateCityCodeDriver(_ChangedShenzhenCityDriver):
         return result
 
 
+class _HomepageDynamicCityDiscoveryDriver(_ChangedShenzhenCityDriver):
+    def __init__(self):
+        super().__init__()
+        self.transition_probes = 0
+        self.city_discovery_steps = 0
+
+    def _exec_js(self, script: str):
+        if "zhilian_keyword_search" in script:
+            return super()._exec_js(script)
+        if "zhilian_search_transition" in script:
+            self.transition_probes += 1
+            candidate = "765" if self.city_discovery_steps >= 2 else None
+            return {
+                "ok": True,
+                "mode": "zhilian_search_transition",
+                "url": "https://www.zhaopin.com/",
+                "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+                "readyState": "complete",
+                "sessionState": "page_ready",
+                "searchPageEvidence": ["search_input", "job_surface"],
+                "observedKeyword": "AI产品经理",
+                "titleCityMatch": True,
+                "observedCityCode": None,
+                "candidateCityCode": candidate,
+                "candidateCitySource": "target_city_navigation" if candidate else None,
+            }
+        if "zhilian_city_filter" in script:
+            self.city_discovery_steps += 1
+            if self.city_discovery_steps == 1:
+                return {
+                    "ok": False,
+                    "mode": "zhilian_city_filter",
+                    "error": "zhilian_city_options_collapsed",
+                    "action": "expand_location",
+                    "clickPoint": {"x": 210, "y": 90},
+                    "url": "https://www.zhaopin.com/",
+                    "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+                    "readyState": "complete",
+                    "sessionState": "page_ready",
+                }
+            if self.city_discovery_steps == 2:
+                return {
+                    "ok": True,
+                    "mode": "zhilian_city_filter",
+                    "city": "深圳",
+                    "candidateCode": "765",
+                    "applied": True,
+                    "action": "select_city",
+                    "clickPoint": {"x": 260, "y": 160},
+                    "url": "https://www.zhaopin.com/",
+                    "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+                    "readyState": "complete",
+                    "sessionState": "page_ready",
+                }
+            return {
+                "ok": True,
+                "mode": "zhilian_city_filter",
+                "city": "深圳",
+                "observedCity": "深圳",
+                "candidateCode": "765",
+                "alreadySelected": True,
+                "source": "visible_current_city",
+                "url": "https://www.zhaopin.com/",
+                "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+                "readyState": "complete",
+                "sessionState": "page_ready",
+            }
+        return {
+            "ok": True,
+            "url": "https://www.zhaopin.com/",
+            "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+            "readyState": "complete",
+            "sessionState": "page_ready",
+            "loginRequired": False,
+            "searchKeyword": "AI产品经理",
+            "visibleCity": "深圳",
+            "cards": [
+                {
+                    "positionId": "SZ-DYNAMIC-1",
+                    "jobTitle": "AI产品经理",
+                    "companyName": "深圳示例科技",
+                    "cityName": "深圳",
+                    "jobUrl": "https://www.zhaopin.com/jobdetail/SZ-DYNAMIC-1.htm",
+                }
+            ],
+        }
+
+
 def test_collector_learns_dom_candidate_code_only_after_multi_source_validation(tmp_path):
     cache = tmp_path / "cities.json"
 
@@ -531,6 +630,28 @@ def test_collector_learns_dom_candidate_code_only_after_multi_source_validation(
         "page_title",
         "visible_city",
     ]
+    assert ZhilianCityResolver(cache).lookup("深圳") == ("765", "verified_cache")
+
+
+def test_collector_actively_discovers_city_code_and_converges_on_homepage(
+    tmp_path,
+    monkeypatch,
+):
+    driver = _HomepageDynamicCityDiscoveryDriver()
+    cache = tmp_path / "cities.json"
+    monkeypatch.setattr("jobagent.platforms.zhilian.collect.time.sleep", lambda _: None)
+
+    result = ZhilianReadOnlyCollector(
+        driver=driver,
+        city_cache_path=cache,
+    ).collect(query="AI产品经理", city="深圳", limit=5, wait_seconds=1)
+
+    assert result.ok is True
+    assert result.jobs[0].city == "深圳"
+    assert driver.city_discovery_steps >= 2
+    assert driver.calls.count("click:210:90") == 1
+    assert driver.calls.count("click:260:160") == 1
+    assert result.snapshot["cityResolution"]["observedCode"] == "765"
     assert ZhilianCityResolver(cache).lookup("深圳") == ("765", "verified_cache")
 
 

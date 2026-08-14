@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from jobagent import __version__
 from jobagent.infra import cloud_client, rounds
 from jobagent.infra.activity import active_command
 from jobagent.infra.discovery_state import (
@@ -12,6 +13,7 @@ from jobagent.infra.discovery_state import (
     clear_pending_start,
     load_pending_decision,
     load_pending_start,
+    record_collection_recovery,
     save_manifest,
     save_pending_decision,
     save_pending_start,
@@ -27,6 +29,15 @@ from jobagent.infra.protocol import (
 )
 from jobagent.infra.state import load_json, profile_path
 from jobagent.platforms.discovery import CollectionError, collect_from_search_plan
+
+
+_ZHILIAN_CITY_RECOVERY_CODES = {
+    "zhilian_city_evidence_pending",
+    "zhilian_city_selector_unavailable",
+    "zhilian_city_resolution_unverified",
+    "zhilian_search_navigation_pending",
+}
+_ZHILIAN_CITY_RECOVERY_BUDGET = 3
 
 
 def _decision_result(
@@ -494,6 +505,35 @@ def run_discover(
         )
         details.setdefault("next_suggested", f"jobagent {platform} discover")
         details.setdefault("retryable", _collection_error_retryable(exc.code))
+        if platform == "zhilian" and exc.code in _ZHILIAN_CITY_RECOVERY_CODES:
+            recovery = record_collection_recovery(
+                platform,
+                request_id=request_id,
+                recovery_key="zhilian_city_convergence",
+                client_version=__version__,
+                budget=_ZHILIAN_CITY_RECOVERY_BUDGET,
+            )
+            details.update(
+                {
+                    "recovery_attempt": recovery["attempts"],
+                    "recovery_budget": recovery["budget"],
+                    "recovery_exhausted": recovery["exhausted"],
+                    "recovery_scope": "request_id",
+                }
+            )
+            if recovery["exhausted"]:
+                exc.code = "zhilian_city_evidence_recovery_exhausted"
+                exc.message = (
+                    "Zhilian city evidence did not converge within the bounded recovery "
+                    "window. The request remains preserved and was not charged."
+                )
+                details.update(
+                    {
+                        "retryable": False,
+                        "requires_user_action": True,
+                        "next_suggested": "jobagent browser diagnose --platform zhilian",
+                    }
+                )
         exc.details = details
         raise
     emit_stage(

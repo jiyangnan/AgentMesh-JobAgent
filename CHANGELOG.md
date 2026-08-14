@@ -2,6 +2,18 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.14] - 2026-08-14
+
+### Fixed
+
+- Actively discover a requested Zhilian city's current opaque identifier from visible city controls and their real navigation metadata when the results page remains on the public entry route.
+- Require the discovered identifier to agree with independent readable title, selected-city or job-card evidence before caching or returning candidates; URL or numeric metadata alone remains insufficient.
+- Bound city-evidence recovery to the exact preserved request. After three non-converging attempts, return a read-only browser diagnostic action instead of repeating the same Discover command forever.
+
+### Compatibility
+
+- Existing API Keys, account binding, profile, round, preserved request and Discover IDs, managed Chrome profile, city cache and audits remain in place. Resume the same request with `jobagent zhilian discover`; no cache clearing, replacement round, repeated login or duplicate Discover charge is required.
+
 ## [0.5.13] - 2026-08-14
 
 ### Fixed

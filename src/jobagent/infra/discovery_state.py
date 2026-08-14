@@ -32,6 +32,14 @@ def pending_start_path(platform: str) -> Path:
     return _platform_dir(platform) / "pending-start.json"
 
 
+def _write_pending_start(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
 def save_pending_start(
     platform: str,
     *,
@@ -52,11 +60,7 @@ def save_pending_start(
         "account_ref": account_ref,
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    temporary.replace(path)
+    _write_pending_start(path, payload)
     return path
 
 
@@ -88,6 +92,42 @@ def clear_pending_start(platform: str, *, request_id: str | None = None) -> None
         if payload and str(payload.get("request_id")) != request_id:
             return
     path.unlink()
+
+
+def record_collection_recovery(
+    platform: str,
+    *,
+    request_id: str,
+    recovery_key: str,
+    client_version: str,
+    budget: int,
+) -> dict[str, Any]:
+    """Record a bounded collection recovery against the exact pending request."""
+    payload = load_pending_start(platform)
+    if payload is None or str(payload.get("request_id") or "") != request_id:
+        raise ValueError("Pending discovery request mismatch")
+
+    safe_budget = max(1, int(budget))
+    previous = payload.get("collection_recovery")
+    same_recovery = (
+        isinstance(previous, dict)
+        and previous.get("request_id") == request_id
+        and previous.get("recovery_key") == recovery_key
+        and previous.get("client_version") == client_version
+    )
+    attempts = int(previous.get("attempts") or 0) + 1 if same_recovery else 1
+    recovery = {
+        "request_id": request_id,
+        "recovery_key": recovery_key,
+        "client_version": client_version,
+        "attempts": attempts,
+        "budget": safe_budget,
+        "exhausted": attempts >= safe_budget,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    payload["collection_recovery"] = recovery
+    _write_pending_start(pending_start_path(platform), payload)
+    return recovery
 
 
 def save_pending_decision(

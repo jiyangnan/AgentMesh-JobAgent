@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-14.1"
+ZHILIAN_SELECTOR_VERSION = "2026-08-14.2"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -214,6 +214,110 @@ _ZHILIAN_SESSION_PROBE_JS = r"""
 """
 
 
+_ZHILIAN_CITY_CANDIDATE_JS = r"""
+      function cityCodeFromCandidateUrl(value){
+        if (!value) return null;
+        try {
+          const parsed = new URL(String(value), href);
+          for (const name of ['jl', 'cityCode', 'cityId', 'city_id']) {
+            const code = parsed.searchParams.get(name);
+            if (/^\d+$/.test(code || '')) return code;
+          }
+          const pathMatch = parsed.pathname.match(/(?:^|\/)(?:jl|city)[/_-]?(\d+)(?:\/|$)/i);
+          if (pathMatch) return pathMatch[1];
+        } catch (_error) {
+          return null;
+        }
+        return null;
+      }
+      function cityCandidateEvidence(el){
+        if (!el) return {code: null, source: null};
+        const nodes = [];
+        let current = el;
+        for (let depth = 0; current && depth < 5; depth += 1) {
+          nodes.push(current);
+          current = current.parentElement;
+        }
+        if (el.querySelectorAll) {
+          nodes.push(...Array.from(el.querySelectorAll(
+            'a[href],[data-city-code],[data-city-id],[data-code],[data-value],[data-href],[data-url],[data-jump-url]'
+          )).slice(0, 20));
+        }
+        const unique = Array.from(new Set(nodes));
+        const numericAttributes = [
+          'data-city-code', 'data-city-id', 'data-code', 'data-value', 'value'
+        ];
+        const navigationAttributes = [
+          'href', 'data-href', 'data-url', 'data-jump-url', 'data-target-url', 'formaction'
+        ];
+        for (const node of unique) {
+          if (!node || !node.getAttribute) continue;
+          for (const name of numericAttributes) {
+            const value = clean(node.getAttribute(name));
+            if (/^\d+$/.test(value)) return {code: value, source: name};
+          }
+          for (const name of navigationAttributes) {
+            const code = cityCodeFromCandidateUrl(node.getAttribute(name));
+            if (code) return {code, source: name};
+          }
+        }
+        return {code: null, source: null};
+      }
+      function candidateCode(el){
+        return cityCandidateEvidence(el).code;
+      }
+      function cityDirectText(el){
+        if (!el) return '';
+        const own = Array.from(el.childNodes || [])
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent || '')
+          .join('');
+        return clean(own) || clean(el.innerText || el.textContent || '');
+      }
+      function targetCityCandidate(){
+        if (!targetCity) return null;
+        const normalizedTarget = clean(targetCity).replace(/市$/, '');
+        const selectors = [
+          '[data-city-code]', '[data-city-id]', '[data-code]', '[data-value]',
+          '[data-city]', '[data-location]', '[data-href]', '[data-url]',
+          '[data-jump-url]', 'a[href*="jl="]', 'a[href*="city"]',
+          '[role="option"]', '[role="menuitem"]', 'option',
+          '[class*="city"]', '[class*="City"]',
+          '[class*="location"]', '[class*="Location"]'
+        ].join(',');
+        const matches = Array.from(document.querySelectorAll(selectors))
+          .filter(visible)
+          .map((el) => {
+            const text = cityDirectText(el).replace(/市$/, '');
+            const metadata = clean([
+              el.getAttribute('aria-label'),
+              el.getAttribute('title'),
+              el.getAttribute('data-city'),
+              el.getAttribute('data-location')
+            ].join(' ')).replace(/市$/, '');
+            const readableMatch = text === normalizedTarget
+              || metadata === normalizedTarget
+              || (text.includes(normalizedTarget) && text.length <= 24)
+              || (metadata.includes(normalizedTarget) && metadata.length <= 40);
+            const evidence = cityCandidateEvidence(el);
+            const rect = el.getBoundingClientRect();
+            const score = (text === normalizedTarget ? 8 : 0)
+              + (metadata === normalizedTarget ? 6 : 0)
+              + (evidence.code ? 10 : 0)
+              + (rect.top < 700 ? 2 : 0);
+            return {el, readableMatch, evidence, score};
+          })
+          .filter((item) => item.readableMatch && item.evidence.code)
+          .sort((a, b) => b.score - a.score);
+        if (!matches.length) return null;
+        return {
+          code: matches[0].evidence.code,
+          source: 'target_city_navigation:' + matches[0].evidence.source
+        };
+      }
+"""
+
+
 def build_zhilian_session_probe_script() -> str:
     return f"""
     (function(){{
@@ -364,6 +468,7 @@ def build_zhilian_search_transition_script(keyword: str, city: str = "") -> str:
           return null;
         }}
       }}
+      {_ZHILIAN_CITY_CANDIDATE_JS}
       const inputs = Array.from(document.querySelectorAll(
         'input[type="text"],input[type="search"],input:not([type])'
       )).filter(visible).map((el) => {{
@@ -376,6 +481,7 @@ def build_zhilian_search_transition_script(keyword: str, city: str = "") -> str:
         return {{el, score}};
       }}).sort((a, b) => b.score - a.score);
       const observedKeyword = inputs.length ? clean(inputs[0].el.value) : '';
+      const cityCandidate = targetCityCandidate();
       return JSON.stringify({{
         ok: true,
         mode,
@@ -384,6 +490,8 @@ def build_zhilian_search_transition_script(keyword: str, city: str = "") -> str:
         requestedCity: targetCity,
         titleCityMatch: !!targetCity && clean(session.title).includes(targetCity.replace(/市$/, '')),
         observedCityCode: cityCodeFromUrl(session.url),
+        candidateCityCode: cityCandidate && cityCandidate.code,
+        candidateCitySource: cityCandidate && cityCandidate.source,
         ...session
       }});
     }})()
@@ -497,30 +605,7 @@ def build_zhilian_city_filter_script(city: str) -> str:
           text: directText(target)
         }};
       }}
-      function candidateCode(el){{
-        const target = el && (el.closest('a,[data-city-code],[data-city-id],[data-code],[data-value]') || el);
-        if (!target) return null;
-        const values = [
-          target.getAttribute('data-city-code'),
-          target.getAttribute('data-city-id'),
-          target.getAttribute('data-code'),
-          target.getAttribute('data-value'),
-          target.getAttribute('value')
-        ];
-        for (const value of values) {{
-          if (/^\\d+$/.test(clean(value))) return clean(value);
-        }}
-        const hrefValue = target.getAttribute('href') || '';
-        try {{
-          const parsed = new URL(hrefValue, href);
-          const queryCode = parsed.searchParams.get('jl');
-          if (/^\\d+$/.test(queryCode || '')) return queryCode;
-          const pathMatch = parsed.pathname.match(/(?:^|\\/)jl(\\d+)(?:\\/|$)/);
-          return pathMatch ? pathMatch[1] : null;
-        }} catch (_error) {{
-          return null;
-        }}
-      }}
+      {_ZHILIAN_CITY_CANDIDATE_JS}
       const cityNames = ['北京','上海','广州','深圳','天津','武汉','西安','成都','大连','长春','沈阳','南京','济南','青岛','杭州','苏州','无锡','宁波','重庆','郑州','长沙','福州','厦门','哈尔滨'];
       const visibleElements = Array.from(document.querySelectorAll('body *')).filter(visible);
       function cityCount(text){{
@@ -570,13 +655,14 @@ def build_zhilian_city_filter_script(city: str) -> str:
       }}
       const currentCityControl = findCurrentCityControl();
       const currentCity = currentCityControl ? directText(currentCityControl) : '';
-      if (currentCityControl && currentCity === targetCity) {{
+      const currentCityCandidate = candidateCode(currentCityControl);
+      if (currentCityControl && currentCity === targetCity && currentCityCandidate) {{
         return JSON.stringify({{
           ok: true,
           mode,
           city: targetCity,
           observedCity: currentCity,
-          candidateCode: candidateCode(currentCityControl),
+          candidateCode: currentCityCandidate,
           alreadySelected: true,
           source: 'visible_current_city',
           url: href,
@@ -662,7 +748,7 @@ def build_zhilian_city_filter_script(city: str) -> str:
         }});
       }}
       const option = options[0];
-      if (option.selected) {{
+      if (option.selected && option.candidateCode) {{
         return JSON.stringify({{
           ok: true,
           mode,

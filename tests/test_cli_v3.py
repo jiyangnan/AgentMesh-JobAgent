@@ -1993,14 +1993,22 @@ def test_discover_collection_failure_preserves_request_and_no_charge(
     monkeypatch.setattr(application, "collect_from_search_plan", fail_collection)
 
     errors = []
-    for _attempt in range(2):
+    for _attempt in range(3):
         with pytest.raises(application.CollectionError) as error:
             application.run_discover("zhilian", page_delay=0)
         errors.append(error.value)
 
-    assert request_ids[0] == request_ids[1]
+    assert len(set(request_ids)) == 1
+    assert errors[0].code == "zhilian_city_evidence_pending"
+    assert errors[0].details["retryable"] is True
+    assert errors[0].details["recovery_attempt"] == 1
+    assert errors[0].details["recovery_budget"] == 3
+    assert errors[1].code == "zhilian_city_evidence_pending"
+    assert errors[1].details["retryable"] is True
+    assert errors[1].details["recovery_attempt"] == 2
+    assert errors[-1].code == "zhilian_city_evidence_recovery_exhausted"
     assert errors[-1].details == {
-        "retryable": True,
+        "retryable": False,
         "request_preserved": True,
         "request_id": request_ids[0],
         "no_charge": True,
@@ -2010,11 +2018,49 @@ def test_discover_collection_failure_preserves_request_and_no_charge(
             "retry_reuses_request_id": True,
             "additional_charge_on_retry": False,
         },
-        "next_suggested": "jobagent zhilian discover",
+        "next_suggested": "jobagent browser diagnose --platform zhilian",
+        "requires_user_action": True,
+        "recovery_attempt": 3,
+        "recovery_budget": 3,
+        "recovery_exhausted": True,
+        "recovery_scope": "request_id",
     }
     pending = discovery_state.load_pending_start("zhilian")
     assert pending is not None
     assert pending["request_id"] == request_ids[0]
+    assert pending["collection_recovery"]["attempts"] == 3
+
+
+def test_collection_recovery_budget_is_bound_to_exact_request(tmp_path, monkeypatch):
+    import jobagent.infra.discovery_state as discovery_state
+
+    monkeypatch.setattr(discovery_state, "discoveries_dir", lambda: tmp_path)
+    discovery_state.save_pending_start(
+        "zhilian",
+        request_id="zhilian:req-a",
+        round_id="round-1",
+        profile_digest="sha256:profile",
+        intent_digest="sha256:intent",
+        account_ref="acct-a",
+    )
+
+    first = discovery_state.record_collection_recovery(
+        "zhilian",
+        request_id="zhilian:req-a",
+        recovery_key="zhilian_city_convergence",
+        client_version="0.5.14",
+        budget=3,
+    )
+    assert first["attempts"] == 1
+
+    with pytest.raises(ValueError, match="request mismatch"):
+        discovery_state.record_collection_recovery(
+            "zhilian",
+            request_id="zhilian:req-b",
+            recovery_key="zhilian_city_convergence",
+            client_version="0.5.14",
+            budget=3,
+        )
 
 
 def test_discovery_decision_failure_preserves_idempotent_billing_recovery(monkeypatch):
