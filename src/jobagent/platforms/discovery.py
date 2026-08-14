@@ -21,6 +21,12 @@ class CollectionError(RuntimeError):
         return self.message
 
 
+@dataclass
+class CollectedPage:
+    jobs: list[Job]
+    exhausted: bool = False
+
+
 _BOSS_CITY_CODES = {
     "北京": "101010100",
     "上海": "101020100",
@@ -141,7 +147,7 @@ def _collect_web_platform(
     driver,
     wait_seconds: int,
     login_verification: dict[str, Any] | None = None,
-) -> list[Job]:
+) -> CollectedPage:
     if platform == "liepin":
         from jobagent.platforms.liepin.collect import LiepinReadOnlyCollector
 
@@ -176,7 +182,14 @@ def _collect_web_platform(
             user_prompt=str(payload.get("user_prompt") or ""),
             details=payload,
         )
-    return result.jobs
+    snapshot = result.snapshot if isinstance(result.snapshot, dict) else {}
+    return CollectedPage(
+        jobs=result.jobs,
+        exhausted=(
+            platform == "zhilian"
+            and bool(snapshot.get("paginationExhausted"))
+        ),
+    )
 
 
 def collect_from_search_plan(
@@ -203,10 +216,13 @@ def collect_from_search_plan(
     max_pages = max(int(query.get("page_limit", 1)) for query in queries)
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    exhausted_queries: set[int] = set()
 
     try:
         for page in range(1, max_pages + 1):
-            for query in queries:
+            for query_index, query in enumerate(queries):
+                if query_index in exhausted_queries:
+                    continue
                 if page > int(query.get("page_limit", 1)):
                     continue
                 remaining = candidate_limit - len(candidates)
@@ -221,7 +237,7 @@ def collect_from_search_plan(
                         wait_seconds,
                     )
                 else:
-                    jobs = _collect_web_platform(
+                    collected_page = _collect_web_platform(
                         platform,
                         query,
                         page,
@@ -230,6 +246,18 @@ def collect_from_search_plan(
                         wait_seconds,
                         login_verification,
                     )
+                    if isinstance(collected_page, CollectedPage):
+                        jobs = collected_page.jobs
+                        query_exhausted = collected_page.exhausted
+                    else:
+                        # Keep test adapters and older internal callers source
+                        # compatible while public clients roll forward.
+                        jobs = collected_page
+                        query_exhausted = platform == "zhilian" and not jobs
+                    # ``page_limit`` is an upper bound. Explicit no-results and
+                    # verified pagination boundaries retire only this query.
+                    if query_exhausted:
+                        exhausted_queries.add(query_index)
                 for job in jobs:
                     candidate = job_to_candidate(platform, job)
                     if candidate["id"] in seen:
@@ -263,5 +291,21 @@ def collect_from_search_plan(
         ) from exc
 
     if not candidates:
-        raise CollectionError("no_candidates", "No jobs were collected; no credits were charged")
+        raise CollectionError(
+            "no_candidates",
+            "All signed search queries completed without matching jobs; no credits were charged",
+            user_prompt=(
+                "The signed search plan completed without matching jobs. "
+                f"Review the empty result, then confirm whether to skip {platform} "
+                "and continue to the next platform."
+            ),
+            details={
+                "retryable": False,
+                "requires_user_action": True,
+                "search_exhausted": True,
+                "next_suggested": (
+                    f"jobagent round skip --platform {platform} --confirm-skip"
+                ),
+            },
+        )
     return candidates

@@ -329,6 +329,16 @@ class ZhilianReadOnlyCollector:
             pagination: dict[str, Any] = {}
             if current_page > 1:
                 pagination = self._select_page(current_page, wait_seconds=wait_seconds)
+                if pagination.get("exhausted"):
+                    snapshots.append(
+                        {
+                            "ok": True,
+                            "page": current_page,
+                            "pagination": pagination,
+                            "paginationExhausted": True,
+                        }
+                    )
+                    break
                 if not pagination.get("ok"):
                     failure = str(
                         pagination.get("error") or "zhilian_page_option_not_found"
@@ -517,6 +527,9 @@ class ZhilianReadOnlyCollector:
                 if len(jobs) >= limit:
                     break
             if len(jobs) >= limit:
+                break
+            if _query_page_exhausted(snapshot, current_page):
+                snapshot["paginationExhausted"] = True
                 break
             if index < page_count - 1 and page_delay > 0:
                 time.sleep(page_delay)
@@ -1049,6 +1062,33 @@ def _zero_unexplained_candidates(result: dict[str, Any]) -> bool:
     except (TypeError, ValueError):
         count = 0
     return count == 0 and not bool(result.get("noResults"))
+
+
+def _query_page_exhausted(snapshot: dict[str, Any], current_page: int) -> bool:
+    """Return true only for an explicit, readable end-of-query boundary."""
+
+    if snapshot.get("noResults") is True:
+        return True
+    if snapshot.get("paginationDetected") is not True:
+        return False
+    if snapshot.get("hasNextPage") is not False:
+        return False
+    available_pages: list[int] = []
+    for value in snapshot.get("availablePages") or []:
+        try:
+            available_pages.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    observed_value = snapshot.get("currentPage")
+    if observed_value in {None, ""} and not available_pages:
+        return False
+    try:
+        observed_page = int(observed_value or current_page)
+    except (TypeError, ValueError):
+        return False
+    return observed_page == current_page and (
+        not available_pages or max(available_pages) <= current_page
+    )
 
 
 def _with_session_continuity(

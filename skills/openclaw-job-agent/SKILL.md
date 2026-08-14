@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.5.14
+version: 0.5.15
 metadata:
   openclaw:
     emoji: "💼"
@@ -43,6 +43,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - Forward `client_update_detected -> client_update_started -> client_update_completed -> client_command_resumed` once in the user's language. Do not ask permission for a managed signed update and do not stop after success; continue the original command. Stop only on `client_update_failed`, report its `message`, and follow `next_suggested`. Older clients may first emit only the compatibility completion/resume pair.
 - For `client_update_failed` with `error_code=release_artifact_hash_mismatch`, run the returned official-installer recovery command once and repeat the original command. It preserves Job Agent state and browser sessions; never disable the signature/tag/commit/archive checks or delete the managed profile.
 - When a cloud command returns `retryable=true` and `request_preserved=true`, do not ask the user to retry, re-login or recollect jobs. Run the exact `next_suggested` command immediately. A failed start reuses its persisted `request_id` and has `billing_status=not_charged`; a failed decision reuses its `discover_id` and preserved candidates without an additional charge. If a valid signed SearchPlan expires during a preserved request, the CLI renews that same `request_id` and `discover_id` automatically with zero renewal charge; never create a replacement round or recollect jobs. Signature, account or context mismatches remain hard stops.
+- Treat every signed SearchPlan `page_limit` as an upper bound. The CLI stops a query after explicit no-results or a verified final page, then continues any remaining signed queries. On `no_candidates` with `search_exhausted=true`, show the empty outcome and wait for the user's explicit platform-skip decision; never repeat the same Discover command.
 - `round status` and a user-confirmed `round skip` may return `offline=true, stale=true` during a transient cloud outage after the CLI verifies the current API Key against its local account proof. Continue from the returned local workflow. Never claim a platform was skipped unless the skip command itself returns `ok=true`. On `offline_account_proof_required` or `offline_account_proof_mismatch`, stop and follow the declared recovery without editing or deleting local state.
 - Profiles, rounds, decisions and audits are account-bound. On `local_state_owner_required`, ask the user to confirm ownership and run `jobagent account bind --confirm-legacy`. On `local_state_account_mismatch`, ask the user to confirm switching accounts and run `jobagent account switch --new-state`. Never edit account-state files manually.
 - Diagnose browser slowness or conflicting login evidence with `jobagent browser diagnose --platform <platform>` before asking for another login. Treat `login.state=unknown` or `conflicting` as inconclusive.

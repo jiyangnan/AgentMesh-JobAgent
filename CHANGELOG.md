@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.15] - 2026-08-14
+
+### Fixed
+
+- Treat each signed Zhilian `page_limit` as an upper bound: explicit no-results or independently verified final-page evidence now ends that query without requesting a nonexistent next page.
+- Continue later signed SearchPlan queries when an earlier query is empty, while preserving the human-readable query and never interpreting Zhilian's opaque `kw...` route state as a job keyword.
+- Correct the generated no-results matcher and expose bounded pagination evidence from the live page to the SearchPlan scheduler.
+- Return a terminal, no-charge `no_candidates` outcome after every signed query is exhausted, and stop non-retryable page failures from suggesting the same Discover command forever.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, round, preserved `request_id`, signed SearchPlan, Discover ID, candidates and audits remain in place. Resume with `jobagent zhilian discover`; the preserved request is reused and no additional Discover charge is created.
+
 ## [0.5.14] - 2026-08-14
 
 ### Fixed

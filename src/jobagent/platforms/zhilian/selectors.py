@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-14.2"
+ZHILIAN_SELECTOR_VERSION = "2026-08-14.3"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -524,9 +524,41 @@ def build_zhilian_pagination_script(page: int) -> str:
       if (targetPage <= 1) {{
         return JSON.stringify({{ok: true, mode, alreadySelected: true, page: 1}});
       }}
-      const candidates = Array.from(document.querySelectorAll('a, button, li, [role="button"]'))
+      const containers = Array.from(document.querySelectorAll(
+        'nav[aria-label*="分页"],nav[aria-label*="page" i],[class*="pagination"],[class*="Pagination"],[class*="pager"],[class*="Pager"],[class*="page-box"],[class*="pageBox"]'
+      )).filter(visible);
+      const scopedControls = containers.flatMap((container) =>
+        Array.from(container.querySelectorAll('a, button, li, [role="button"], [aria-current]'))
+      );
+      const controls = scopedControls.length
+        ? Array.from(new Set(scopedControls))
+        : Array.from(document.querySelectorAll('a, button, li, [role="button"]'));
+      const numbered = controls
         .filter(visible)
-        .filter((el) => clean(el.innerText || el.textContent || '') === String(targetPage))
+        .map((el) => ({{el, label: clean(el.innerText || el.textContent || '')}}))
+        .filter((item) => /^\\d{{1,4}}$/.test(item.label))
+        .map((item) => ({{...item, page: Number(item.label)}}));
+      const availablePages = Array.from(new Set(numbered.map((item) => item.page))).sort((a, b) => a - b);
+      const selectedPage = numbered.find((item) =>
+        /active|selected|current/.test(String(item.el.className || ''))
+          || item.el.getAttribute('aria-current') === 'page'
+          || item.el.getAttribute('aria-selected') === 'true'
+      );
+      const nextControls = controls.filter(visible).filter((el) =>
+        /^(下一页|下页|next|›|»|>)$/i.test(clean(el.innerText || el.textContent || el.getAttribute('aria-label') || ''))
+      );
+      const enabledNext = nextControls.some((el) =>
+        !el.disabled && el.getAttribute('aria-disabled') !== 'true' && !/disabled/.test(String(el.className || ''))
+      );
+      const currentPage = selectedPage ? selectedPage.page : null;
+      const hasNextPage = enabledNext
+        || (currentPage !== null && availablePages.some((value) => value > currentPage));
+      const paginationEvidence = currentPage !== null
+        || availablePages.length > 0
+        || nextControls.length > 0;
+      const candidates = numbered
+        .filter((item) => item.page === targetPage)
+        .map((item) => item.el)
         .map((el) => {{
           const rect = el.getBoundingClientRect();
           const selected = /active|selected|current/.test(String(el.className || ''))
@@ -536,7 +568,23 @@ def build_zhilian_pagination_script(page: int) -> str:
         .filter((item) => item.rect.top > 300)
         .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
       if (!candidates.length) {{
-        return JSON.stringify({{ok: false, mode, error: 'zhilian_page_option_not_found', page: targetPage, url: location.href || ''}});
+        const exhausted = containers.length > 0
+          && paginationEvidence
+          && !hasNextPage
+          && (currentPage === null || targetPage > currentPage)
+          && (!availablePages.length || targetPage > Math.max(...availablePages));
+        return JSON.stringify({{
+          ok: exhausted,
+          mode,
+          error: exhausted ? '' : 'zhilian_page_option_not_found',
+          exhausted,
+          page: targetPage,
+          currentPage,
+          availablePages,
+          hasNextPage,
+          paginationDetected: containers.length > 0,
+          url: location.href || ''
+        }});
       }}
       const item = candidates[0];
       if (item.selected) {{
@@ -919,7 +967,43 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         .filter((el) => /^(立即投递|投递简历|申请职位|立即沟通|继续沟通)$/.test(
           clean(el.innerText || el.textContent || el.getAttribute('aria-label') || '')
         ));
-      const noResults = /暂无.{0,12}职位|没有找到.{0,12}职位|未找到.{0,12}职位|无匹配职位|换个关键词/.test(text);
+      const noResults = /暂无.{{0,12}}职位|没有找到.{{0,12}}职位|未找到.{{0,12}}职位|无匹配职位|换个关键词/.test(text);
+      function paginationVisible(el) {{
+        if (!el || !(el instanceof Element)) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || '1') !== 0
+          && rect.width > 4
+          && rect.height > 4;
+      }}
+      const paginationContainers = Array.from(document.querySelectorAll(
+        'nav[aria-label*="分页"],nav[aria-label*="page" i],[class*="pagination"],[class*="Pagination"],[class*="pager"],[class*="Pager"],[class*="page-box"],[class*="pageBox"]'
+      )).filter(paginationVisible);
+      const paginationControls = Array.from(new Set(paginationContainers.flatMap((container) =>
+        Array.from(container.querySelectorAll('a,button,li,[role="button"],[aria-current]'))
+      ))).filter(paginationVisible);
+      const pageItems = paginationControls
+        .map((el) => ({{el, label: clean(el.innerText || el.textContent || '')}}))
+        .filter((item) => /^\\d{{1,4}}$/.test(item.label))
+        .map((item) => ({{...item, page: Number(item.label)}}));
+      const availablePages = Array.from(new Set(pageItems.map((item) => item.page))).sort((a, b) => a - b);
+      const currentPageItem = pageItems.find((item) =>
+        /active|selected|current/.test(String(item.el.className || ''))
+          || item.el.getAttribute('aria-current') === 'page'
+          || item.el.getAttribute('aria-selected') === 'true'
+      );
+      const currentPage = currentPageItem ? currentPageItem.page : null;
+      const enabledNext = paginationControls.some((el) => {{
+        const label = clean(el.innerText || el.textContent || el.getAttribute('aria-label') || '');
+        return /^(下一页|下页|next|›|»|>)$/i.test(label)
+          && !el.disabled
+          && el.getAttribute('aria-disabled') !== 'true'
+          && !/disabled/.test(String(el.className || ''));
+      }});
+      const hasNextPage = enabledNext
+        || (currentPage !== null && availablePages.some((value) => value > currentPage));
       return JSON.stringify({{
         ok: true,
         platform: 'zhilian',
@@ -948,6 +1032,10 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         jobSurfaceCount: jobSurfaces.length,
         jobActionCount: jobActions.length,
         noResults,
+        paginationDetected: paginationContainers.length > 0,
+        availablePages,
+        currentPage,
+        hasNextPage,
         candidateCount: cards.length,
         cards,
         bodySnippet: text.slice(0, 1200)

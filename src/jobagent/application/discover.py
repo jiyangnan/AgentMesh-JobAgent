@@ -503,8 +503,18 @@ def run_discover(
                 },
             }
         )
-        details.setdefault("next_suggested", f"jobagent {platform} discover")
-        details.setdefault("retryable", _collection_error_retryable(exc.code))
+        retryable = bool(
+            details.get("retryable", _collection_error_retryable(exc.code))
+        )
+        details["retryable"] = retryable
+        if retryable:
+            details.setdefault("next_suggested", f"jobagent {platform} discover")
+        else:
+            details.setdefault("requires_user_action", True)
+            details.setdefault(
+                "next_suggested",
+                f"jobagent browser diagnose --platform {platform}",
+            )
         if platform == "zhilian" and exc.code in _ZHILIAN_CITY_RECOVERY_CODES:
             recovery = record_collection_recovery(
                 platform,
@@ -568,5 +578,4 @@ def _collection_error_retryable(code: str) -> bool:
         "zhilian_city_resolution_unverified",
         "zhilian_search_navigation_pending",
         "page_state_unknown",
-        "no_candidates",
     }

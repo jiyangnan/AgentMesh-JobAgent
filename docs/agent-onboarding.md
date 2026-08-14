@@ -215,7 +215,7 @@ jobagent zhilian audit
 
 智联页面可能在导航完成前长时间保持 `loading`，也可能在已登录首页保留通用“登录/注册”入口。该入口是弱证据，不得压过个人中心导航与简历管理、投递活动等独立强账户证据；可见凭据表单或登录验证界面才是强未登录证据。强登录与强账户证据同时存在时仍保持 `unknown` 并安全停止。`zhilian_session_state_unknown` 或 `zhilian_page_state_unknown` 不是未登录：不要要求用户重复登录，按 `retryable`、`request_preserved` 和精确 `next_suggested` 恢复。只有 `zhilian_login_required` 才请求用户介入。不要猜测或硬编码 `jl` 城市码；CLI 会根据页面标题、可见城市和岗位卡片的多源一致证据动态验证，证据不足则不返回候选且不收费。
 
-智联搜索结果页不一定重复展示首页账户区。当前轮次和同一受管 Chrome 中未过期的成功登录检查可以作为辅助证据，但强登录表单或验证界面始终优先。`zhilian_job_cards_not_found` 表示结果页已就绪但岗位 DOM 无法安全解析，不表示用户掉线；按其 `retryable`、`request_preserved` 和精确 `next_suggested` 恢复，不要重新登录、新建轮次或删除 profile。
+智联搜索结果页不一定重复展示首页账户区。当前轮次和同一受管 Chrome 中未过期的成功登录检查可以作为辅助证据，但强登录表单或验证界面始终优先。`zhilian_job_cards_not_found` 表示结果页已就绪但岗位 DOM 无法安全解析，不表示用户掉线；按其 `retryable`、`request_preserved` 和精确 `next_suggested` 恢复，不要重新登录、新建轮次或删除 profile。签名 SearchPlan 的 `page_limit` 是上限而不是必须采满的页数：明确无结果或页面证据确认最后一页时立即结束当前可读查询，后续签名查询继续执行。全部查询耗尽时显示 `no_candidates` 与 `search_exhausted=true`，停下等待用户明确决定是否执行返回的 `round skip --confirm-skip`；不得重复同一 Discover。智联 URL 的 `kw...` 永远不能作为可读查询或恢复输入。
 
 ### 前程无忧 / 51Job
 
