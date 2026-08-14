@@ -32,14 +32,25 @@ OFFICIAL_REPO_URLS = {
 CACHE_TTL_SECONDS = 5 * 60
 UpdateEventHandler = Callable[..., None]
 POSIX_INSTALL_COMMAND = (
-    "curl -fsSL "
-    "https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.sh "
-    "| bash"
+    "bash -c 'set -euo pipefail; installer=\"$(mktemp)\"; "
+    "trap \"rm -f \\\"$installer\\\"\" EXIT; "
+    "if ! curl -fL --retry 3 --connect-timeout 15 -o \"$installer\" "
+    "https://github.com/jiyangnan/AgentMesh-JobAgent/releases/latest/download/install.sh; "
+    "then curl -fL --retry 3 --connect-timeout 15 -o \"$installer\" "
+    "https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.sh; "
+    "fi; bash \"$installer\"'"
 )
 WINDOWS_INSTALL_COMMAND = (
-    "irm "
-    "https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.ps1 "
-    "| iex"
+    "$ErrorActionPreference = 'Stop'; "
+    "$installer = Join-Path ([IO.Path]::GetTempPath()) "
+    "('jobagent-install-' + [guid]::NewGuid() + '.ps1'); "
+    "try { try { Invoke-WebRequest -UseBasicParsing -Uri "
+    "'https://github.com/jiyangnan/AgentMesh-JobAgent/releases/latest/download/install.ps1' "
+    "-OutFile $installer } catch { Invoke-WebRequest -UseBasicParsing -Uri "
+    "'https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.ps1' "
+    "-OutFile $installer }; & $installer; if ($LASTEXITCODE -ne 0) "
+    "{ exit $LASTEXITCODE } } finally { Remove-Item -LiteralPath $installer "
+    "-Force -ErrorAction SilentlyContinue }"
 )
 
 

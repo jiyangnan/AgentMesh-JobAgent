@@ -3055,6 +3055,27 @@ def test_managed_update_hash_failure_emits_safe_installer_recovery(
     )
 
 
+def test_release_recovery_commands_download_before_execution():
+    import jobagent.infra.release_update as updates
+
+    posix = updates.POSIX_INSTALL_COMMAND
+    assert "releases/latest/download/install.sh" in posix
+    assert "raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main" in posix
+    assert "curl -fL" in posix
+    assert "--retry 3" in posix
+    assert "-o \"$installer\"" in posix
+    assert "bash \"$installer\"" in posix
+    assert "| bash" not in posix
+
+    powershell = updates.WINDOWS_INSTALL_COMMAND
+    assert "releases/latest/download/install.ps1" in powershell
+    assert "raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main" in powershell
+    assert "Invoke-WebRequest" in powershell
+    assert "-OutFile $installer" in powershell
+    assert "& $installer" in powershell
+    assert "| iex" not in powershell.lower()
+
+
 def test_current_release_does_not_emit_update_events(monkeypatch):
     import jobagent.infra.release_update as updates
 

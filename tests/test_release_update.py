@@ -5,7 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from jobagent.infra.release_update import _archive_sha256
+from jobagent.infra.release_update import POSIX_INSTALL_COMMAND, _archive_sha256
 
 
 def _run(root: Path, *args: str) -> bytes:
@@ -60,3 +60,61 @@ def test_archive_hash_ignores_machine_git_archive_configuration(tmp_path):
     assert _archive_sha256(repo, commit) != hashlib.sha256(
         _run(repo, "git", "archive", "--format=tar", commit)
     ).hexdigest()
+
+
+def test_posix_recovery_downloads_before_execution_and_surfaces_tls_failure(
+    tmp_path, monkeypatch
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        """#!/bin/sh
+args="$*"
+output=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+        shift
+        output="$1"
+    fi
+    shift
+done
+case "$args" in
+    *releases/latest/download/install.sh*) exit 22 ;;
+esac
+if [ "${RECOVERY_CURL_FAIL_ALL:-}" = "1" ]; then
+    exit 35
+fi
+printf '%s\n' '#!/bin/sh' 'printf recovered > "$RECOVERY_PROBE"' > "$output"
+""",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    probe = tmp_path / "probe"
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["RECOVERY_PROBE"] = str(probe)
+
+    recovered = subprocess.run(
+        POSIX_INSTALL_COMMAND,
+        shell=True,
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert recovered.returncode == 0
+    assert probe.read_text(encoding="utf-8") == "recovered"
+
+    probe.unlink()
+    env["RECOVERY_CURL_FAIL_ALL"] = "1"
+    failed = subprocess.run(
+        POSIX_INSTALL_COMMAND,
+        shell=True,
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert failed.returncode != 0
+    assert not probe.exists()
