@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-14.3"
+ZHILIAN_SELECTOR_VERSION = "2026-08-14.4"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -230,6 +230,18 @@ _ZHILIAN_CITY_CANDIDATE_JS = r"""
         }
         return null;
       }
+      function officialCityNavigationUrl(value){
+        if (!value) return null;
+        try {
+          const parsed = new URL(String(value), href);
+          const hostname = String(parsed.hostname || '').toLowerCase();
+          if (parsed.protocol !== 'https:' || hostname !== 'www.zhaopin.com') return null;
+          if (/passport|login|jobdetail|companydetail/i.test(parsed.pathname || '')) return null;
+          return parsed.href;
+        } catch (_error) {
+          return null;
+        }
+      }
       function cityCandidateEvidence(el){
         if (!el) return {code: null, source: null};
         const nodes = [];
@@ -315,6 +327,51 @@ _ZHILIAN_CITY_CANDIDATE_JS = r"""
           source: 'target_city_navigation:' + matches[0].evidence.source
         };
       }
+      function targetCityNavigationCandidate(){
+        if (!targetCity) return null;
+        const normalizedTarget = clean(targetCity).replace(/市$/, '');
+        const selectors = [
+          'a[href]', '[data-href]', '[data-url]', '[data-jump-url]',
+          '[data-target-url]', '[data-city]', '[data-location]'
+        ].join(',');
+        const matches = Array.from(document.querySelectorAll(selectors))
+          .map((el) => {
+            const text = cityDirectText(el).replace(/(?:市|站)$/, '');
+            const metadata = clean([
+              el.getAttribute('aria-label'),
+              el.getAttribute('title'),
+              el.getAttribute('data-city'),
+              el.getAttribute('data-location')
+            ].join(' ')).replace(/(?:市|站)$/, '');
+            const readableMatch = text === normalizedTarget || metadata === normalizedTarget;
+            const attributes = [
+              'href', 'data-href', 'data-url', 'data-jump-url', 'data-target-url'
+            ];
+            let navigationUrl = null;
+            let navigationSource = null;
+            for (const name of attributes) {
+              const candidate = officialCityNavigationUrl(el.getAttribute(name));
+              if (candidate) {
+                navigationUrl = candidate;
+                navigationSource = name;
+                break;
+              }
+            }
+            const rect = el.getBoundingClientRect();
+            const score = (text === normalizedTarget ? 8 : 0)
+              + (metadata === normalizedTarget ? 6 : 0)
+              + (visible(el) ? 3 : 0)
+              + (rect.top >= 0 && rect.top < 700 ? 2 : 0);
+            return {readableMatch, navigationUrl, navigationSource, score};
+          })
+          .filter((item) => item.readableMatch && item.navigationUrl)
+          .sort((a, b) => b.score - a.score);
+        if (!matches.length) return null;
+        return {
+          url: matches[0].navigationUrl,
+          source: 'readable_city_anchor:' + matches[0].navigationSource
+        };
+      }
 """
 
 
@@ -327,12 +384,18 @@ def build_zhilian_session_probe_script() -> str:
     """
 
 
-def build_zhilian_keyword_search_script(keyword: str) -> str:
+def build_zhilian_keyword_search_script(
+    keyword: str,
+    *,
+    allow_unknown_session: bool = False,
+) -> str:
     safe_keyword = json.dumps(keyword, ensure_ascii=False)
+    safe_allow_unknown = json.dumps(bool(allow_unknown_session))
     return f"""
     (function(){{
       const mode = 'zhilian_keyword_search';
       const keyword = {safe_keyword};
+      const allowUnknownSession = {safe_allow_unknown};
       {_ZHILIAN_SESSION_PROBE_JS}
       const session = zhilianSessionProbe();
       const href = session.url;
@@ -364,7 +427,8 @@ def build_zhilian_keyword_search_script(keyword: str) -> str:
       if (session.loginRequired) {{
         return JSON.stringify({{ok: false, mode, error: 'zhilian_login_required', ...session}});
       }}
-      if (session.sessionState === 'loading' || session.sessionState === 'unknown') {{
+      if (session.sessionState === 'loading'
+          || (session.sessionState === 'unknown' && !allowUnknownSession)) {{
         return JSON.stringify({{ok: false, mode, error: 'zhilian_page_state_pending', ...session}});
       }}
       const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])'))
@@ -482,6 +546,7 @@ def build_zhilian_search_transition_script(keyword: str, city: str = "") -> str:
       }}).sort((a, b) => b.score - a.score);
       const observedKeyword = inputs.length ? clean(inputs[0].el.value) : '';
       const cityCandidate = targetCityCandidate();
+      const cityNavigationCandidate = targetCityNavigationCandidate();
       return JSON.stringify({{
         ok: true,
         mode,
@@ -492,6 +557,8 @@ def build_zhilian_search_transition_script(keyword: str, city: str = "") -> str:
         observedCityCode: cityCodeFromUrl(session.url),
         candidateCityCode: cityCandidate && cityCandidate.code,
         candidateCitySource: cityCandidate && cityCandidate.source,
+        candidateCityNavigationUrl: cityNavigationCandidate && cityNavigationCandidate.url,
+        candidateCityNavigationSource: cityNavigationCandidate && cityNavigationCandidate.source,
         ...session
       }});
     }})()
@@ -602,12 +669,18 @@ def build_zhilian_pagination_script(page: int) -> str:
     """
 
 
-def build_zhilian_city_filter_script(city: str) -> str:
+def build_zhilian_city_filter_script(
+    city: str,
+    *,
+    allow_unknown_session: bool = False,
+) -> str:
     safe_city = json.dumps(city, ensure_ascii=False)
+    safe_allow_unknown = json.dumps(bool(allow_unknown_session))
     return f"""
     (function(){{
       const mode = 'zhilian_city_filter';
       const targetCity = {safe_city};
+      const allowUnknownSession = {safe_allow_unknown};
       {_ZHILIAN_SESSION_PROBE_JS}
       const session = zhilianSessionProbe();
       const href = session.url;
@@ -619,7 +692,8 @@ def build_zhilian_city_filter_script(city: str) -> str:
       if (session.loginRequired) {{
         return JSON.stringify({{ok: false, mode, error: 'zhilian_login_required', ...session}});
       }}
-      if (session.sessionState === 'loading' || session.sessionState === 'unknown') {{
+      if (session.sessionState === 'loading'
+          || (session.sessionState === 'unknown' && !allowUnknownSession)) {{
         return JSON.stringify({{ok: false, mode, error: 'zhilian_page_state_pending', ...session}});
       }}
       function clean(value){{
@@ -704,6 +778,23 @@ def build_zhilian_city_filter_script(city: str) -> str:
       const currentCityControl = findCurrentCityControl();
       const currentCity = currentCityControl ? directText(currentCityControl) : '';
       const currentCityCandidate = candidateCode(currentCityControl);
+      const cityNavigationCandidate = targetCityNavigationCandidate();
+      const currentUrlCode = cityCodeFromCandidateUrl(href);
+      if (!currentUrlCode && cityNavigationCandidate) {{
+        return JSON.stringify({{
+          ok: false,
+          mode,
+          error: 'zhilian_city_route_navigation_required',
+          action: 'navigate_city_homepage',
+          city: targetCity,
+          observedCity: currentCity,
+          candidateCode: currentCityCandidate,
+          candidateNavigationUrl: cityNavigationCandidate.url,
+          candidateNavigationSource: cityNavigationCandidate.source,
+          url: href,
+          title
+        }});
+      }}
       if (currentCityControl && currentCity === targetCity && currentCityCandidate) {{
         return JSON.stringify({{
           ok: true,

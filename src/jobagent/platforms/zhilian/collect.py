@@ -7,12 +7,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from jobagent.domain.models import Job
 from jobagent.drivers.boss import create_driver
 
-from .constants import ZHILIAN_LOGIN_USER_PROMPT
 from .city_resolver import BUNDLED_CITY_CODES, ZhilianCityResolver, normalize_city_name
+from .constants import ZHILIAN_LOGIN_USER_PROMPT
 from .detail import (
     build_zhilian_detail_snapshot_script,
     merge_zhilian_detail_into_job,
@@ -27,7 +28,6 @@ from .selectors import (
     build_zhilian_snapshot_script,
 )
 from .session_evidence import classify_zhilian_session_evidence
-
 
 # Keep the bundled city codes only as post-submit verification evidence. Search
 # itself starts from the public entry page and uses visible form controls.
@@ -582,8 +582,41 @@ class ZhilianReadOnlyCollector:
         city: str = "",
         wait_seconds: int = 8,
     ) -> dict[str, Any]:
+        data = self._click_keyword_control(keyword, wait_seconds=wait_seconds)
+        if not data.get("ok"):
+            return data
+        transition = self._await_search_transition(
+            keyword,
+            city=city,
+            wait_seconds=wait_seconds,
+        )
+        result = {
+            **data,
+            "searchTransition": transition,
+            "url": transition.get("url") or data.get("urlBefore"),
+        }
+        if not transition.get("ok"):
+            return {
+                **result,
+                "ok": False,
+                "error": transition.get("error") or "zhilian_search_navigation_pending",
+                "loginRequired": transition.get("loginRequired", False),
+            }
+        return result
+
+    def _click_keyword_control(
+        self,
+        keyword: str,
+        *,
+        wait_seconds: int,
+    ) -> dict[str, Any]:
         data = self._exec_ui_script_until_settled(
-            build_zhilian_keyword_search_script(keyword),
+            build_zhilian_keyword_search_script(
+                keyword,
+                allow_unknown_session=_valid_login_verification(
+                    self.login_verification
+                ),
+            ),
             wait_seconds=wait_seconds,
             parse_error="zhilian_js_parse_failed",
         )
@@ -615,24 +648,7 @@ class ZhilianReadOnlyCollector:
                 "error": "zhilian_keyword_rejected",
                 "url": data.get("urlBefore"),
             }
-        transition = self._await_search_transition(
-            keyword,
-            city=city,
-            wait_seconds=wait_seconds,
-        )
-        result = {
-            **data,
-            "searchTransition": transition,
-            "url": transition.get("url") or data.get("urlBefore"),
-        }
-        if not transition.get("ok"):
-            return {
-                **result,
-                "ok": False,
-                "error": transition.get("error") or "zhilian_search_navigation_pending",
-                "loginRequired": transition.get("loginRequired", False),
-            }
-        return result
+        return data
 
     def _await_search_transition(
         self,
@@ -649,7 +665,7 @@ class ZhilianReadOnlyCollector:
         script = build_zhilian_search_transition_script(keyword, city)
         last: dict[str, Any] = {}
         attempts = 0
-        city_discovery_actions: set[tuple[str, int, int]] = set()
+        city_discovery_actions: set[tuple[str, str]] = set()
         while True:
             attempts += 1
             last = _unwrap_js_result_with_error(
@@ -675,6 +691,7 @@ class ZhilianReadOnlyCollector:
                 city_discovery = self._advance_city_discovery(
                     city,
                     attempted_actions=city_discovery_actions,
+                    wait_seconds=wait_seconds,
                 )
                 last["cityDiscovery"] = city_discovery
                 candidate_code = city_discovery.get("candidateCode")
@@ -693,6 +710,42 @@ class ZhilianReadOnlyCollector:
                         "settleAttempts": attempts,
                         "settleTimeoutSeconds": timeout,
                     }
+                if city_discovery.get("navigated"):
+                    bootstrap = self._await_city_bootstrap_destination(
+                        keyword,
+                        city=city,
+                        expected_url=str(city_discovery.get("navigationUrl") or ""),
+                        wait_seconds=wait_seconds,
+                    )
+                    last["cityBootstrap"] = bootstrap
+                    if not bootstrap.get("ok"):
+                        return {
+                            **last,
+                            "ok": False,
+                            "error": bootstrap.get("error")
+                            or "zhilian_city_evidence_pending",
+                            "loginRequired": bootstrap.get("loginRequired", False),
+                            "retryable": bootstrap.get("retryable", True),
+                            "settleAttempts": attempts,
+                            "settleTimeoutSeconds": timeout,
+                        }
+                    restart = self._click_keyword_control(
+                        keyword,
+                        wait_seconds=wait_seconds,
+                    )
+                    last["cityBootstrapKeyword"] = restart
+                    if not restart.get("ok"):
+                        return {
+                            **last,
+                            "ok": False,
+                            "error": restart.get("error")
+                            or "zhilian_keyword_submit_failed",
+                            "loginRequired": restart.get("loginRequired", False),
+                            "settleAttempts": attempts,
+                            "settleTimeoutSeconds": timeout,
+                        }
+                    deadline = time.monotonic() + timeout
+                    continue
                 if _search_transition_ready(last, keyword, city):
                     return {
                         **last,
@@ -726,24 +779,61 @@ class ZhilianReadOnlyCollector:
         self,
         city: str,
         *,
-        attempted_actions: set[tuple[str, int, int]],
+        attempted_actions: set[tuple[str, str]],
+        wait_seconds: int,
     ) -> dict[str, Any]:
         result = _unwrap_js_result_with_error(
-            self.driver._exec_js(build_zhilian_city_filter_script(city)),
+            self.driver._exec_js(
+                build_zhilian_city_filter_script(
+                    city,
+                    allow_unknown_session=_valid_login_verification(
+                        self.login_verification
+                    ),
+                )
+            ),
             parse_error="zhilian_js_parse_failed",
         )
+        action = str(result.get("action") or "")
+        if action == "navigate_city_homepage":
+            navigation_url = _safe_zhilian_city_navigation_url(
+                result.get("candidateNavigationUrl")
+            )
+            if not navigation_url:
+                return {
+                    **result,
+                    "ok": False,
+                    "error": "zhilian_city_navigation_unverified",
+                    "navigationRejected": True,
+                }
+            signature = (action, navigation_url)
+            if signature in attempted_actions:
+                return {**result, "actionRepeated": True}
+            attempted_actions.add(signature)
+            open_result = self.driver.open_url_in_new_tab(
+                navigation_url,
+                wait_seconds=wait_seconds,
+            )
+            return {
+                **result,
+                "ok": bool(open_result.get("ok")),
+                "navigated": bool(open_result.get("ok")),
+                "navigationUrl": navigation_url,
+                "navigationResult": open_result,
+                "error": (
+                    "" if open_result.get("ok")
+                    else str(open_result.get("error") or "zhilian_city_navigation_failed")
+                ),
+            }
         click_point = (
             result.get("clickPoint")
             if isinstance(result.get("clickPoint"), dict)
             else None
         )
-        action = str(result.get("action") or "")
         if action not in {"expand_location", "select_city"} or not click_point:
             return result
         signature = (
             action,
-            int(click_point.get("x") or 0),
-            int(click_point.get("y") or 0),
+            f"{int(click_point.get('x') or 0)}:{int(click_point.get('y') or 0)}",
         )
         if signature in attempted_actions:
             return {**result, "actionRepeated": True}
@@ -752,6 +842,59 @@ class ZhilianReadOnlyCollector:
             return result
         self.driver._click_at(click_point.get("x"), click_point.get("y"))
         return {**result, "nativeClicked": True}
+
+    def _await_city_bootstrap_destination(
+        self,
+        keyword: str,
+        *,
+        city: str,
+        expected_url: str,
+        wait_seconds: int,
+    ) -> dict[str, Any]:
+        timeout = max(
+            float(wait_seconds),
+            float(ZHILIAN_SEARCH_NAVIGATION_TIMEOUT_SECONDS),
+        )
+        deadline = time.monotonic() + timeout
+        script = build_zhilian_search_transition_script(keyword, city)
+        attempts = 0
+        last: dict[str, Any] = {}
+        while True:
+            attempts += 1
+            last = _unwrap_js_result_with_error(
+                self.driver._exec_js(script),
+                parse_error="zhilian_js_parse_failed",
+            )
+            if _strong_login_evidence(last):
+                return {
+                    **last,
+                    "ok": False,
+                    "error": "zhilian_login_required",
+                    "loginRequired": True,
+                    "bootstrapAttempts": attempts,
+                }
+            if _city_bootstrap_destination_verified(
+                last,
+                city,
+                self.login_verification,
+                expected_url=expected_url,
+            ):
+                return {
+                    **last,
+                    "ok": True,
+                    "bootstrapVerified": True,
+                    "bootstrapAttempts": attempts,
+                }
+            if time.monotonic() >= deadline:
+                return {
+                    **last,
+                    "ok": False,
+                    "error": "zhilian_city_evidence_pending",
+                    "loginRequired": False,
+                    "retryable": True,
+                    "bootstrapAttempts": attempts,
+                }
+            time.sleep(ZHILIAN_PAGE_POLL_INTERVAL_SECONDS)
 
     def _select_page(self, page: int, wait_seconds: int = 8) -> dict[str, Any]:
         result = self.driver._exec_js(build_zhilian_pagination_script(page))
@@ -774,7 +917,12 @@ class ZhilianReadOnlyCollector:
         last: dict[str, Any] = {}
         for attempt in range(2):
             last = self._exec_ui_script_until_settled(
-                build_zhilian_city_filter_script(city),
+                build_zhilian_city_filter_script(
+                    city,
+                    allow_unknown_session=_valid_login_verification(
+                        self.login_verification
+                    ),
+                ),
                 wait_seconds=wait_seconds,
                 parse_error="zhilian_js_parse_failed",
             )
@@ -1200,6 +1348,60 @@ def _safe_city_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
     return diagnostics
 
 
+def _safe_zhilian_city_navigation_url(value: Any) -> str | None:
+    try:
+        parsed = urlparse(str(value or ""))
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or (parsed.hostname or "").casefold() != "www.zhaopin.com":
+        return None
+    if parsed.username or parsed.password or port not in {None, 443}:
+        return None
+    if any(
+        marker in parsed.path.casefold()
+        for marker in ("passport", "login", "jobdetail", "companydetail")
+    ):
+        return None
+    return parsed.geturl()
+
+
+def _city_bootstrap_destination_verified(
+    result: dict[str, Any],
+    city: str,
+    login_verification: dict[str, Any] | None,
+    *,
+    expected_url: str = "",
+) -> bool:
+    if _strong_login_evidence(result):
+        return False
+    if str(result.get("readyState") or "") != "complete":
+        return False
+    observed_url = _safe_zhilian_city_navigation_url(result.get("url"))
+    if not observed_url:
+        return False
+    expected = _safe_zhilian_city_navigation_url(expected_url) if expected_url else None
+    if expected:
+        expected_path = urlparse(expected).path.rstrip("/") or "/"
+        observed_path = urlparse(observed_url).path.rstrip("/") or "/"
+        if observed_path != expected_path and not _is_zhilian_search_route(observed_url):
+            return False
+    state = str(result.get("sessionState") or "")
+    if state == "login_required":
+        return False
+    if state == "unknown" and not _valid_login_verification(login_verification):
+        return False
+    normalized_city = normalize_city_name(city)
+    title = normalize_city_name(str(result.get("title") or ""))
+    title_matches = bool(normalized_city and normalized_city in title)
+    evidence = {
+        str(item)
+        for item in (result.get("searchPageEvidence") or [])
+        if item
+    }
+    return title_matches and "search_input" in evidence
+
+
 def _search_transition_ready(
     result: dict[str, Any],
     keyword: str,
@@ -1229,21 +1431,7 @@ def _search_transition_ready(
         )
     if _is_zhilian_search_route(url):
         return bool(expected and observed == expected)
-    normalized_city = normalize_city_name(city)
-    title = normalize_city_name(str(result.get("title") or ""))
-    title_matches = bool(
-        normalized_city
-        and (result.get("titleCityMatch") or normalized_city in title)
-    )
-    candidate_code = str(result.get("candidateCityCode") or "")
-    return bool(
-        title_matches
-        and candidate_code.isdigit()
-        and expected
-        and observed == expected
-        and "search_input" in evidence
-        and evidence & {"job_surface", "job_action", "no_results"}
-    )
+    return False
 
 
 def _search_transition_city_discovery_ready(

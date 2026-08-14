@@ -530,17 +530,46 @@ class _HomepageDynamicCityDiscoveryDriver(_ChangedShenzhenCityDriver):
         super().__init__()
         self.transition_probes = 0
         self.city_discovery_steps = 0
+        self.keyword_submissions = 0
+        self.page = "entry"
+
+    def open_url_in_new_tab(self, url: str, wait_seconds: int = 5):
+        result = super().open_url_in_new_tab(url, wait_seconds=wait_seconds)
+        if url == "https://www.zhaopin.com/":
+            self.page = "entry"
+            self.keyword_submissions = 0
+        elif url == "https://www.zhaopin.com/shenzhen/":
+            self.page = "city_homepage"
+        return result
 
     def _exec_js(self, script: str):
         if "zhilian_keyword_search" in script:
+            self.keyword_submissions += 1
             return super()._exec_js(script)
         if "zhilian_search_transition" in script:
             self.transition_probes += 1
-            candidate = "765" if self.city_discovery_steps >= 2 else None
+            if self.page == "city_homepage" and self.keyword_submissions >= 2:
+                self.page = "search_results"
+                return {
+                    "ok": True,
+                    "mode": "zhilian_search_transition",
+                    "url": "https://www.zhaopin.com/sou/jl765/kwOPAQUE/p1",
+                    "title": "深圳热门职位招聘 2026年热门职位招聘信息-智联招聘",
+                    "readyState": "complete",
+                    "sessionState": "page_ready",
+                    "searchPageEvidence": ["search_route", "search_input"],
+                    "observedKeyword": "AI产品经理",
+                    "titleCityMatch": True,
+                    "observedCityCode": "765",
+                }
             return {
                 "ok": True,
                 "mode": "zhilian_search_transition",
-                "url": "https://www.zhaopin.com/",
+                "url": (
+                    "https://www.zhaopin.com/shenzhen/"
+                    if self.page == "city_homepage"
+                    else "https://www.zhaopin.com/"
+                ),
                 "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
                 "readyState": "complete",
                 "sessionState": "page_ready",
@@ -548,32 +577,18 @@ class _HomepageDynamicCityDiscoveryDriver(_ChangedShenzhenCityDriver):
                 "observedKeyword": "AI产品经理",
                 "titleCityMatch": True,
                 "observedCityCode": None,
-                "candidateCityCode": candidate,
-                "candidateCitySource": "target_city_navigation" if candidate else None,
+                "candidateCityCode": None,
             }
         if "zhilian_city_filter" in script:
             self.city_discovery_steps += 1
-            if self.city_discovery_steps == 1:
+            if self.page == "entry":
                 return {
                     "ok": False,
                     "mode": "zhilian_city_filter",
-                    "error": "zhilian_city_options_collapsed",
-                    "action": "expand_location",
-                    "clickPoint": {"x": 210, "y": 90},
-                    "url": "https://www.zhaopin.com/",
-                    "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
-                    "readyState": "complete",
-                    "sessionState": "page_ready",
-                }
-            if self.city_discovery_steps == 2:
-                return {
-                    "ok": True,
-                    "mode": "zhilian_city_filter",
-                    "city": "深圳",
-                    "candidateCode": "765",
-                    "applied": True,
-                    "action": "select_city",
-                    "clickPoint": {"x": 260, "y": 160},
+                    "error": "zhilian_city_route_navigation_required",
+                    "action": "navigate_city_homepage",
+                    "candidateNavigationUrl": "https://www.zhaopin.com/shenzhen/",
+                    "candidateNavigationSource": "readable_city_anchor:href",
                     "url": "https://www.zhaopin.com/",
                     "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
                     "readyState": "complete",
@@ -586,21 +601,27 @@ class _HomepageDynamicCityDiscoveryDriver(_ChangedShenzhenCityDriver):
                 "observedCity": "深圳",
                 "candidateCode": "765",
                 "alreadySelected": True,
-                "source": "visible_current_city",
-                "url": "https://www.zhaopin.com/",
-                "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+                "source": "search_route_city_code",
+                "url": "https://www.zhaopin.com/sou/jl765/kwOPAQUE/p1",
+                "title": "深圳热门职位招聘 2026年热门职位招聘信息-智联招聘",
                 "readyState": "complete",
                 "sessionState": "page_ready",
             }
         return {
             "ok": True,
-            "url": "https://www.zhaopin.com/",
-            "title": "深圳招聘网_深圳人才网_2026年深圳最新招聘信息-智联招聘",
+            "url": "https://www.zhaopin.com/sou/jl765/kwOPAQUE/p1",
+            "title": "深圳热门职位招聘 2026年热门职位招聘信息-智联招聘",
             "readyState": "complete",
             "sessionState": "page_ready",
             "loginRequired": False,
+            "searchPageEvidence": ["search_route", "search_input", "job_surface"],
             "searchKeyword": "AI产品经理",
             "visibleCity": "深圳",
+            "candidateCityCode": "765",
+            "paginationDetected": True,
+            "availablePages": [1],
+            "currentPage": 1,
+            "hasNextPage": False,
             "cards": [
                 {
                     "positionId": "SZ-DYNAMIC-1",
@@ -640,6 +661,10 @@ def test_collector_actively_discovers_city_code_and_converges_on_homepage(
     driver = _HomepageDynamicCityDiscoveryDriver()
     cache = tmp_path / "cities.json"
     monkeypatch.setattr("jobagent.platforms.zhilian.collect.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "jobagent.platforms.zhilian.collect.ZHILIAN_SEARCH_NAVIGATION_TIMEOUT_SECONDS",
+        0,
+    )
 
     result = ZhilianReadOnlyCollector(
         driver=driver,
@@ -648,9 +673,9 @@ def test_collector_actively_discovers_city_code_and_converges_on_homepage(
 
     assert result.ok is True
     assert result.jobs[0].city == "深圳"
-    assert driver.city_discovery_steps >= 2
-    assert driver.calls.count("click:210:90") == 1
-    assert driver.calls.count("click:260:160") == 1
+    assert driver.city_discovery_steps >= 1
+    assert driver.calls.count("https://www.zhaopin.com/shenzhen/") == 1
+    assert driver.keyword_submissions == 2
     assert result.snapshot["cityResolution"]["observedCode"] == "765"
     assert ZhilianCityResolver(cache).lookup("深圳") == ("765", "verified_cache")
 
