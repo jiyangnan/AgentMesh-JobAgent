@@ -9,6 +9,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from jobagent.domain.models import Job
+from jobagent.domain.reviewability import (
+    is_reviewable_company,
+    is_reviewable_job_title,
+    is_reviewable_salary,
+)
 
 
 def _first(raw: dict[str, Any], *keys: str) -> Any:
@@ -36,9 +41,14 @@ def parse_zhilian_job(raw: dict[str, Any], city_name: str = "") -> Job:
     """Parse a Zhilian job row into the shared Job model."""
     job_id = zhilian_job_id(raw)
     derived = _derive_from_raw_text(raw)
-    title = _first(raw, "name", "title", "jobName", "jobTitle", "positionName")
+    title = _valid_title(
+        _first(raw, "name", "title", "jobName", "jobTitle", "positionName")
+    )
     company = _valid_company(_first(raw, "company", "companyName", "company_name") or derived.get("company", ""))
-    salary = _first(raw, "salary", "salaryDesc", "salaryText") or derived.get("salary", "")
+    salary = _valid_salary(
+        _first(raw, "salary", "salaryDesc", "salaryText")
+        or derived.get("salary", "")
+    )
     city = derived.get("city", "") or _first(raw, "city", "cityName", "workCity", "cityDisplay") or city_name
     area = _first(raw, "district", "area", "businessArea") or derived.get("area", "")
     experience = _first(raw, "experience", "workingExp", "workYear", "workExperience") or derived.get("experience", "")
@@ -134,20 +144,25 @@ def _match_first(text: str, patterns: list[str]) -> str:
 
 def _valid_company(value: Any) -> str:
     company = str(value or "").strip()
-    if not company:
-        return ""
-    invalid = {
-        "立即投递",
-        "立即沟通",
-        "投递",
-        "沟通",
-        "高回复率",
-        "刚刚活跃",
-        "今日回复",
-    }
-    if company in invalid:
-        return ""
-    return company
+    return company if is_reviewable_company(company) else ""
+
+
+def _valid_title(value: Any) -> str:
+    title = str(value or "").strip()
+    return title if is_reviewable_job_title(title) else ""
+
+
+def _valid_salary(value: Any) -> str:
+    salary = str(value or "").strip()
+    return salary if is_reviewable_salary(salary) else ""
+
+
+def is_reviewable_zhilian_job(job: Job) -> bool:
+    return bool(
+        is_reviewable_job_title(job.name)
+        and is_reviewable_company(job.company)
+        and is_reviewable_salary(job.salary)
+    )
 
 
 def _extract_job_rows(payload: Any) -> list[dict[str, Any]]:

@@ -7,6 +7,11 @@ import re
 from typing import Any
 
 from jobagent.domain.models import Job
+from jobagent.domain.reviewability import (
+    is_reviewable_company,
+    is_reviewable_job_title,
+    is_reviewable_salary,
+)
 
 
 ZHILIAN_DETAIL_SELECTOR_VERSION = "2026-06-13.0"
@@ -23,9 +28,16 @@ def build_zhilian_detail_snapshot_script() -> str:
       function clean(value){{
         return String(value || '').replace(/\\s+/g, ' ').trim();
       }}
-      const heading = Array.from(document.querySelectorAll('h1,h2,[class*="title"],[class*="name"]'))
+      const genericLinkLabels = new Set([
+        '更多','更多信息','了解更多','查看','查看信息','查看详情','查看更多',
+        '查看更多信息','查看职位','查看职位详情','职位详情','详情','展开','点击查看'
+      ]);
+      const heading = Array.from(document.querySelectorAll(
+        'h1,h2,[class*="job-title"],[class*="jobTitle"],[class*="position-name"],'
+          + '[class*="positionName"],[class*="title"],[class*="name"]'
+      ))
         .map(el => clean(el.innerText || el.textContent || ''))
-        .find(value => value.length >= 2 && value.length <= 80) || '';
+        .find(value => value.length >= 2 && value.length <= 80 && !genericLinkLabels.has(value)) || '';
       const meta = {{}};
       const rows = Array.from(document.querySelectorAll('li,span,p,div')).slice(0, 500);
       for (const el of rows) {{
@@ -61,9 +73,11 @@ def parse_zhilian_detail_snapshot(snapshot: dict[str, Any]) -> dict[str, str]:
     """Extract useful fields from a Zhilian detail snapshot."""
     text = re.sub(r"\s+", " ", str(snapshot.get("rawText") or "")).strip()
     fields = {
-        "name": _clean(snapshot.get("jobTitle") or _from_title(snapshot.get("title"))),
-        "company": _clean_company(_company_from_text(text) or snapshot.get("companyName")),
-        "salary": _clean(snapshot.get("salary") or _match_first(text, [
+        "name": _clean_title(
+            snapshot.get("jobTitle") or _from_title(snapshot.get("title"))
+        ),
+        "company": _clean_company(snapshot.get("companyName") or _company_from_text(text)),
+        "salary": _clean_salary(snapshot.get("salary") or _match_first(text, [
             r"\d+(?:\.\d+)?[-~—至]\d+(?:\.\d+)?万(?:·\d+薪)?",
             r"\d+(?:\.\d+)?[-~—至]\d+(?:\.\d+)?[kK](?:·\d+薪)?",
             r"\d+-\d+元(?:/月)?(?:·\d+薪)?",
@@ -86,9 +100,13 @@ def merge_zhilian_detail_into_job(job: Job, snapshot: dict[str, Any]) -> Job:
     raw_data = dict(job.raw_data or {})
     raw_data["detail_snapshot"] = snapshot
     return Job(
-        name=job.name or fields.get("name", ""),
-        salary=job.salary or fields.get("salary", ""),
-        company=job.company or fields.get("company", ""),
+        name=job.name if is_reviewable_job_title(job.name) else fields.get("name", ""),
+        salary=(
+            job.salary if is_reviewable_salary(job.salary) else fields.get("salary", "")
+        ),
+        company=(
+            job.company if is_reviewable_company(job.company) else fields.get("company", "")
+        ),
         area=job.area or fields.get("area", ""),
         experience=job.experience or fields.get("experience", ""),
         degree=job.degree or fields.get("degree", ""),
@@ -113,6 +131,16 @@ def unwrap_zhilian_detail_js_result(result: Any) -> dict[str, Any]:
 
 def _clean(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _clean_title(value: Any) -> str:
+    title = _clean(value)
+    return title if is_reviewable_job_title(title) else ""
+
+
+def _clean_salary(value: Any) -> str:
+    salary = _clean(value)
+    return salary if is_reviewable_salary(salary) else ""
 
 
 def _from_title(value: Any) -> str:
@@ -152,7 +180,7 @@ def _clean_company(value: Any) -> str:
     for label in labels:
         if company.startswith(label):
             company = company[len(label):].strip()
-    return company
+    return company if is_reviewable_company(company) else ""
 
 
 def _boss_from_text(text: str) -> str:

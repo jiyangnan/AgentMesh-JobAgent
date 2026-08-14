@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-14.9"
+ZHILIAN_SELECTOR_VERSION = "2026-08-15.0"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -1424,6 +1424,10 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         return String(value || '').split(/\\n+/).map(clean).filter(Boolean);
       }}
       const ctaLabels = new Set(['立即投递', '立即沟通', '继续沟通', '继续聊', '聊一聊', '投递简历', '申请职位', '收藏', '举报']);
+      const genericLinkLabels = new Set([
+        '更多','更多信息','了解更多','查看','查看信息','查看详情','查看更多',
+        '查看更多信息','查看职位','查看职位详情','职位详情','详情','展开','点击查看'
+      ]);
       function looksLikeMeta(line){{
         return !line || ctaLabels.has(line)
           || /^\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?(?:万|千|[kK]|元)/.test(line)
@@ -1432,15 +1436,65 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
           || /^(经验不限|\\d+-\\d+年|\\d+年以上|应届|本科|大专|硕士|博士|学历不限)/.test(line)
           || /^(高回复率|\\d+小时内回复可能性大|12小时内回复可能性大|今日活跃|昨日活跃|刚刚活跃)$/.test(line);
       }}
+      function validTitle(value){{
+        const candidate = clean(value);
+        return candidate.length >= 2 && candidate.length <= 80
+          && !ctaLabels.has(candidate) && !genericLinkLabels.has(candidate);
+      }}
       function titleFrom(root, label){{
+        const stableNode = root.querySelector(
+          '[class*="job-name"],[class*="jobName"],[class*="position-name"],'
+            + '[class*="positionName"],[data-job-title],[data-position-name],h2,h3'
+        );
+        const stableTitle = clean(stableNode && (
+          stableNode.getAttribute('data-job-title')
+            || stableNode.getAttribute('data-position-name')
+            || stableNode.innerText
+            || stableNode.textContent
+        ) || '');
+        if (validTitle(stableTitle)) return {{value: stableTitle, source: 'stable_title_node'}};
         const cleanLabel = clean(label);
-        if (cleanLabel && !ctaLabels.has(cleanLabel) && cleanLabel.length >= 2 && cleanLabel.length <= 80) return cleanLabel;
+        if (validTitle(cleanLabel)) return {{value: cleanLabel, source: 'job_link_label'}};
         for (const line of lines(root.innerText || root.textContent || '')) {{
-          if (line.length < 2 || line.length > 80) continue;
+          if (!validTitle(line)) continue;
           if (looksLikeMeta(line)) continue;
-          return line;
+          return {{value: line, source: 'card_text_line'}};
         }}
-        return cleanLabel;
+        return {{value: '', source: 'missing'}};
+      }}
+      function companyFrom(root, titleValue){{
+        function looksLikeCompanyMeta(value){{
+          const candidate = clean(value);
+          return /^(?:北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|郑州|天津|重庆)(?:市|[·/| -].{{0,12}}区)?$/.test(candidate)
+            || /^\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?(?:万|千|[kK]|元)(?:·\\d+薪|[/]月)?$/.test(candidate)
+            || /^面议$/.test(candidate)
+            || /^(?:经验不限|\\d+-\\d+年|\\d+年以上|应届|本科|大专|硕士|博士|学历不限)$/.test(candidate);
+        }}
+        const selectors = [
+          '[class*="company-name"]','[class*="companyName"]','[class*="company_name"]',
+          '[data-company-name]','[class*="company-info"] a','[class*="companyInfo"] a',
+          '[class*="company"] a','a[href*="company"]','a[href*="comdetail"]'
+        ];
+        for (const selector of selectors) {{
+          const nodes = Array.from(root.querySelectorAll(selector));
+          for (const node of nodes) {{
+            const candidate = clean(
+              node.getAttribute('data-company-name')
+                || node.getAttribute('title')
+                || node.innerText
+                || node.textContent
+                || ''
+            );
+            if (candidate.length < 2 || candidate.length > 120) continue;
+            if (candidate === titleValue || ctaLabels.has(candidate) || genericLinkLabels.has(candidate)) continue;
+            // A company name may legitimately begin with its city (for example,
+            // "深圳示例科技有限公司"). Only reject values that are wholly
+            // location, salary, experience, or education metadata.
+            if (looksLikeCompanyMeta(candidate)) continue;
+            return {{value: candidate, source: 'stable_company_node'}};
+          }}
+        }}
+        return {{value: '', source: 'missing'}};
       }}
       function cardRoot(anchor){{
         const explicitSurface = anchor.closest(
@@ -1544,8 +1598,10 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         if (!rawText || rawText.length < 20) continue;
         const hasJobSignal = /立即投递|立即沟通|今日回复|刚刚活跃|高回复率|\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?(?:万|千|[kK]|元)|面议/.test(rawText);
         if (!hasJobSignal) continue;
-        const title = titleFrom(root, label);
-        if (!title || ctaLabels.has(title)) continue;
+        const titleCandidate = titleFrom(root, label);
+        const title = titleCandidate.value;
+        if (!title) continue;
+        const companyCandidate = companyFrom(root, title);
         const key = url.split('?')[0];
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1553,10 +1609,14 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         const city = (rawText.match(/北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|郑州|天津|重庆/) || [''])[0];
         cards.push({{
           jobTitle: title,
+          companyName: companyCandidate.value,
           jobUrl: url,
           salary,
           cityName: city,
-          rawText: rawText.slice(0, 1200)
+          rawText: rawText.slice(0, 1200),
+          titleSource: titleCandidate.source,
+          companySource: companyCandidate.source,
+          cardSource: 'job_anchor'
         }});
         if (cards.length >= limit) break;
       }}
@@ -1580,8 +1640,10 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         if (!rawText || rawText.length < 20) continue;
         const hasJobSignal = /立即投递|立即沟通|今日回复|刚刚活跃|高回复率|\\d+(?:\\.\\d+)?[-~—至]\\d+(?:\\.\\d+)?(?:万|千|[kK]|元)|面议/.test(rawText);
         if (!hasJobSignal) continue;
-        const title = titleFrom(item.surface, item.label);
-        if (!title || ctaLabels.has(title)) continue;
+        const titleCandidate = titleFrom(item.surface, item.label);
+        const title = titleCandidate.value;
+        if (!title) continue;
+        const companyCandidate = companyFrom(item.surface, title);
         const key = item.jobId ? 'id:' + item.jobId : item.url.split('?')[0];
         if (seen.has(key) || seen.has(item.url.split('?')[0])) continue;
         seen.add(key);
@@ -1590,11 +1652,14 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         cards.push({{
           positionId: item.jobId,
           jobTitle: title,
+          companyName: companyCandidate.value,
           jobUrl: item.url,
           salary,
           cityName: city,
           rawText: rawText.slice(0, 1200),
-          cardSource: 'job_surface'
+          cardSource: 'job_surface',
+          titleSource: titleCandidate.source,
+          companySource: companyCandidate.source
         }});
       }}
       const jobActions = Array.from(document.querySelectorAll('a,button,[role="button"]'))

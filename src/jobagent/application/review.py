@@ -67,6 +67,16 @@ def review_decision(
     output_path: str | None = None,
 ) -> dict[str, Any]:
     envelope = load_envelope(platform, input_path, reviewed=False if input_path is None else None)
+    decision_repair: dict[str, Any] | None = None
+    if platform == "zhilian":
+        from jobagent.application.decision_repair import (
+            repair_zhilian_decision_if_needed,
+        )
+
+        repair_result = repair_zhilian_decision_if_needed(envelope)
+        envelope = repair_result["envelope"]
+        if repair_result.get("repaired"):
+            decision_repair = dict(repair_result.get("repair") or {})
     manifest = verify_stored_decision(envelope["manifest"], platform=platform)
     envelope["manifest"] = envelope["manifest"]
     existing_promoted_ids = [
@@ -171,6 +181,8 @@ def review_decision(
         "next_suggested": next_suggested,
         "workflow": rounds.round_status(),
     }
+    if decision_repair is not None:
+        result["decision_repair"] = decision_repair
     if requires_confirmation:
         result.update(
             {

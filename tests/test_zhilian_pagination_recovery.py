@@ -53,6 +53,7 @@ def _snapshot(
                 "positionId": job_id,
                 "jobTitle": query,
                 "companyName": f"{job_id} Company",
+                "salary": "20-30K",
                 "cityName": "",
                 "jobUrl": f"https://www.zhaopin.com/jobdetail/{job_id}.htm",
             }
@@ -475,6 +476,7 @@ class _SlugCityHomepageRequiresNativeSearchDriver:
                         "positionId": "RECOMMENDATION-ONLY",
                         "jobTitle": "首页推荐岗位",
                         "companyName": "推荐公司",
+                        "salary": "20-30K",
                         "cityName": "目标城",
                         "jobUrl": "https://www.zhaopin.com/jobdetail/RECOMMENDATION-ONLY.htm",
                     }
@@ -503,6 +505,7 @@ class _SlugCityHomepageRequiresNativeSearchDriver:
                     "positionId": job_id,
                     "jobTitle": self.current_query,
                     "companyName": f"{self.current_query}公司",
+                    "salary": "20-30K",
                     "cityName": "目标城",
                     "jobUrl": f"https://www.zhaopin.com/jobdetail/{job_id}.htm",
                 }
@@ -1705,7 +1708,7 @@ def test_snapshot_script_emits_real_no_result_and_pagination_evidence():
     assert "allowUnknownSession = true" in city_script
     assert "readable_city_anchor:" in city_script
     assert "navigate_city_homepage" in city_script
-    assert ZHILIAN_SELECTOR_VERSION == "2026-08-14.9"
+    assert ZHILIAN_SELECTOR_VERSION == "2026-08-15.0"
 
 
 @pytest.mark.parametrize(

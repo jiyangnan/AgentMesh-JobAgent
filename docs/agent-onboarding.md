@@ -18,6 +18,7 @@ This is the public instruction source for an Agent operating Job Agent on behalf
 12. When review returns `event=delivery_preview` with `error=interaction_required`, show every item in `delivery_preview.items`, then stop. Render the delivery-confirmation card or exact fallback and wait for the user to choose `confirm_all`, `exclude_jobs`, or `cancel_delivery`. Never select the recommended option automatically.
 13. Continue the user's answer through the exact interaction ID. For exclusions, pass each displayed job number as `--exclude-index`, show the regenerated complete list, and stop for final confirmation again. Run send only after the CLI returns `event=delivery_authorized` with both `--preview-id` and `--authorization-id` in its exact command.
 14. When send returns `delivery_preview_required` or `delivery_confirmation_required`, run only its safe review recovery command. Preserve prior promotions, do not recollect or recharge, and obtain a fresh user confirmation.
+15. If Zhilian review detects a generic title or missing company/salary in an older preserved signed decision, run its exact `jobagent zhilian apply review` recovery. It reads only the signed detail URLs, replaces the signature on the same Discover with zero additional credits, regenerates the complete preview and still waits for confirmation. Never create a replacement round or Discover.
 
 ## Goal, Actions and Acceptance
 

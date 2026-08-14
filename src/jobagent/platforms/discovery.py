@@ -168,15 +168,18 @@ def _collect_web_platform(
         collector = Job51ReadOnlyCollector(driver=driver)
     else:
         raise CollectionError("unsupported_platform", f"Unsupported platform: {platform}")
-    result = collector.collect(
-        query=str(query.get("keyword") or ""),
-        city=str(query.get("city") or ""),
-        limit=min(40, limit),
-        wait_seconds=wait_seconds,
-        page=page,
-        pages=1,
-        page_delay=0,
-    )
+    collect_kwargs = {
+        "query": str(query.get("keyword") or ""),
+        "city": str(query.get("city") or ""),
+        "limit": min(40, limit),
+        "wait_seconds": wait_seconds,
+        "page": page,
+        "pages": 1,
+        "page_delay": 0,
+    }
+    if platform == "zhilian":
+        collect_kwargs["detail_limit"] = min(40, limit)
+    result = collector.collect(**collect_kwargs)
     if not result.ok:
         payload = result.to_payload(include_snapshot=False)
         raise CollectionError(

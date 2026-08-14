@@ -226,7 +226,7 @@ def verify_decision_manifest(
 
 
 def verify_stored_decision(
-    manifest: dict[str, Any], *, platform: str
+    manifest: dict[str, Any], *, platform: str, allow_expired: bool = False
 ) -> dict[str, Any]:
     """Verify a persisted manifest when raw candidates have already been discarded."""
     signed = verify_signed_payload(
@@ -238,7 +238,7 @@ def verify_stored_decision(
         raise ProtocolError("decision protocol version mismatch")
     if signed.get("platform") != platform:
         raise ProtocolError("decision platform mismatch")
-    if _is_expired(str(signed.get("expires_at", ""))):
+    if not allow_expired and _is_expired(str(signed.get("expires_at", ""))):
         raise ProtocolError("decision manifest expired")
     classified = [
         item

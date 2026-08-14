@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.23] - 2026-08-15
+
+### Fixed
+
+- Reject generic Zhilian link labels such as `查看更多信息`, `查看详情` and `更多` as job titles, and prefer stable title nodes from the same result card.
+- Extract company and salary from the same result card when available, then use bounded read-only detail-page hydration for missing review fields.
+- Keep Zhilian candidates without a reviewable title, company and salary out of the selected delivery preview even when their semantic match score is high.
+- Repair an already paid, preserved Zhilian decision in place: read only its signed detail URLs, re-sign the same Discover with zero additional credits, and regenerate the full delivery preview before asking for confirmation.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, round, session, Discover ID, signed candidate identity and audits remain in place. The upgrade clears only the stale Zhilian preview and its unanswered interaction. Resume with `jobagent zhilian apply review`; do not start another round or Discover, and no additional Discover charge is created.
+
 ## [0.5.22] - 2026-08-15
 
 ### Fixed

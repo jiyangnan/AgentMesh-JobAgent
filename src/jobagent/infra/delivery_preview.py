@@ -6,6 +6,7 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any
 
+from jobagent.domain.reviewability import delivery_reviewability_issues
 from jobagent.infra.interaction_protocol import (
     build_host_presentations,
     build_interaction_required,
@@ -179,6 +180,37 @@ def build_delivery_preview(
 ) -> dict[str, Any]:
     if platform not in _PLATFORM_LABELS:
         raise ValueError(f"Unsupported delivery preview platform: {platform}")
+    if platform == "zhilian":
+        invalid = [
+            {
+                "job_id": _clean(
+                    item.get("job_id") or item.get("id") or item.get("jobId")
+                ),
+                "missing_or_invalid_fields": delivery_reviewability_issues(item),
+            }
+            for item in send_candidates
+            if delivery_reviewability_issues(item)
+        ]
+        if invalid:
+            raise DeliveryPreviewError(
+                {
+                    "ok": False,
+                    "error": "delivery_candidate_unreviewable",
+                    "message": (
+                        "Zhilian delivery preview contains jobs without reviewable title, "
+                        "company, or salary fields. The preserved signed decision must be "
+                        "repaired before any delivery confirmation."
+                    ),
+                    "platform": platform,
+                    "discover_id": discover_id,
+                    "candidates": invalid,
+                    "request_preserved": True,
+                    "no_charge": True,
+                    "billing": {"additional_credits": 0},
+                    "requires_user_action": False,
+                    "next_suggested": "jobagent zhilian apply review",
+                }
+            )
     items = [
         _preview_item(platform, item, index)
         for index, item in enumerate(send_candidates, start=1)

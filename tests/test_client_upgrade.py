@@ -254,7 +254,7 @@ def test_delivery_confirmation_upgrade_preserves_decision_and_requires_fresh_rev
         (state / "current_round.json").read_text(encoding="utf-8")
     )
     assert report["ok"] is True
-    assert report["state_migration_version"] == 4
+    assert report["state_migration_version"] == 5
     assert "delivery_preview" not in migrated_review
     assert "delivery_authorization" not in migrated_review
     assert [item["id"] for item in migrated_review["send_candidates"]] == [
@@ -269,6 +269,164 @@ def test_delivery_confirmation_upgrade_preserves_decision_and_requires_fresh_rev
     assert json.loads(
         (state / "pending_interaction.json").read_text(encoding="utf-8")
     ) == target_role_pending
+
+
+def test_reviewability_upgrade_invalidates_pending_zhilian_preview_without_losing_decision(
+    tmp_path,
+):
+    upgrade = importlib.import_module("jobagent.infra.client_upgrade")
+    app_dir = tmp_path / ".jobagent"
+    state = app_dir / "state"
+    _seed_preserved_state(app_dir)
+    _write_json(
+        state / "client_upgrade_state.json",
+        {
+            "client_version": "0.5.22",
+            "protocol_version": 1,
+            "state_migration_version": 4,
+            "status": "ready",
+        },
+    )
+    _write_json(
+        state / "current_round.json",
+        {
+            "schema_version": 3,
+            "round_id": "round-zhilian-review-repair",
+            "status": "active",
+            "platform_order": ["boss", "liepin", "zhilian", "51job"],
+            "platforms": {
+                "boss": {"status": "completed"},
+                "liepin": {"status": "completed"},
+                "zhilian": {
+                    "status": "awaiting_delivery_confirmation",
+                    "next_suggested": (
+                        "jobagent interaction respond --interaction-id old-preview "
+                        "--choice confirm_all"
+                    ),
+                    "evidence": {
+                        "discover_id": "dis-review-repair",
+                        "preview_id": "dpv_bad",
+                    },
+                },
+                "51job": {"status": "pending"},
+            },
+        },
+    )
+    decision_path = state / "discoveries" / "zhilian" / "dis-review-repair.json"
+    review_path = state / "discoveries" / "zhilian" / "dis-review-repair.review.json"
+    signed_manifest = {"manifest_type": "decision_manifest", "signature": "preserved"}
+    _write_json(
+        decision_path,
+        {
+            "platform": "zhilian",
+            "discover_id": "dis-review-repair",
+            "manifest": signed_manifest,
+        },
+    )
+    _write_json(
+        review_path,
+        {
+            "platform": "zhilian",
+            "discover_id": "dis-review-repair",
+            "manifest": signed_manifest,
+            "send_candidates": [{"id": "job-bad", "title": "查看更多信息"}],
+            "delivery_preview": {"preview_id": "dpv_bad"},
+        },
+    )
+    _write_json(
+        state / "pending_interaction.json",
+        {
+            "kind": "delivery_confirmation",
+            "interaction_id": "old-preview",
+            "context": {"discover_id": "dis-review-repair"},
+        },
+    )
+
+    report = upgrade.run_client_upgrade(
+        app_dir=app_dir,
+        current_version="0.5.23",
+        protocol_version=1,
+    )
+
+    migrated_round = json.loads(
+        (state / "current_round.json").read_text(encoding="utf-8")
+    )
+    migrated_review = json.loads(review_path.read_text(encoding="utf-8"))
+    assert report["state_migration_version"] == 5
+    assert decision_path.exists()
+    assert migrated_review["manifest"] == signed_manifest
+    assert "delivery_preview" not in migrated_review
+    assert not (state / "pending_interaction.json").exists()
+    assert migrated_round["platforms"]["zhilian"]["status"] == (
+        "awaiting_delivery_confirmation"
+    )
+    assert migrated_round["platforms"]["zhilian"]["next_suggested"] == (
+        "jobagent zhilian apply review"
+    )
+    assert "preview_id" not in migrated_round["platforms"]["zhilian"]["evidence"]
+
+
+def test_reviewability_upgrade_preserves_other_platform_preview_and_interaction(tmp_path):
+    upgrade = importlib.import_module("jobagent.infra.client_upgrade")
+    app_dir = tmp_path / ".jobagent"
+    state = app_dir / "state"
+    _seed_preserved_state(app_dir)
+    _write_json(
+        state / "client_upgrade_state.json",
+        {
+            "client_version": "0.5.22",
+            "protocol_version": 1,
+            "state_migration_version": 4,
+            "status": "ready",
+        },
+    )
+    current_round = {
+        "schema_version": 3,
+        "round_id": "round-boss-preview",
+        "status": "active",
+        "platform_order": ["boss", "liepin", "zhilian", "51job"],
+        "platforms": {
+            "boss": {
+                "status": "awaiting_delivery_confirmation",
+                "next_suggested": "jobagent interaction respond --interaction-id boss-preview",
+                "evidence": {"discover_id": "dis-boss", "preview_id": "dpv-boss"},
+            },
+            "liepin": {"status": "pending"},
+            "zhilian": {"status": "pending"},
+            "51job": {"status": "pending"},
+        },
+    }
+    review_path = state / "discoveries" / "boss" / "dis-boss.review.json"
+    review_payload = {
+        "platform": "boss",
+        "discover_id": "dis-boss",
+        "manifest": {"signed": True},
+        "send_candidates": [{"id": "boss-1", "title": "产品经理"}],
+        "delivery_preview": {"preview_id": "dpv-boss"},
+    }
+    interaction = {
+        "kind": "delivery_confirmation",
+        "interaction_id": "boss-preview",
+        "context": {"discover_id": "dis-boss"},
+    }
+    _write_json(state / "current_round.json", current_round)
+    _write_json(review_path, review_payload)
+    _write_json(state / "pending_interaction.json", interaction)
+
+    report = upgrade.run_client_upgrade(
+        app_dir=app_dir,
+        current_version="0.5.23",
+        protocol_version=1,
+    )
+
+    assert report["ok"] is True
+    assert json.loads(review_path.read_text(encoding="utf-8")) == review_payload
+    assert json.loads(
+        (state / "pending_interaction.json").read_text(encoding="utf-8")
+    ) == interaction
+    assert json.loads(
+        (state / "current_round.json").read_text(encoding="utf-8")
+    ) == current_round
 
 
 def test_protocol_change_archives_unsigned_runtime_decisions_without_touching_audit(tmp_path):

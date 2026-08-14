@@ -138,6 +138,36 @@ def test_delivery_preview_rejects_changed_handoff_or_candidate_list():
         )
 
 
+@pytest.mark.parametrize("title", ["查看更多信息", "查看详情", "更多"])
+def test_zhilian_delivery_preview_rejects_unreviewable_core_fields(title):
+    with pytest.raises(DeliveryPreviewError) as error:
+        build_delivery_preview(
+            platform="zhilian",
+            discover_id="dis-bad-preview",
+            send_candidates=[
+                {
+                    "id": "job-bad",
+                    "title": title,
+                    "company": None,
+                    "salary": None,
+                    "url": "https://www.zhaopin.com/jobdetail/job-bad.htm",
+                }
+            ],
+            send_command="jobagent zhilian apply send --input reviewed.json",
+            selected_count=1,
+            promoted_count=0,
+            review_count=0,
+            rejected_count=0,
+            skipped_delivered_count=0,
+        )
+
+    assert error.value.payload["error"] == "delivery_candidate_unreviewable"
+    assert error.value.payload["platform"] == "zhilian"
+    assert error.value.payload["requires_user_action"] is False
+    assert error.value.payload["no_charge"] is True
+    assert error.value.payload["next_suggested"] == "jobagent zhilian apply review"
+
+
 def test_send_requires_preview_handoff_before_delivery(monkeypatch):
     from jobagent.application import delivery
 
@@ -166,7 +196,15 @@ def test_send_requires_preview_handoff_before_delivery(monkeypatch):
 def test_send_requires_bound_user_authorization_after_preview(monkeypatch):
     from jobagent.application import delivery
 
-    jobs = [{"id": "job-1", "title": "数据分析师", "url": "https://example.test/1"}]
+    jobs = [
+        {
+            "id": "job-1",
+            "title": "数据分析师",
+            "company": "示例科技",
+            "salary": "20-30K",
+            "url": "https://example.test/1",
+        }
+    ]
     preview = build_delivery_preview(
         platform="zhilian",
         discover_id="dis-confirm",

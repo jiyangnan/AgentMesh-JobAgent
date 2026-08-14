@@ -415,3 +415,28 @@ def discovery_decide(
         operation="discovery_decide",
         request_id=discover_id,
     )
+
+
+def discovery_repair(
+    *,
+    discover_id: str,
+    expected_manifest_id: str,
+    expected_candidate_digest: str,
+    patches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _request(
+        "POST",
+        f"/v1/discovery/{discover_id}/repair",
+        {
+            "client_version": __version__,
+            "protocol_version": PROTOCOL_VERSION,
+            "expected_manifest_id": expected_manifest_id,
+            "expected_candidate_digest": expected_candidate_digest,
+            "reason": "zhilian_reviewability_v1",
+            "patches": patches,
+        },
+        timeout=600,
+        max_attempts=3,
+        operation="discovery_repair",
+        request_id=discover_id,
+    )

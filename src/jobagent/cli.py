@@ -1174,10 +1174,12 @@ def main() -> None:
         from jobagent.platforms.discovery import CollectionError
 
         try:
+            from jobagent.application.decision_repair import DecisionRepairError
             from jobagent.application.delivery import UserInterventionRequired
             from jobagent.infra.delivery_preview import DeliveryPreviewError
             from jobagent.infra.delivery_authorization import DeliveryAuthorizationError
         except ImportError:
+            DecisionRepairError = ()  # type: ignore[assignment,misc]
             UserInterventionRequired = ()  # type: ignore[assignment,misc]
             DeliveryPreviewError = ()  # type: ignore[assignment,misc]
             DeliveryAuthorizationError = ()  # type: ignore[assignment,misc]
@@ -1208,6 +1210,8 @@ def main() -> None:
         elif DeliveryPreviewError and isinstance(exc, DeliveryPreviewError):
             payload = exc.payload
         elif DeliveryAuthorizationError and isinstance(exc, DeliveryAuthorizationError):
+            payload = exc.payload
+        elif DecisionRepairError and isinstance(exc, DecisionRepairError):
             payload = exc.payload
         elif isinstance(exc, PlatformLockError):
             payload = exc.payload

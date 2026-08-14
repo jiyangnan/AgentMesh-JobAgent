@@ -193,6 +193,13 @@ jobagent zhilian apply send --input <review_file> --preview-id <preview_id> --au
 jobagent zhilian audit
 ```
 
+If an older preserved Zhilian decision contains a generic link label or is missing
+company or salary, `jobagent zhilian apply review` repairs only those fields from
+the signed job detail URLs. The cloud returns a replacement signature for the same
+Discover with zero additional credits, then the CLI shows a new complete preview
+and still waits for the user's delivery confirmation. Do not create a replacement
+round or Discover.
+
 智联结果页中的 `kw...` URL 片段是平台内部状态，不是云端生成的职位搜索词。Agent 必须以 CLI 返回的可读 `query`、错误码和 `next_suggested` 为准，不得把该片段重新用于搜索，也不得据此自行跳过智联。
 
 智联慢导航期间，`loading` 或登录/账号证据冲突只会返回 `unknown`，不会要求用户重复登录。首页常驻的通用“登录/注册”入口属于弱证据；当个人中心导航与简历管理、投递活动等独立账户证据一致时，CLI 会继续按已登录处理。可见凭据表单或登录验证界面属于强未登录证据；强登录与强账户证据并存时仍会安全停止。只有稳定的 `zhilian_login_required` 才需要用户介入。城市筛选控件改版或旧城市 seed 失效时，CLI 会继续读取只读快照，并用页面标题、可见城市和岗位卡片等独立证据验证新城市码；单独一个 `jl` URL 码不会被信任。证据不足时流程关闭且不收费。若返回 `zhilian_page_state_unknown`、`retryable=true` 和 `request_preserved=true`，直接执行精确的 `next_suggested`，原 `request_id` 会被复用。

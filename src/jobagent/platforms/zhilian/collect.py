@@ -20,7 +20,7 @@ from .detail import (
     merge_zhilian_detail_into_job,
     unwrap_zhilian_detail_js_result,
 )
-from .parser import parse_zhilian_job, zhilian_job_id
+from .parser import is_reviewable_zhilian_job, parse_zhilian_job, zhilian_job_id
 from .selectors import (
     build_zhilian_city_filter_script,
     build_zhilian_keyword_search_script,
@@ -1751,14 +1751,15 @@ def write_zhilian_snapshot(path: str | Path, payload: dict[str, Any]) -> None:
 
 
 def _detail_hydration_order(jobs: list[Job]) -> list[tuple[int, Job]]:
-    indexed = list(enumerate(jobs))
-    missing_core = [item for item in indexed if _needs_zhilian_detail(item[1])]
-    complete = [item for item in indexed if not _needs_zhilian_detail(item[1])]
-    return missing_core + complete
+    return [
+        item
+        for item in enumerate(jobs)
+        if _needs_zhilian_detail(item[1])
+    ]
 
 
 def _needs_zhilian_detail(job: Job) -> bool:
-    return not job.company or not job.boss
+    return not is_reviewable_zhilian_job(job)
 
 
 def _combined_snapshot(snapshots: list[dict[str, Any]], fallback: dict[str, Any] | None = None) -> dict[str, Any]:

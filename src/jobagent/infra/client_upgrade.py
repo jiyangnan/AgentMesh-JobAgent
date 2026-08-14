@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from jobagent import __version__
+from jobagent.domain.reviewability import delivery_reviewability_issues
 from jobagent.infra.cloud_client import PROTOCOL_VERSION
 from jobagent.infra.profile_contract import profile_compatibility_issues
 from jobagent.infra.rounds import migrate_round_payload
 from jobagent.infra.state import APP_DIR
 
-STATE_MIGRATION_VERSION = 4
+STATE_MIGRATION_VERSION = 5
 
 _EPHEMERAL_FILES = (
     "state/release_manifest_cache.json",
@@ -199,7 +200,10 @@ def _migrate_delivery_confirmation_state(
     platforms = current.get("platforms")
     if isinstance(platforms, dict):
         for platform, item in platforms.items():
-            if not isinstance(item, dict) or item.get("status") != "reviewed":
+            if not isinstance(item, dict) or item.get("status") not in {
+                "reviewed",
+                "awaiting_delivery_confirmation",
+            }:
                 continue
             item["status"] = "awaiting_delivery_confirmation"
             item["next_suggested"] = (
@@ -219,6 +223,80 @@ def _migrate_delivery_confirmation_state(
             migrated.append(relative)
 
 
+def _migrate_zhilian_reviewability_state(
+    root: Path,
+    *,
+    migrated: list[str],
+    cleared: list[str],
+) -> None:
+    """Invalidate only Zhilian previews whose core review fields are unsafe."""
+
+    state_dir = root / "state"
+    discoveries = state_dir / "discoveries" / "zhilian"
+    affected_discoveries: set[str] = set()
+    if discoveries.exists():
+        for path in discoveries.glob("*.review.json"):
+            payload = _read_json(path)
+            if payload is None:
+                continue
+            send_candidates = [
+                item
+                for item in (payload.get("send_candidates") or [])
+                if isinstance(item, dict)
+            ]
+            if not any(delivery_reviewability_issues(item) for item in send_candidates):
+                continue
+            changed = False
+            for key in ("delivery_preview", "delivery_authorization"):
+                if key in payload:
+                    payload.pop(key, None)
+                    changed = True
+            if changed:
+                _write_json(path, payload)
+                migrated.append(_relative(path, root))
+            discover_id = str(payload.get("discover_id") or "")
+            if discover_id:
+                affected_discoveries.add(discover_id)
+
+    if not affected_discoveries:
+        return
+
+    pending_path = state_dir / "pending_interaction.json"
+    pending = _read_json(pending_path)
+    context = pending.get("context") if isinstance(pending, dict) else None
+    if (
+        isinstance(pending, dict)
+        and str(pending.get("kind") or "").startswith("delivery_")
+        and isinstance(context, dict)
+        and str(context.get("discover_id") or "") in affected_discoveries
+    ):
+        pending_path.unlink()
+        cleared.append(_relative(pending_path, root))
+
+    round_path = state_dir / "current_round.json"
+    current = _read_json(round_path)
+    if current is None:
+        return
+    platforms = current.get("platforms")
+    zhilian = platforms.get("zhilian") if isinstance(platforms, dict) else None
+    evidence = zhilian.get("evidence") if isinstance(zhilian, dict) else None
+    if (
+        not isinstance(zhilian, dict)
+        or zhilian.get("status") not in {"reviewed", "awaiting_delivery_confirmation"}
+        or not isinstance(evidence, dict)
+        or str(evidence.get("discover_id") or "") not in affected_discoveries
+    ):
+        return
+    zhilian["status"] = "awaiting_delivery_confirmation"
+    zhilian["next_suggested"] = "jobagent zhilian apply review"
+    evidence.pop("preview_id", None)
+    evidence.pop("authorization_id", None)
+    _write_json(round_path, current)
+    relative = _relative(round_path, root)
+    if relative not in migrated:
+        migrated.append(relative)
+
+
 def run_client_upgrade(
     *,
     app_dir: Path | None = None,
@@ -236,7 +314,8 @@ def run_client_upgrade(
     round_invalid = round_path.exists() and round_payload is None
     prior_version = marker.get("client_version") if marker else None
     prior_protocol = marker.get("protocol_version") if marker else None
-    migration_changed = not marker or marker.get("state_migration_version") != STATE_MIGRATION_VERSION
+    prior_migration_version = int(marker.get("state_migration_version") or 0) if marker else 0
+    migration_changed = prior_migration_version != STATE_MIGRATION_VERSION
     version_changed = prior_version is not None and prior_version != current_version
     protocol_changed = prior_protocol is not None and prior_protocol != protocol_version
     upgrade_detected = bool(
@@ -294,8 +373,14 @@ def run_client_upgrade(
                 _write_json(round_path, migrated_round)
                 migrated.append("state/current_round.json")
 
-        if migration_changed:
+        if prior_migration_version < 4:
             _migrate_delivery_confirmation_state(
+                root,
+                migrated=migrated,
+                cleared=cleared,
+            )
+        if prior_migration_version < 5:
+            _migrate_zhilian_reviewability_state(
                 root,
                 migrated=migrated,
                 cleared=cleared,

@@ -2401,6 +2401,9 @@ def test_reviewing_an_old_review_file_preserves_existing_promotions(
                 {
                     "id": "selected",
                     "title": "数据分析师",
+                    "company": "示例科技",
+                    "salary": "20-30K",
+                    "url": "https://www.zhaopin.com/jobdetail/selected.htm",
                     "classification": "selected",
                 }
             ],
@@ -2408,6 +2411,9 @@ def test_reviewing_an_old_review_file_preserves_existing_promotions(
                 {
                     "id": "promoted",
                     "title": "数据运营经理",
+                    "company": "另一家公司",
+                    "salary": "25-35K",
+                    "url": "https://www.zhaopin.com/jobdetail/promoted.htm",
                     "classification": "review",
                 }
             ],
@@ -2483,11 +2489,17 @@ def test_reviewing_an_adjusted_review_file_preserves_delivery_exclusions(
                 {
                     "id": "keep",
                     "title": "数据分析师",
+                    "company": "示例科技",
+                    "salary": "20-30K",
+                    "url": "https://www.zhaopin.com/jobdetail/keep.htm",
                     "classification": "selected",
                 },
                 {
                     "id": "exclude",
                     "title": "AI 产品经理",
+                    "company": "另一家公司",
+                    "salary": "25-35K",
+                    "url": "https://www.zhaopin.com/jobdetail/exclude.htm",
                     "classification": "selected",
                 },
             ],
