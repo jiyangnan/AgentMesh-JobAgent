@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from jobagent.platforms.boss import boss_job_id, parse_boss_job
 from jobagent.platforms.job51 import job51_job_id, parse_job51_job
@@ -82,18 +83,30 @@ class _LiepinCityResolutionDriver:
         return {"ok": True, "url": url}
 
     def _exec_js(self, js_code: str):
-        if "liepin_city_code_resolution" in js_code:
+        if "liepin_city_route_discovery" in js_code:
             return {
                 "ok": bool(self.resolved_code),
                 "city": "佛山",
-                "code": self.resolved_code,
-                "url": "https://www.liepin.com/zhaopin/",
-                "error": "" if self.resolved_code else "liepin_city_code_not_found",
+                "route": (
+                    "https://www.liepin.com/city-foshan/"
+                    if self.resolved_code
+                    else ""
+                ),
+                "candidateCount": 300,
             }
+        if "liepin_city_search_evidence" in js_code:
+            if not self.opened or not self.resolved_code:
+                return {}
+            query = parse_qs(urlparse(self.opened[-1]).query).get("key", [""])[0]
+            return _liepin_city_evidence("佛山", self.resolved_code, query)
+        query = parse_qs(urlparse(self.opened[-1]).query).get("key", [""])[0]
         return {
             "ok": True,
             "url": self.opened[-1],
             "candidateCount": 1,
+            "cityEvidence": _liepin_city_evidence(
+                "佛山", self.resolved_code, query
+            ),
             "cards": [
                 {
                     "jobId": "dynamic-city-1",
@@ -106,20 +119,41 @@ class _LiepinCityResolutionDriver:
         }
 
 
-def test_liepin_collector_resolves_unbundled_city_from_page_metadata():
+def _liepin_city_evidence(city: str, code: str, query: str) -> dict:
+    return {
+        "controlCity": city,
+        "controlCode": code,
+        "metaCity": city,
+        "titleCity": city,
+        "visibleCity": city,
+        "inputQuery": query,
+        "urlQuery": query,
+        "jobCardCount": 1,
+        "noResults": False,
+        "resultSurface": True,
+    }
+
+
+def test_liepin_collector_resolves_unbundled_city_from_page_metadata(tmp_path):
     driver = _LiepinCityResolutionDriver("0757")
 
-    result = LiepinReadOnlyCollector(driver=driver).collect("AI产品经理", city="佛山市")
+    result = LiepinReadOnlyCollector(
+        driver=driver,
+        city_cache_path=tmp_path / "liepin-cities.json",
+    ).collect("AI产品经理", city="佛山市")
 
     assert result.ok is True
     assert "city=0757" in driver.opened[-1]
     assert result.jobs[0].city == "佛山"
 
 
-def test_liepin_collector_rejects_unverified_city_without_searching_raw_text():
+def test_liepin_collector_rejects_unverified_city_without_searching_raw_text(tmp_path):
     driver = _LiepinCityResolutionDriver("")
 
-    result = LiepinReadOnlyCollector(driver=driver).collect("AI产品经理", city="未收录城市")
+    result = LiepinReadOnlyCollector(
+        driver=driver,
+        city_cache_path=tmp_path / "liepin-cities.json",
+    ).collect("AI产品经理", city="未收录城市")
 
     assert result.ok is False
     assert result.error == "liepin_city_code_not_found"

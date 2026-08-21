@@ -2,6 +2,20 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.28] - 2026-08-21
+
+### Fixed
+
+- Discover unbundled Liepin cities from the platform's official city directory instead of requiring a bundled city-code entry. The same flow covers cities such as Zhengzhou and Hangzhou without adding one-off mappings.
+- Verify the requested city, readable keyword and real result state across the city control, page metadata, title, search input and result cards before accepting a candidate or caching city metadata.
+- Reject stale or conflicting city pages, including a previously open Shenzhen page when the signed query requests another city. An unresolved city remains fail-closed and does not return cross-city candidates.
+- Persist only cross-verified city metadata. A stale cached or bundled candidate is revalidated against the live result page and removed when it no longer agrees.
+- Return redacted city-resolution diagnostics without exposing account, profile, page content or query data.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, active round, login receipt, preserved SearchPlan request and audits remain in place. Resume with `jobagent liepin discover`; the same request ID is reused and the failed browser collection adds no charge. Do not create another round, clear `~/.jobagent` or replace the Chrome profile.
+
 ## [0.5.27] - 2026-08-21
 
 ### Fixed

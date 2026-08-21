@@ -2103,6 +2103,79 @@ def test_discover_collection_failure_preserves_request_and_no_charge(
     assert pending["collection_recovery"]["attempts"] == 3
 
 
+def test_liepin_city_failure_preserves_exact_request_without_charge(
+    tmp_path,
+    monkeypatch,
+):
+    import jobagent.application.discover as application
+    import jobagent.infra.discovery_state as discovery_state
+
+    profile = {
+        "schema_version": 1,
+        "preferences": {"targetRoles": [{"title": "高级产品经理"}]},
+    }
+    plan = {
+        "platform": "liepin",
+        "discover_id": "dis_liepin_city",
+        "queries": [{"keyword": "高级产品经理", "city": "郑州", "page_limit": 1}],
+    }
+    request_ids: list[str] = []
+    monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
+    monkeypatch.setattr(application, "load_json", lambda _path: profile)
+    monkeypatch.setattr(application, "require_compatible_profile", lambda _profile: None)
+    monkeypatch.setattr(application, "load_pending_decision", lambda _platform: None)
+    monkeypatch.setattr(discovery_state, "discoveries_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        application.rounds,
+        "ensure_current_round",
+        lambda: {
+            "round_id": "round-liepin",
+            "intent": {
+                "status": "confirmed",
+                "target_roles": ["高级产品经理"],
+                "target_cities": ["郑州", "杭州"],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "jobagent.infra.account_state.current_account_ref",
+        lambda: "acct_account_a",
+    )
+    monkeypatch.setattr(application, "verify_search_plan", lambda value, **_kwargs: value)
+    monkeypatch.setattr(application, "active_command", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(
+        application, "PlatformSessionLock", lambda *_args, **_kwargs: nullcontext()
+    )
+
+    def start(**kwargs):
+        request_ids.append(kwargs["request_id"])
+        return plan
+
+    def fail_collection(*_args, **_kwargs):
+        raise application.CollectionError(
+            "liepin_city_evidence_unverified",
+            "Liepin city evidence did not verify",
+        )
+
+    monkeypatch.setattr(application.cloud_client, "discovery_start", start)
+    monkeypatch.setattr(application, "collect_from_search_plan", fail_collection)
+
+    for _attempt in range(2):
+        with pytest.raises(application.CollectionError) as error:
+            application.run_discover("liepin", page_delay=0)
+        assert error.value.details["request_preserved"] is True
+        assert error.value.details["billing_status"] == "not_charged"
+        assert error.value.details["retryable"] is False
+        assert error.value.details["next_suggested"] == (
+            "jobagent browser diagnose --platform liepin"
+        )
+
+    assert len(set(request_ids)) == 1
+    pending = discovery_state.load_pending_start("liepin")
+    assert pending is not None
+    assert pending["request_id"] == request_ids[0]
+
+
 def test_zhilian_search_navigation_recovery_is_not_classified_as_city_recovery():
     import jobagent.application.discover as application
 

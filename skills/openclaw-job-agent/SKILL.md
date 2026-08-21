@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.5.27
+version: 0.5.28
 metadata:
   openclaw:
     emoji: "💼"
@@ -27,6 +27,7 @@ Drive the official Job Agent CLI while keeping the user in control of credential
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job as complete vertical chains. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> delivery preview -> delivery confirmation -> send -> audit` chain and complete its audit before logging in to the next platform. Never operate their shared browser concurrently.
 - Stop whenever `requires_user_action=true`; relay `user_prompt` exactly and wait.
 - On a verified Zhilian query and city route, reject cross-city fallback cards and treat that query as empty; preserve valid candidates already collected by earlier signed queries.
+- Never guess or hardcode a Liepin city code. The CLI discovers unbundled cities from Liepin's official city directory and accepts them only after the readable city, original keyword and result surface agree. On a city-resolution error, preserve the current round, browser profile and request; follow the exact top-level recovery without starting another Discover or clearing state.
 - If Zhilian review detects a generic title or missing company/salary in a preserved signed decision, follow its exact `jobagent zhilian apply review` recovery. It reads only the signed job detail URLs, repairs trusted fields, safely excludes only a candidate that remains unreviewable, and re-signs the same Discover with zero additional credits. It regenerates the remaining complete preview and still stops for the user's confirmation. Never replace it with a new round or Discover.
 - Report `selected / review / rejected`, then show the complete final `selected` list and stop for the user's delivery decision.
 - On `event=delivery_preview` with `error=interaction_required`, show every row in `delivery_preview.items`, then render the returned confirmation card. Never choose for the user. Map `confirm_all`, `exclude_jobs` or `cancel_delivery` through the exact interaction ID.
@@ -113,6 +114,8 @@ jobagent interaction respond --interaction-id "<id>" --choice confirm_all
 jobagent liepin apply send --input <review_file> --preview-id <preview_id> --authorization-id <authorization_id>
 jobagent liepin audit
 ```
+
+Liepin city metadata is client-managed and live-verified. Do not substitute a remembered numeric code or reuse the city shown on an older tab; the CLI rejects cross-city evidence and caches only independently verified results.
 
 智联招聘:
 

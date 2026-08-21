@@ -7,6 +7,7 @@ review or perform controlled automatic send/apply.
 
 from .apply import LiepinApplyOpener, LiepinApplyOpenResult, LiepinApplySender
 from .audit import LiepinAuditEvent, LiepinAuditLog, liepin_audit_log_path
+from .city_resolver import LiepinCityResolver
 from .collect import (
     LiepinCollectResult,
     LiepinReadOnlyCollector,
@@ -25,6 +26,7 @@ __all__ = [
     "LiepinAuditEvent",
     "LiepinAuditLog",
     "LiepinCollectResult",
+    "LiepinCityResolver",
     "LiepinReadOnlyCollector",
     "LiepinSessionGuide",
     "LiepinSessionStatus",

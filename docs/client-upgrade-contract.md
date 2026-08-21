@@ -78,6 +78,7 @@
 - `0.5.10 -> 0.5.11`：不迁移或清理任何持久状态。已保存的 Discover `request_id`、`discover_id` 与本地候选原样保留；有效签名 SearchPlan 跨过 TTL 后由 Server 针对同一请求重新签发，续签本身不收费，也不重新采集。签名篡改、账户错配、画像或意图上下文变化不能借过期恢复绕过校验，必须 fail closed。
 - `0.5.11 -> 0.5.12`：不迁移或清理任何持久状态。智联最近一次成功登录检查以短时凭证绑定当前 round、platform 与 managed Chrome session；结果页缺少首页账户区时可作为辅助证据，凭证过期、轮次或浏览器会话变化即失效，强登录表单或验证界面始终优先。采集失败保留该凭证与原 Discover `request_id`，页面已就绪但岗位 DOM 无法解析时返回 `zhilian_job_cards_not_found`、`retryable=true`、`no_charge=true`，不新建轮次、不重复登录、不重复收费。
 - `0.5.26 -> 0.5.27`：若用户在空城市的浏览器采集失败后明确补充了目标城市，且活动轮次尚未产生候选、签名决策、预览、授权或投递证据，则状态迁移 v7 原地更新该轮次的画像摘要，保留 round ID、账户、API Key、画像、Chrome profile、近期登录凭证与 audit，只清除与旧画像绑定且尚未收费的 Discover start 上下文，并从当前平台 Discover 继续。已有任何候选或投递进度时不自动重绑，返回冲突并保持原状态。
+- `0.5.27 -> 0.5.28`：不迁移或清理账户、API Key、画像、活动 round、近期猎聘登录凭证、Chrome profile、保留的 SearchPlan request 或 audit。新猎聘城市缓存独立创建，只有城市控件、页面元信息/标题、原始可读关键词和真实结果面交叉验证成功后才写入；旧页面或冲突证据不写缓存。原 `liepin_city_code_not_found` 失败保持未收费，升级后直接执行 `jobagent liepin discover` 复用同一 `request_id`。
 - 损坏状态：原文件可追溯归档，后续命令不因 JSON 解析错误崩溃。
 - Release archive 校验固定 `tar.umask=002`，忽略系统级 Git 配置、全局 attributes 和 replace refs；发布机与客户机必须对同一 commit 得到相同 SHA256。
 - 旧客户端若返回 `release artifact hash mismatch`，不得关闭校验或删除 `~/.jobagent`。重新运行官方安装器一次以修复受管仓库配置，并保留账户状态、浏览器登录、画像、轮次和审计。

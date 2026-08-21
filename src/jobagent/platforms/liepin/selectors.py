@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-LIEPIN_SELECTOR_VERSION = "2026-06-12.2"
+LIEPIN_SELECTOR_VERSION = "2026-08-21.1"
 
 LIEPIN_CARD_SELECTORS: tuple[str, ...] = (
     "[data-job-id]",
@@ -29,6 +29,18 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
       const loginRequired = /\\/login|passport|account/.test(href) || /登录|账号|passport/i.test(title);
       const seen = new Set();
       const cards = [];
+      const resultCardCount = document.querySelectorAll(
+        '.job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"]'
+      ).length;
+      const dq = document.querySelector('input[name="dq"]');
+      const keyInput = document.querySelector('input[name="key"]');
+      const locationMeta = document.querySelector('meta[name="location"]');
+      const locationContent = locationMeta ? String(locationMeta.getAttribute('content') || '') : '';
+      const metaCityMatch = locationContent.match(/(?:^|;)\\s*city=([^;]+)/);
+      const titleCityMatch = title.match(/【?([\\u4e00-\\u9fa5]{{2,8}})(?:招聘|人才)/);
+      let urlQuery = '';
+      try {{ urlQuery = new URL(href).searchParams.get('key') || ''; }}
+      catch (error) {{ urlQuery = ''; }}
       const rejected = {{
         emptyText: 0,
         weakSignal: 0,
@@ -143,6 +155,18 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
         candidateCount: candidates.length,
         cardCount: cards.length,
         rejected,
+        cityEvidence: {{
+          controlCity: dq ? String(dq.getAttribute('data-name') || '').trim().replace(/市$/, '') : '',
+          controlCode: dq ? String(dq.value || dq.getAttribute('value') || '').trim() : '',
+          metaCity: metaCityMatch ? String(metaCityMatch[1] || '').trim().replace(/市$/, '') : '',
+          titleCity: titleCityMatch ? String(titleCityMatch[1] || '').trim().replace(/市$/, '') : '',
+          visibleCity: '',
+          inputQuery: keyInput ? String(keyInput.value || keyInput.getAttribute('value') || keyInput.getAttribute('data-name') || '').trim() : '',
+          urlQuery,
+          jobCardCount: resultCardCount,
+          noResults: resultCardCount === 0 && /暂无相关职位|暂时没有合适|没有找到相关职位|非常抱歉/.test(bodyText.slice(0, 3000)),
+          resultSurface: resultCardCount > 0 || /暂无相关职位|暂时没有合适|没有找到相关职位|非常抱歉/.test(bodyText.slice(0, 3000))
+        }},
         cards
       }});
     }})()

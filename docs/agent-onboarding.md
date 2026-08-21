@@ -208,6 +208,8 @@ jobagent liepin apply send --input <review_file> --preview-id <preview_id> --aut
 jobagent liepin audit
 ```
 
+Do not guess, hardcode or manually substitute a Liepin city code. When a signed query requests a city that is not bundled, the CLI discovers the city's official route from Liepin's city directory, then requires independent agreement between the readable city control, page metadata/title, original readable keyword and an actual result or explicit no-result state. Only cross-verified metadata is cached. A stale page from another city is rejected and cannot contribute candidates. If city evidence cannot be verified, keep the current round, profile and login session, report the machine-readable error, and follow the exact top-level `next_suggested`; the preserved Discover request is not charged again.
+
 ### 智联招聘
 
 ```bash
