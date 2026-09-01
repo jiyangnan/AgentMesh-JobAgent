@@ -300,6 +300,7 @@ The canonical agent workflow is in [docs/agent-onboarding.md](docs/agent-onboard
 ## Safety and Privacy
 
 - Never paste API Keys, browser cookies or complete resume text into issues.
+- After verified account setup, the CLI records one `jobagent_initialized` fact; after each platform's first completed real delivery with persisted success audit, it records one `delivery_verified` fact. Initialization is the first verifiable account anchor observed during instrumentation coverage, not a claim about an installation that predates this feature. Events contain only a random event ID, UTC time, client release and (for delivery) the platform. They never contain an account identifier, API Key, round, job, resume, URL or command arguments. A `0600`, account-bound local spool retains rejected, unacknowledged and failed relays without changing command output or workflow state. Its hard limit is 25 events; the current fact set can create at most five. Set `JOBAGENT_ANALYTICS_DISABLED=1` or `DO_NOT_TRACK=1` to opt out.
 - Starting a job-search round authorizes discovery and signed review. Each platform's final delivery list still requires explicit user confirmation.
 - Never auto-promote `review` jobs or send `rejected` jobs.
 - Do not run shared browser actions in parallel.

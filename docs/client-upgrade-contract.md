@@ -22,6 +22,7 @@
 | Job Agent Chrome profile / cookies | 永远保留 | 自动升级不得删除或重建浏览器 profile；需要重新登录时由平台登录检查显式提示 |
 | `state/profile.json` | 保留并校验 schema | 可兼容则原样保留；不兼容时阻断平台命令并要求重新分析简历 |
 | 四个平台 audit log | 永远保留 | 它们是投递、消息送达和去重证据，不参与缓存清理 |
+| `state/analytics_spool.json` | 按账户保留 | 仅保存最多 25 条去标识化 committed facts 与固定去重标记，文件权限 `0600`；账户切换时随该账户状态保存/恢复，owner 或 Key 证明不一致时不得发送 |
 | `state/support_state.json` | 保留 | 首次投递后的单次提示状态不得因升级重置 |
 | `state/current_round.json` | 按 schema 迁移 | v2 活动 round 原样保留平台进度并标记 `legacy_implicit` 目标岗位意图；状态迁移 v4 将旧版尚未发送的 `reviewed` 平台退回 `awaiting_delivery_confirmation`，不得沿用旧自动发送命令；状态迁移 v7 仅允许尚未产生候选、签名决策、预览、授权或投递证据的活动轮次重新绑定用户明确更新后的画像；更旧且含义不明确的平台状态重置为安全的待执行状态；损坏 JSON 保留到 archive 后重建 |
 | `state/rounds/` | 保留 | 历史轮次不覆盖、不删除 |
@@ -33,6 +34,10 @@
 | activity / browser / update lock | 死亡进程自动清理 | 锁所属 PID 存活时阻断迁移；不得抢占真实运行中的命令 |
 | logs | 保留 | 用于跨版本排障；不得写入 API Key 等秘密 |
 | 用户配置 | 校验，不覆盖 | 新版默认值不能静默覆盖用户配置；不兼容项必须显式报告 |
+
+Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发送每批最多 25 条事件；虽然当前事实全集最多只有 5 条（一次初始化和四个平台各一次已验证投递），spool 仍以 25 为硬上限并与 Server 批量合同一致。网络、HTTP、响应解析失败、Server 明确拒绝或未确认的事件都 fail closed 留在本地，不改变原命令输出、退出码或招聘工作流状态。`JOBAGENT_ANALYTICS_DISABLED=1`、`DO_NOT_TRACK=1` 可选择退出，`JOBAGENT_ANALYTICS_KILL_SWITCH=1` 可关闭采集与发送；三者都保留已有 spool，不做隐式清理。
+
+`jobagent_initialized` 是 instrumentation coverage 启用后，该账户首次成功在线验证并完成 owner 落盘的可观测初始化锚点；成功的 `init`、legacy `account bind` 或新账户 `account switch` 都可补齐同一个幂等事实。它不代表早于该埋点版本的历史首次安装时间；失败、只读 `account status` 与 `init --no-verify` 均不得记录。
 
 ## 启动顺序
 

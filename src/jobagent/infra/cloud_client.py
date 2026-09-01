@@ -320,6 +320,30 @@ def me(*, api_key: str | None = None) -> dict[str, Any]:
     )
 
 
+def analytics_events(
+    events: list[dict[str, Any]],
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Relay a bounded batch of privacy-whitelisted client facts."""
+
+    if (
+        not events
+        or len(events) > 25
+        or any(not isinstance(event, dict) for event in events)
+    ):
+        raise ValueError("Analytics relay requires between 1 and 25 events.")
+    return _request(
+        "POST",
+        "/v1/analytics/events",
+        {"events": events},
+        api_key=api_key,
+        timeout=2,
+        max_attempts=1,
+        operation="analytics_relay",
+    )
+
+
 def resume_analyze(
     resume_text: str,
     file_name: str | None = None,

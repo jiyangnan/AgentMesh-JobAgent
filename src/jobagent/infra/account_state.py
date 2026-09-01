@@ -30,6 +30,7 @@ _ACCOUNT_OWNED_PATHS = (
     "liepin_audit_log.json",
     "zhilian_audit_log.json",
     "job51_audit_log.json",
+    "analytics_spool.json",
 )
 _SESSION_MARKERS = (
     "browser_session.json",
@@ -151,6 +152,24 @@ def current_account_ref(*, app_dir: Path | None = None) -> str | None:
     owner = _read_json(_owner_path(_root(app_dir))) or {}
     account_ref = str(owner.get("account_ref") or "")
     return account_ref if _ACCOUNT_REF.fullmatch(account_ref) else None
+
+
+def api_key_matches_current_owner(
+    api_key: str,
+    *,
+    app_dir: Path | None = None,
+) -> bool:
+    """Check the active account proof without migrating or exposing its identity."""
+
+    owner = _read_json(_owner_path(_root(app_dir))) or {}
+    account_ref = str(owner.get("account_ref") or "")
+    fingerprint = str(owner.get("key_fingerprint") or "")
+    return bool(
+        _ACCOUNT_REF.fullmatch(account_ref)
+        and fingerprint
+        and api_key
+        and hmac.compare_digest(fingerprint, _key_fingerprint(api_key))
+    )
 
 
 def _bind(

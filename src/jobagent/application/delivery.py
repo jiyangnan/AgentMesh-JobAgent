@@ -531,6 +531,12 @@ def send_reviewed(
         },
         next_suggested=next_suggested,
     )
+    _record_completed_delivery_fact(
+        platform,
+        complete_batch=complete_batch,
+        delivered=delivered,
+        dry_run=dry_run,
+    )
     from jobagent.infra.interaction_state import (
         clear_pending_interaction,
         load_pending_interaction,
@@ -629,6 +635,38 @@ def _audit_log(platform: str):
 
         return Job51AuditLog()
     raise ValueError(f"Unsupported audit platform: {platform}")
+
+
+def _has_persisted_verified_delivery(platform: str) -> bool:
+    log = _audit_log(platform)
+    if platform == "boss":
+        return bool(log.delivered_job_keys())
+    if platform in {"liepin", "zhilian"}:
+        return bool(log.delivered_apply_send_urls())
+    if platform == "51job":
+        return bool(log.delivered_apply_send_keys())
+    return False
+
+
+def _record_completed_delivery_fact(
+    platform: str,
+    *,
+    complete_batch: bool,
+    delivered: int,
+    dry_run: bool,
+) -> None:
+    """Record only a completed, real delivery already present in its audit."""
+
+    if dry_run or not complete_batch or delivered <= 0:
+        return
+    try:
+        if not _has_persisted_verified_delivery(platform):
+            return
+        from jobagent.infra.analytics import record_delivery_verified
+
+        record_delivery_verified(platform)
+    except Exception:
+        pass
 
 
 def _failed_record(record: dict[str, Any]) -> bool:
