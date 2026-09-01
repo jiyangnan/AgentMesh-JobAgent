@@ -30,7 +30,6 @@ _ACCOUNT_OWNED_PATHS = (
     "liepin_audit_log.json",
     "zhilian_audit_log.json",
     "job51_audit_log.json",
-    "analytics_spool.json",
 )
 _SESSION_MARKERS = (
     "browser_session.json",

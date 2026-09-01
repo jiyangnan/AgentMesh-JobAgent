@@ -22,7 +22,7 @@
 | Job Agent Chrome profile / cookies | 永远保留 | 自动升级不得删除或重建浏览器 profile；需要重新登录时由平台登录检查显式提示 |
 | `state/profile.json` | 保留并校验 schema | 可兼容则原样保留；不兼容时阻断平台命令并要求重新分析简历 |
 | 四个平台 audit log | 永远保留 | 它们是投递、消息送达和去重证据，不参与缓存清理 |
-| `state/analytics_spool.json` | 按账户保留 | 仅保存最多 25 条去标识化 committed facts 与固定去重标记，文件权限 `0600`；账户切换时随该账户状态保存/恢复，owner 或 Key 证明不一致时不得发送 |
+| `accounts/<account_ref>/state/analytics_spool.json` | 按账户保留 | 仅保存最多 25 条去标识化 committed facts 与固定去重标记，文件权限 `0600`；固定保存在既有账户命名空间中，降级期间切换账户也不会移动或误认，owner 或 Key 证明不一致时不得发送 |
 | `state/support_state.json` | 保留 | 首次投递后的单次提示状态不得因升级重置 |
 | `state/current_round.json` | 按 schema 迁移 | v2 活动 round 原样保留平台进度并标记 `legacy_implicit` 目标岗位意图；状态迁移 v4 将旧版尚未发送的 `reviewed` 平台退回 `awaiting_delivery_confirmation`，不得沿用旧自动发送命令；状态迁移 v7 仅允许尚未产生候选、签名决策、预览、授权或投递证据的活动轮次重新绑定用户明确更新后的画像；更旧且含义不明确的平台状态重置为安全的待执行状态；损坏 JSON 保留到 archive 后重建 |
 | `state/rounds/` | 保留 | 历史轮次不覆盖、不删除 |

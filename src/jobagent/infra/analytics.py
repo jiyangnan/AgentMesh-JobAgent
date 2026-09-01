@@ -50,7 +50,18 @@ def _disabled() -> bool:
 
 
 def _spool_path() -> Path:
-    return state.STATE_DIR / "analytics_spool.json"
+    from jobagent.infra.account_state import current_account_ref
+
+    account_ref = current_account_ref(app_dir=_active_app_dir())
+    if not account_ref:
+        return state.STATE_DIR / "analytics_spool.json"
+    return (
+        _active_app_dir()
+        / "accounts"
+        / account_ref
+        / "state"
+        / "analytics_spool.json"
+    )
 
 
 def _state_lock_path() -> Path:

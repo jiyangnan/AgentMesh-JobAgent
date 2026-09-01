@@ -267,7 +267,7 @@ def test_acknowledged_and_duplicate_events_leave_dedupe_markers(
     assert {event["event_id"] for event in pending}
 
 
-def test_key_switch_fails_closed_and_account_switch_moves_spool(
+def test_key_switch_fails_closed_and_account_spools_stay_separate(
     bound_analytics,
     monkeypatch,
 ):
@@ -302,6 +302,24 @@ def test_key_switch_fails_closed_and_account_switch_moves_spool(
     )
     assert saved.read_bytes() == before
     assert stat.S_IMODE(saved.stat().st_mode) == 0o600
+
+    other_key = "jobagent_live_other_key"
+    other_spool = analytics._spool_path()
+    assert other_spool != saved
+    assert analytics.record_jobagent_initialized(api_key=other_key) is True
+
+    account_state.switch_account_state(
+        {"account": {"account_ref": ACCOUNT_REF}},
+        new_state=True,
+        api_key=API_KEY,
+        app_dir=bound_analytics,
+    )
+
+    assert analytics._spool_path() == saved
+    assert _spool()["facts"] == ["jobagent_initialized"]
+    assert json.loads(other_spool.read_text(encoding="utf-8"))["facts"] == [
+        "jobagent_initialized"
+    ]
 
 
 @pytest.mark.parametrize(
