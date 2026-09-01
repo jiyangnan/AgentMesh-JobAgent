@@ -31,6 +31,7 @@ _DISABLE_ENV_VARS = (
 )
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CLIENT_RELEASE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$")
+_ACCOUNT_REF = re.compile(r"^acct_[A-Za-z0-9_-]{8,}$")
 
 _STATE_THREAD_LOCK = threading.Lock()
 _FLUSH_THREAD_LOCK = threading.Lock()
@@ -49,12 +50,15 @@ def _disabled() -> bool:
     )
 
 
-def _spool_path() -> Path:
+def _spool_path(account_ref: str | None = None) -> Path:
     from jobagent.infra.account_state import current_account_ref
 
-    account_ref = current_account_ref(app_dir=_active_app_dir())
+    if account_ref is None:
+        account_ref = current_account_ref(app_dir=_active_app_dir())
     if not account_ref:
         return state.STATE_DIR / "analytics_spool.json"
+    if not _ACCOUNT_REF.fullmatch(account_ref):
+        raise ValueError("Invalid analytics account reference.")
     return (
         _active_app_dir()
         / "accounts"
@@ -202,8 +206,8 @@ def _valid_event(event: Any) -> bool:
     return False
 
 
-def _load_spool() -> dict[str, Any] | None:
-    path = _spool_path()
+def _load_spool(*, account_ref: str) -> dict[str, Any] | None:
+    path = _spool_path(account_ref)
     if not path.exists():
         return _empty_spool()
     try:
@@ -242,8 +246,12 @@ def _load_spool() -> dict[str, Any] | None:
     return payload
 
 
-def _write_spool(payload: dict[str, Any]) -> None:
-    path = _spool_path()
+def _write_spool(
+    payload: dict[str, Any],
+    *,
+    account_ref: str,
+) -> None:
+    path = _spool_path(account_ref)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     fd: int | None = None
@@ -270,12 +278,19 @@ def _write_spool(payload: dict[str, Any]) -> None:
             pass
 
 
-def _owner_matches(api_key: str) -> bool:
+def _verified_account_ref(api_key: str) -> str | None:
     if not api_key:
-        return False
-    from jobagent.infra.account_state import api_key_matches_current_owner
+        return None
+    from jobagent.infra.account_state import verified_account_ref_for_api_key
 
-    return api_key_matches_current_owner(api_key, app_dir=_active_app_dir())
+    return verified_account_ref_for_api_key(api_key, app_dir=_active_app_dir())
+
+
+def _owner_matches(api_key: str, account_ref: str) -> bool:
+    if not api_key or not _ACCOUNT_REF.fullmatch(account_ref):
+        return False
+
+    return _verified_account_ref(api_key) == account_ref
 
 
 def _new_event(event_name: str, payload: dict[str, str]) -> dict[str, Any]:
@@ -289,15 +304,18 @@ def _new_event(event_name: str, payload: dict[str, str]) -> dict[str, Any]:
 
 
 def _record_fact(event_name: str, payload: dict[str, str], *, api_key: str) -> bool:
-    if _disabled() or not _owner_matches(api_key):
+    if _disabled():
+        return False
+    account_ref = _verified_account_ref(api_key)
+    if account_ref is None:
         return False
     fact = _fact_key(event_name, payload)
     if fact is None:
         return False
     with _exclusive_lock(_state_lock_path(), _STATE_THREAD_LOCK) as acquired:
-        if not acquired or not _owner_matches(api_key):
+        if not acquired or not _owner_matches(api_key, account_ref):
             return False
-        spool = _load_spool()
+        spool = _load_spool(account_ref=account_ref)
         if spool is None or fact in spool["facts"]:
             return False
         if len(spool["events"]) >= MAX_SPOOL_EVENTS:
@@ -307,8 +325,8 @@ def _record_fact(event_name: str, payload: dict[str, str], *, api_key: str) -> b
             return False
         spool["facts"].append(fact)
         spool["events"].append(event)
-        _write_spool(spool)
-    schedule_flush(api_key=api_key)
+        _write_spool(spool, account_ref=account_ref)
+    schedule_flush(api_key=api_key, account_ref=account_ref)
     return True
 
 
@@ -379,7 +397,11 @@ def _acknowledged_ids(
     return acknowledged
 
 
-def _flush_once(*, api_key: str | None = None) -> bool:
+def _flush_once(
+    *,
+    api_key: str | None = None,
+    account_ref: str | None = None,
+) -> bool:
     """Relay one bounded batch. All failures retain the original spool."""
 
     if _disabled():
@@ -389,19 +411,20 @@ def _flush_once(*, api_key: str | None = None) -> bool:
 
         api_key = load_api_key()
     key = str(api_key or "")
-    if not _owner_matches(key):
+    captured_ref = account_ref or _verified_account_ref(key)
+    if captured_ref is None or not _owner_matches(key, captured_ref):
         return False
     with _exclusive_lock(_flush_lock_path(), _FLUSH_THREAD_LOCK) as flush_acquired:
-        if not flush_acquired or not _owner_matches(key):
+        if not flush_acquired or not _owner_matches(key, captured_ref):
             return False
         with _exclusive_lock(_state_lock_path(), _STATE_THREAD_LOCK) as state_acquired:
             if not state_acquired:
                 return False
-            spool = _load_spool()
+            spool = _load_spool(account_ref=captured_ref)
             if spool is None:
                 return False
             events = [dict(event) for event in spool["events"][:MAX_RELAY_BATCH]]
-        if not events or not _owner_matches(key):
+        if not events or not _owner_matches(key, captured_ref):
             return False
         try:
             from jobagent.infra import cloud_client
@@ -411,12 +434,12 @@ def _flush_once(*, api_key: str | None = None) -> bool:
             return False
         pending_ids = {str(event["event_id"]) for event in events}
         acknowledged = _acknowledged_ids(response, pending_ids=pending_ids)
-        if acknowledged is None or not acknowledged or not _owner_matches(key):
+        if acknowledged is None or not acknowledged:
             return False
         with _exclusive_lock(_state_lock_path(), _STATE_THREAD_LOCK) as state_acquired:
-            if not state_acquired or not _owner_matches(key):
+            if not state_acquired:
                 return False
-            current = _load_spool()
+            current = _load_spool(account_ref=captured_ref)
             if current is None:
                 return False
             current["events"] = [
@@ -424,18 +447,22 @@ def _flush_once(*, api_key: str | None = None) -> bool:
                 for event in current["events"]
                 if str(event.get("event_id") or "") not in acknowledged
             ]
-            _write_spool(current)
+            _write_spool(current, account_ref=captured_ref)
         return True
 
 
-def _flush_worker(api_key: str | None) -> None:
+def _flush_worker(api_key: str | None, account_ref: str) -> None:
     try:
-        _flush_once(api_key=api_key)
+        _flush_once(api_key=api_key, account_ref=account_ref)
     except Exception:
         pass
 
 
-def schedule_flush(*, api_key: str | None = None) -> bool:
+def schedule_flush(
+    *,
+    api_key: str | None = None,
+    account_ref: str | None = None,
+) -> bool:
     """Start one best-effort daemon relay without delaying the CLI command."""
 
     global _worker
@@ -447,14 +474,16 @@ def schedule_flush(*, api_key: str | None = None) -> bool:
             from jobagent.infra.credentials import load_api_key
 
             key = load_api_key()
-        if not _owner_matches(str(key or "")):
+        normalized_key = str(key or "")
+        captured_ref = account_ref or _verified_account_ref(normalized_key)
+        if captured_ref is None or not _owner_matches(normalized_key, captured_ref):
             return False
         with _WORKER_GUARD:
             if _worker is not None and _worker.is_alive():
                 return False
             _worker = threading.Thread(
                 target=_flush_worker,
-                args=(str(key or ""),),
+                args=(normalized_key, captured_ref),
                 name="jobagent-analytics-relay",
                 daemon=True,
             )

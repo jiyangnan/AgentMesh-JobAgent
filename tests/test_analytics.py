@@ -14,6 +14,8 @@ from jobagent.infra import account_state, analytics, cloud_client, state
 
 API_KEY = "jobagent_live_analytics_test_key"
 ACCOUNT_REF = "acct_analytics_test"
+OTHER_API_KEY = "jobagent_live_other_key"
+OTHER_ACCOUNT_REF = "acct_other_account"
 ORIGINAL_SCHEDULE_FLUSH = analytics.schedule_flush
 
 
@@ -210,9 +212,9 @@ def test_pending_fact_from_previous_client_release_remains_readable(bound_analyt
     analytics.record_jobagent_initialized(api_key=API_KEY)
     spool = _spool()
     spool["events"][0]["payload"]["client_release"] = "0.5.39"
-    analytics._write_spool(spool)
+    analytics._write_spool(spool, account_ref=ACCOUNT_REF)
 
-    loaded = analytics._load_spool()
+    loaded = analytics._load_spool(account_ref=ACCOUNT_REF)
 
     assert loaded is not None
     assert loaded["events"][0]["payload"] == {"client_release": "0.5.39"}
@@ -279,16 +281,16 @@ def test_key_switch_fails_closed_and_account_spools_stay_separate(
         lambda *_args, **_kwargs: pytest.fail("mismatched key reached relay"),
     )
 
-    assert analytics._flush_once(api_key="jobagent_live_other_key") is False
+    assert analytics._flush_once(api_key=OTHER_API_KEY) is False
     assert analytics.record_delivery_verified(
-        "boss", api_key="jobagent_live_other_key"
+        "boss", api_key=OTHER_API_KEY
     ) is False
     assert analytics._spool_path().read_bytes() == before
 
     account_state.switch_account_state(
-        {"account": {"account_ref": "acct_other_account"}},
+        {"account": {"account_ref": OTHER_ACCOUNT_REF}},
         new_state=True,
-        api_key="jobagent_live_other_key",
+        api_key=OTHER_API_KEY,
         app_dir=bound_analytics,
     )
 
@@ -303,10 +305,9 @@ def test_key_switch_fails_closed_and_account_spools_stay_separate(
     assert saved.read_bytes() == before
     assert stat.S_IMODE(saved.stat().st_mode) == 0o600
 
-    other_key = "jobagent_live_other_key"
     other_spool = analytics._spool_path()
     assert other_spool != saved
-    assert analytics.record_jobagent_initialized(api_key=other_key) is True
+    assert analytics.record_jobagent_initialized(api_key=OTHER_API_KEY) is True
 
     account_state.switch_account_state(
         {"account": {"account_ref": ACCOUNT_REF}},
@@ -320,6 +321,69 @@ def test_key_switch_fails_closed_and_account_spools_stay_separate(
     assert json.loads(other_spool.read_text(encoding="utf-8"))["facts"] == [
         "jobagent_initialized"
     ]
+
+
+def test_record_pins_verified_owner_when_account_switches_before_spool_load(
+    bound_analytics,
+    monkeypatch,
+):
+    original_load = analytics._load_spool
+    switched = False
+
+    def switch_then_load(*, account_ref=None):
+        nonlocal switched
+        if not switched:
+            switched = True
+            account_state.switch_account_state(
+                {"account": {"account_ref": OTHER_ACCOUNT_REF}},
+                new_state=True,
+                api_key=OTHER_API_KEY,
+                app_dir=bound_analytics,
+            )
+        return original_load(account_ref=account_ref)
+
+    monkeypatch.setattr(analytics, "_load_spool", switch_then_load)
+
+    assert analytics.record_jobagent_initialized(api_key=API_KEY) is True
+    assert account_state.current_account_ref(app_dir=bound_analytics) == OTHER_ACCOUNT_REF
+    account_a_spool = analytics._spool_path(ACCOUNT_REF)
+    account_b_spool = analytics._spool_path(OTHER_ACCOUNT_REF)
+    assert json.loads(account_a_spool.read_text(encoding="utf-8"))["facts"] == [
+        "jobagent_initialized"
+    ]
+    assert not account_b_spool.exists()
+
+
+def test_flush_pins_verified_owner_when_account_switches_before_ack(
+    bound_analytics,
+    monkeypatch,
+):
+    assert analytics.record_jobagent_initialized(api_key=API_KEY) is True
+
+    def switch_then_ack(events, *, api_key=None):
+        assert api_key == API_KEY
+        account_state.switch_account_state(
+            {"account": {"account_ref": OTHER_ACCOUNT_REF}},
+            new_state=True,
+            api_key=OTHER_API_KEY,
+            app_dir=bound_analytics,
+        )
+        return {
+            "accepted_event_ids": [events[0]["event_id"]],
+            "duplicate_event_ids": [],
+            "rejected": [],
+        }
+
+    monkeypatch.setattr(cloud_client, "analytics_events", switch_then_ack)
+
+    assert analytics._flush_once(api_key=API_KEY) is True
+    assert account_state.current_account_ref(app_dir=bound_analytics) == OTHER_ACCOUNT_REF
+    account_a_spool = json.loads(
+        analytics._spool_path(ACCOUNT_REF).read_text(encoding="utf-8")
+    )
+    assert account_a_spool["facts"] == ["jobagent_initialized"]
+    assert account_a_spool["events"] == []
+    assert not analytics._spool_path(OTHER_ACCOUNT_REF).exists()
 
 
 @pytest.mark.parametrize(
@@ -426,7 +490,8 @@ def test_cli_dispatch_does_not_wait_for_blocked_or_failed_relay(
     release = threading.Event()
     dispatched: list[bool] = []
 
-    def blocked_then_failed(*, api_key=None):
+    def blocked_then_failed(*, api_key=None, account_ref=None):
+        assert account_ref == ACCOUNT_REF
         started.set()
         release.wait(timeout=1)
         raise cloud_client.CloudError("offline", code="network_timeout", retryable=True)

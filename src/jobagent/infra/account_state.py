@@ -153,6 +153,25 @@ def current_account_ref(*, app_dir: Path | None = None) -> str | None:
     return account_ref if _ACCOUNT_REF.fullmatch(account_ref) else None
 
 
+def verified_account_ref_for_api_key(
+    api_key: str,
+    *,
+    app_dir: Path | None = None,
+) -> str | None:
+    """Return the active account from one verified owner-proof snapshot."""
+
+    owner = _read_json(_owner_path(_root(app_dir))) or {}
+    account_ref = str(owner.get("account_ref") or "")
+    fingerprint = str(owner.get("key_fingerprint") or "")
+    verified = bool(
+        _ACCOUNT_REF.fullmatch(account_ref)
+        and fingerprint
+        and api_key
+        and hmac.compare_digest(fingerprint, _key_fingerprint(api_key))
+    )
+    return account_ref if verified else None
+
+
 def api_key_matches_current_owner(
     api_key: str,
     *,
@@ -160,15 +179,7 @@ def api_key_matches_current_owner(
 ) -> bool:
     """Check the active account proof without migrating or exposing its identity."""
 
-    owner = _read_json(_owner_path(_root(app_dir))) or {}
-    account_ref = str(owner.get("account_ref") or "")
-    fingerprint = str(owner.get("key_fingerprint") or "")
-    return bool(
-        _ACCOUNT_REF.fullmatch(account_ref)
-        and fingerprint
-        and api_key
-        and hmac.compare_digest(fingerprint, _key_fingerprint(api_key))
-    )
+    return verified_account_ref_for_api_key(api_key, app_dir=app_dir) is not None
 
 
 def _bind(
