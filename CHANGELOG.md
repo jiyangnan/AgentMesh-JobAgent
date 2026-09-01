@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.41] - 2026-09-01
+
+### Added
+
+- Record one account-bound `jobagent_initialized` fact after the first verifiable online account setup observed by this client, including a successful legacy bind or account switch, without claiming an installation that predates this instrumentation.
+- Record one `delivery_verified` fact per recruiting platform only after a completed real delivery has `delivered > 0` and the corresponding success audit is already persisted. Dry runs, incomplete batches and zero-delivery outcomes do not qualify.
+- Relay these two privacy-whitelisted facts through the authenticated AgentMesh endpoint on a best-effort background thread. A bounded `0600` local spool retains rejected, unacknowledged and offline events; opt-out and kill-switch controls stop both collection and relay.
+
+### Compatibility
+
+- The new spool follows the existing account namespace during account switches and never contains account identifiers, API Keys, rounds, jobs, resumes, URLs or command arguments. Owner or Key proof mismatches fail closed.
+- Analytics network work has a short timeout and is never joined by the business command. It cannot change command output, exit codes, workflow state, browser sessions, delivery authorization, credits or recruiting-platform actions.
+
 ## [0.5.40] - 2026-08-28
 
 ### Added
