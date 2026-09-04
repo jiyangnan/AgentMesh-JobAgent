@@ -267,6 +267,7 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
             payload["credentials_path"] = str(path)
             payload["account"] = account
             return payload
+        _record_initialized_safely(args.key.strip())
         mark_workbench_launch_announced()
     access = payload.get("cloud_access") or {}
     payload["next_suggested"] = (
@@ -277,6 +278,26 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         else "jobagent doctor env"
     )
     return payload
+
+
+def _schedule_analytics_flush_safely() -> None:
+    """Give a pending spool command lifetime without affecting the command."""
+
+    try:
+        from jobagent.infra.analytics import schedule_flush
+
+        schedule_flush()
+    except Exception:
+        pass
+
+
+def _record_initialized_safely(api_key: str) -> None:
+    try:
+        from jobagent.infra.analytics import record_jobagent_initialized
+
+        record_jobagent_initialized(api_key=api_key)
+    except Exception:
+        pass
 
 
 def _account(args: argparse.Namespace) -> dict[str, Any]:
@@ -299,16 +320,20 @@ def _account(args: argparse.Namespace) -> dict[str, Any]:
             "next_suggested": None,
         }
     if args.account_command == "bind":
-        return bind_legacy_state(
+        result = bind_legacy_state(
             account_response,
             confirm_legacy=args.confirm_legacy,
             api_key=api_key,
         )
-    return switch_account_state(
-        account_response,
-        new_state=args.new_state,
-        api_key=api_key,
-    )
+    else:
+        result = switch_account_state(
+            account_response,
+            new_state=args.new_state,
+            api_key=api_key,
+        )
+    if result.get("ok") is True:
+        _record_initialized_safely(str(api_key or ""))
+    return result
 
 
 def _attach_pending_product_announcements(
@@ -1313,6 +1338,7 @@ def main() -> None:
         _maybe_update(args)
         _prepare_client_upgrade(args)
         account_verification = _verify_state_owner_for_command(args)
+        _schedule_analytics_flush_safely()
         result = _dispatch(args)
         if account_verification and account_verification.get("offline"):
             result = {
@@ -1326,6 +1352,7 @@ def main() -> None:
             account_verified=account_verification is not None,
         )
         _print(result)
+        _schedule_analytics_flush_safely()
         if result.get("ok") is False:
             raise SystemExit(2)
     except KeyboardInterrupt:
