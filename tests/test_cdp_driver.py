@@ -305,6 +305,7 @@ def test_open_url_reuses_same_stable_job_page(monkeypatch):
         '{"url":"https://www.zhipin.com/job_detail/job-1.html",'
         '"title":"Job 1","readyState":"complete","hasChatEntry":true}'
     )
+    driver._boss_bound_chat_job_id = "stale-job"
     monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: url)
     sleeps = []
     monkeypatch.setattr(cdp_driver.time, "sleep", lambda seconds: sleeps.append(seconds))
@@ -320,6 +321,8 @@ def test_open_url_reuses_same_stable_job_page(monkeypatch):
     }
     assert driver.cdp.send_calls == []
     assert sleeps == []
+    assert driver._boss_expected_job_id == "job-1"
+    assert driver._boss_bound_chat_job_id == ""
 
 
 def test_open_url_waits_for_two_stable_boss_job_snapshots(monkeypatch):
@@ -508,6 +511,8 @@ def test_click_chat_entry_follows_trusted_initial_chat_redirect(monkeypatch):
         '{"ok": false, "step": "no_popup_yet"}',
         '{"ok": true, "url": "' + redirect_url + '"}',
     ])
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = ""
 
     result = driver.click_chat_entry()
 
@@ -519,6 +524,7 @@ def test_click_chat_entry_follows_trusted_initial_chat_redirect(monkeypatch):
     assert result["autoSent"] is False
     assert ("Page.navigate", {"url": redirect_url}) in driver.cdp.send_calls
     assert "securityId" not in str(result)
+    assert driver._boss_bound_chat_job_id == "job-1"
 
 
 def test_click_chat_entry_recognizes_greet_pop_and_opens_bound_chat(monkeypatch):
@@ -801,3 +807,39 @@ def test_recover_draft_stays_in_exact_bound_conversation(monkeypatch):
     assert "conversationBound" in draft_js
     assert "[草稿]" not in draft_js
     assert not any(method == "Page.navigate" for method, _ in driver.cdp.send_calls)
+
+
+def test_recover_draft_rejects_a_different_bound_conversation(monkeypatch):
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+    driver = make_driver(
+        '{"ok":false,"editorFound":true,"loginDialog":false,'
+        '"conversationBound":false,"matches":true,"editorLen":5}'
+    )
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = "job-2"
+
+    result = driver.recover_draft_delivery("hello")
+
+    assert result["delivered"] is False
+    assert result["error"] == "draft_conversation_not_bound"
+    assert not any(
+        method == "Input.dispatchKeyEvent" for method, _ in driver.cdp.send_calls
+    )
+
+
+def test_recover_draft_rejects_login_dialog_before_enter(monkeypatch):
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+    driver = make_driver(
+        '{"ok":false,"editorFound":true,"loginDialog":true,'
+        '"conversationBound":true,"matches":true,"editorLen":5}'
+    )
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = "job-1"
+
+    result = driver.recover_draft_delivery("hello")
+
+    assert result["delivered"] is False
+    assert result["error"] == "login_required"
+    assert not any(
+        method == "Input.dispatchKeyEvent" for method, _ in driver.cdp.send_calls
+    )

@@ -589,6 +589,37 @@ def test_boss_audit_rejects_unbound_preexisting_delivery_without_default(tmp_pat
     assert log.list_recent(1)[0]["error"] == "unverified_personalized_delivery"
 
 
+def test_boss_audit_accepts_exact_bound_personalized_delivery(tmp_path):
+    from jobagent.infra.audit import AuditLog
+
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(
+        json.dumps(
+            [
+                {
+                    "job_url": "https://www.zhipin.com/job_detail/exact.html",
+                    "delivered": True,
+                    "steps": [
+                        {
+                            "step": "verify_delivery",
+                            "delivered": True,
+                            "personalizedExact": True,
+                            "conversationBound": True,
+                            "statusBound": True,
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    log = AuditLog(path=audit_path)
+
+    assert log.delivered_job_keys() == {"exact"}
+    assert log.list_recent(1)[0]["delivered"] is True
+
+
 def test_boss_send_flow_recovers_job_chat_after_entry_timeout():
     driver = DelayedChatAfterEntryTimeoutDriver(delivered_sequence=[False, True])
 
