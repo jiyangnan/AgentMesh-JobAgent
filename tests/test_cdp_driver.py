@@ -471,14 +471,13 @@ def test_click_chat_entry_follows_trusted_existing_chat_redirect(monkeypatch):
         "https://www.zhipin.com/web/geek/chat?id=conversation-1&securityId=signed"
     )
     driver = make_driver([
-        '{"ok": true, "step": "target_继续沟通", "label": "继续沟通", "x": 42, "y": 24}',
-        '{"ok": false, "step": "no_popup_yet"}',
-        '{"ok": false, "step": "no_popup_yet"}',
-        '{"ok": false, "step": "no_popup_yet"}',
-        '{"ok": false, "step": "no_popup_yet"}',
-        '{"ok": false, "step": "no_popup_yet"}',
-        '{"ok": true, "url": "' + redirect_url + '"}',
+        '{"ok":true,"step":"target_继续沟通","label":"继续沟通",'
+        '"jobId":"job-1","x":42,"y":24,"redirectUrl":"'
+        + redirect_url
+        + '"}',
     ])
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = ""
 
     result = driver.click_chat_entry()
 
@@ -486,14 +485,20 @@ def test_click_chat_entry_follows_trusted_existing_chat_redirect(monkeypatch):
         "ok": True,
         "step": "navigated_chat_redirect",
         "label": "继续沟通",
+        "jobId": "job-1",
         "x": 42,
         "y": 24,
-        "clicked": True,
+        "clicked": False,
         "autoSent": False,
         "chatPath": "/web/geek/chat",
     }
     assert ("Page.navigate", {"url": redirect_url}) in driver.cdp.send_calls
+    assert not any(
+        method == "Input.dispatchMouseEvent"
+        for method, _params in driver.cdp.send_calls
+    )
     assert "securityId" not in str(result)
+    assert driver._boss_bound_chat_job_id == "job-1"
 
 
 def test_click_chat_entry_follows_trusted_initial_chat_redirect(monkeypatch):
@@ -631,6 +636,8 @@ def test_click_chat_entry_preserves_completed_click_on_later_timeout(monkeypatch
     monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
     driver = CDPBossDriver.__new__(CDPBossDriver)
     driver.cdp = TimeoutAfterTargetCDP()
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = ""
 
     result = driver.click_chat_entry()
 
@@ -641,6 +648,36 @@ def test_click_chat_entry_preserves_completed_click_on_later_timeout(monkeypatch
         "label": "继续沟通",
         "jobId": "job-1",
     }
+    assert driver._boss_bound_chat_job_id == "job-1"
+
+
+def test_click_chat_entry_does_not_bind_mismatched_job(monkeypatch):
+    class TimeoutAfterTargetCDP(FakeCDP):
+        def __init__(self):
+            super().__init__(
+                '{"ok":true,"step":"target_继续沟通","label":"继续沟通",'
+                '"jobId":"other-job","x":42,"y":24}'
+            )
+            self.calls = 0
+
+        def evaluate(self, js_code: str, timeout: int = 30, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                raise TimeoutError("Runtime.evaluate timed out")
+            return super().evaluate(js_code, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+    driver = CDPBossDriver.__new__(CDPBossDriver)
+    driver.cdp = TimeoutAfterTargetCDP()
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = ""
+
+    result = driver.click_chat_entry()
+
+    assert result["ok"] is False
+    assert result["clicked"] is True
+    assert result["jobId"] == "other-job"
+    assert driver._boss_bound_chat_job_id == ""
 
 
 def test_click_chat_entry_retries_read_only_target_discovery(monkeypatch):
@@ -782,6 +819,13 @@ def test_verify_delivery_excludes_modal_draft_and_accepts_sent_marker():
     assert "document.body" not in verify_js
     assert "lastIndexOf(preview)" not in verify_js
     assert ".message-list .message-item" in verify_js
+    assert ".chat-conversation" in verify_js
+    assert ".chat-record .message-item" in verify_js
+    assert ".im-list .message-item" in verify_js
+    assert ".item-myself" in verify_js
+    assert ".text-content" in verify_js
+    assert "status-delivery" not in verify_js
+    assert "status-(delivery|delivered|read|sent)" in verify_js
     assert "normalizedContent === normalizedMessage" in verify_js
     assert "conversationBound" in verify_js
 
