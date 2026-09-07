@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.42] - 2026-09-07
+
+### Fixed
+
+- Require an exact normalized personalized Boss greeting in the active job-bound conversation, with a delivery marker attached to that same message item. A shared prefix, another conversation or Boss's platform-default opening message can no longer complete the personalized delivery.
+- Keep draft recovery inside the current bound conversation. The client no longer scans or opens historical chat-list drafts, and it refuses to press Enter when the active conversation, exact draft or login state cannot be verified.
+- Reclassify Boss audit entries whose only evidence is a platform-default message or an unbound pre-send page scan. Those records no longer suppress the remaining personalized greeting attempt.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, login session, active round, signed decision, delivery preview and delivery authorization remain unchanged. Managed clients resume the original authorized Boss send command after upgrade; no new round, relogin, recollection, confirmation or additional cloud charge is required.
+- Previously verified post-send records remain compatible. Ambiguous pre-send records fail closed and can be retried only through the still-authorized original workflow.
+
 ## [0.5.41] - 2026-09-01
 
 ### Added
