@@ -27,32 +27,57 @@ def _verified_personalized_delivery(record: dict[str, Any]) -> bool:
     has_platform_default = any(
         isinstance(step, dict) and step.get("platformDefaultSent") for step in steps
     )
-    if not has_platform_default:
+
+    exact_bound_verify = any(
+        isinstance(step, dict)
+        and step.get("delivered")
+        and step.get("personalizedExact")
+        and step.get("conversationBound")
+        and step.get("statusBound")
+        for step in steps
+    )
+    if exact_bound_verify:
         return True
-    personalized_verify_steps = {
-        "verify_auto_sent",
-        "verify_pre_existing_delivery",
+
+    # Preserve post-send audits created before exact verification was recorded.
+    # A pre-send page scan alone is never personalized proof.
+    post_send_verify_steps = {
         "verify_delivery",
         "retry_verify_delivery",
         "recover_draft_delivery",
     }
-    return any(
+    if any(
         isinstance(step, dict)
-        and step.get("step") in personalized_verify_steps
+        and step.get("step") in post_send_verify_steps
         and step.get("delivered")
         for step in steps
-    )
+    ):
+        return True
+
+    # Keep pre-contract records that contain no verification trace at all.
+    # Any recorded pre-send verification must meet the exact bound contract.
+    return not steps and not has_platform_default
 
 
 def _normalized_record(record: dict[str, Any]) -> dict[str, Any]:
     if not record.get("delivered") or _verified_personalized_delivery(record):
         return dict(record)
-    return {
+    steps = record.get("steps") if isinstance(record.get("steps"), list) else []
+    has_platform_default = any(
+        isinstance(step, dict) and step.get("platformDefaultSent") for step in steps
+    )
+    normalized = {
         **record,
         "delivered": False,
-        "platform_default_delivered": True,
-        "error": "platform_default_only",
+        "error": (
+            "platform_default_only"
+            if has_platform_default
+            else "unverified_personalized_delivery"
+        ),
     }
+    if has_platform_default:
+        normalized["platform_default_delivered"] = True
+    return normalized
 
 
 class AuditLog:
