@@ -46,6 +46,8 @@ class CDPBossDriver(BossActionDriver):
         self.track_round = track_round
         self.current_platform = ""
         self.current_target_id = ""
+        self._boss_expected_job_id = ""
+        self._boss_bound_chat_job_id = ""
         self.cdp = CDPClient()
         self._ensure_connected()
 
@@ -812,6 +814,19 @@ class CDPBossDriver(BossActionDriver):
 
         Checks for verification redirects (verify / code=36) after navigation.
         """
+        try:
+            parsed_url = urlsplit(url)
+        except ValueError:
+            parsed_url = None
+        if (
+            parsed_url is not None
+            and platform_for_url(url) == "boss"
+            and "/job_detail/" in parsed_url.path
+        ):
+            self._boss_expected_job_id = (
+                parsed_url.path.rsplit("/", 1)[-1].removesuffix(".html")
+            )
+            self._boss_bound_chat_job_id = ""
         current_url = self._ensure_connected_for_url(url)
         reused = self._same_search_url(current_url, url)
         try:
@@ -820,8 +835,9 @@ class CDPBossDriver(BossActionDriver):
             if not reused:
                 self.cdp.send("Page.navigate", {"url": url})
             is_boss_job = (
-                platform_for_url(url) == "boss"
-                and "/job_detail/" in urlsplit(url).path
+                parsed_url is not None
+                and platform_for_url(url) == "boss"
+                and "/job_detail/" in parsed_url.path
             )
             is_liepin_search = (
                 platform_for_url(url) == "liepin"
@@ -1295,6 +1311,11 @@ class CDPBossDriver(BossActionDriver):
                                 "Page.navigate",
                                 {"url": chat_redirect_url},
                             )
+                            self._boss_bound_chat_job_id = str(
+                                click_data.get("jobId")
+                                or getattr(self, "_boss_expected_job_id", "")
+                                or ""
+                            )
                             popup_data["step"] = "navigated_chat_redirect_after_default"
                             popup_data["chatPath"] = "/web/geek/chat"
                         except Exception:
@@ -1317,6 +1338,11 @@ class CDPBossDriver(BossActionDriver):
             if click_data.get("label") in {"立即沟通", "继续沟通", "继续聊"}:
                 if chat_redirect_url:
                     self.cdp.send("Page.navigate", {"url": chat_redirect_url})
+                    self._boss_bound_chat_job_id = str(
+                        click_data.get("jobId")
+                        or getattr(self, "_boss_expected_job_id", "")
+                        or ""
+                    )
                     click_data["autoSent"] = False
                     click_data["step"] = "navigated_chat_redirect"
                     click_data["chatPath"] = "/web/geek/chat"
@@ -1356,6 +1382,11 @@ class CDPBossDriver(BossActionDriver):
                 )
                 if redirect_data.get("ok") and redirect_data.get("url"):
                     self.cdp.send("Page.navigate", {"url": redirect_data["url"]})
+                    self._boss_bound_chat_job_id = str(
+                        click_data.get("jobId")
+                        or getattr(self, "_boss_expected_job_id", "")
+                        or ""
+                    )
                     click_data["autoSent"] = False
                     click_data["step"] = "navigated_chat_redirect"
                     click_data["chatPath"] = "/web/geek/chat"
@@ -1768,49 +1799,135 @@ class CDPBossDriver(BossActionDriver):
             return {"ok": False, "error": str(e)}
 
     def verify_delivery(self, message: str) -> dict[str, Any]:
-        """Verify that the message was delivered."""
+        """Verify an exact personalized greeting in the active bound conversation."""
         self._ensure_connected()
-        msg_preview = message[:20]
+        expected_job_id = str(getattr(self, "_boss_expected_job_id", "") or "")
+        bound_chat_job_id = str(getattr(self, "_boss_bound_chat_job_id", "") or "")
         js = f"""
         (function(){{
-          var preview = {json.dumps(msg_preview)};
           var fullMessage = {json.dumps(message)};
-          var editor = document.querySelector(
-            '.startchat-dialog textarea, .dialog-wrap.startchat-dialog textarea, .chat-input, [contenteditable="true"]'
+          var expectedJobId = {json.dumps(expected_job_id)};
+          var trustedBoundJobId = {json.dumps(bound_chat_job_id)};
+          function normalizeText(value) {{
+            return String(value || '').replace(/\\s+/g, ' ').trim();
+          }}
+          function isVisible(el) {{
+            if (!el) return false;
+            var style = window.getComputedStyle(el);
+            var rect = el.getBoundingClientRect();
+            return style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && Number(style.opacity || 1) > 0
+              && rect.width > 0
+              && rect.height > 0;
+          }}
+          function firstVisible(selector, root) {{
+            var nodes = (root || document).querySelectorAll(selector);
+            for (var i = 0; i < nodes.length; i++) {{
+              if (isVisible(nodes[i])) return nodes[i];
+            }}
+            return null;
+          }}
+          function activeConversationScope(editor) {{
+            var modal = firstVisible(
+              '.startchat-dialog, .dialog-wrap.startchat-dialog'
+            );
+            if (modal && (!editor || modal.contains(editor))) return modal;
+            var node = editor;
+            while (node && node.tagName !== 'BODY') {{
+              if (node.querySelector
+                  && node.querySelector('.message-list .message-item')) {{
+                return node;
+              }}
+              node = node.parentElement;
+            }}
+            return null;
+          }}
+
+          var editor = firstVisible(
+            '.startchat-dialog textarea, .dialog-wrap.startchat-dialog textarea, '
+            + '.chat-input, [contenteditable="true"]'
           );
           var formControl = editor
             && (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT');
           var editorText = editor
             ? (formControl ? editor.value : (editor.innerText || editor.textContent || ''))
             : '';
-          var stillInEditor = !!preview && editorText.indexOf(preview) >= 0;
-
-          var root = document.body;
-          var textWithoutEditor = '';
-          if (root) {{
-            var clone = root.cloneNode(true);
-            var editors = clone.querySelectorAll(
-              '.chat-input, [contenteditable="true"], textarea, input'
-            );
-            for (var i = 0; i < editors.length; i++) {{
-              editors[i].textContent = '';
-              if ('value' in editors[i]) editors[i].value = '';
-            }}
-            textWithoutEditor = clone.innerText || clone.textContent || '';
-          }}
-
-          var index = preview ? textWithoutEditor.lastIndexOf(preview) : -1;
-          var around = index >= 0
-            ? textWithoutEditor.slice(Math.max(0, index - 160), index + fullMessage.length + 160)
+          var normalizedMessage = normalizeText(fullMessage);
+          var stillInEditor = !!normalizedMessage
+            && normalizeText(editorText) === normalizedMessage;
+          var pathMatch = (location.pathname || '').match(
+            /\\/job_detail\\/([^/]+?)(?:\\.html)?$/
+          );
+          var pathJobId = pathMatch
+            ? pathMatch[1].replace(/\\.html$/, '')
             : '';
-          var hasMsg = index >= 0;
-          var hasDeliveredNearMsg = /\\[?送达\\]?|已送达|\\[?已读\\]?|已发送/.test(around);
+          var queryJobId = '';
+          try {{
+            queryJobId = new URL(location.href).searchParams.get('jobId') || '';
+          }} catch (e) {{}}
+          var activeJobId = pathJobId || queryJobId || trustedBoundJobId;
+          var conversationBound = !!expectedJobId && activeJobId === expectedJobId;
+          var scope = activeConversationScope(editor);
+          var items = scope
+            ? Array.prototype.slice.call(
+                scope.querySelectorAll('.message-list .message-item')
+              ).filter(isVisible)
+            : [];
+          var personalizedExact = false;
+          var statusBound = false;
+          for (var itemIndex = 0; itemIndex < items.length; itemIndex++) {{
+            var item = items[itemIndex];
+            var contentNode = item.querySelector(
+              '.text, [class~="text"], [class*="message-content"], '
+              + '[class*="messageContent"]'
+            );
+            var normalizedContent = contentNode
+              ? normalizeText(contentNode.innerText || contentNode.textContent || '')
+              : '';
+            if (!normalizedContent) {{
+              var clone = item.cloneNode(true);
+              var metadata = clone.querySelectorAll(
+                '.status, [class~="status"], [class*="status"], time, '
+                + '[class*="time"]'
+              );
+              for (var metadataIndex = 0; metadataIndex < metadata.length; metadataIndex++) {{
+                metadata[metadataIndex].remove();
+              }}
+              normalizedContent = normalizeText(
+                clone.innerText || clone.textContent || ''
+              );
+            }}
+            if (normalizedContent === normalizedMessage) {{
+              personalizedExact = true;
+              var statusText = Array.prototype.slice.call(
+                item.querySelectorAll(
+                  '.status, [class~="status"], [class*="status"]'
+                )
+              ).map(function(node) {{
+                return node.innerText || node.textContent || '';
+              }}).join(' ');
+              statusBound = /\\[?送达\\]?|已送达|\\[?已读\\]?|已发送/.test(
+                normalizeText(statusText)
+              );
+              if (statusBound) break;
+            }}
+          }}
+          var delivered = conversationBound
+            && personalizedExact
+            && statusBound
+            && !stillInEditor;
           return JSON.stringify({{
             ok: true,
-            delivered: hasMsg && hasDeliveredNearMsg,
+            delivered: delivered,
             stillInEditor,
-            hasMsg,
-            hasDeliveredNearMsg,
+            hasMsg: personalizedExact,
+            hasDeliveredNearMsg: statusBound,
+            personalizedExact,
+            conversationBound,
+            statusBound,
+            scopeFound: !!scope,
+            messageCount: items.length,
             editorLen: editorText.length
           }});
         }})()
@@ -1822,77 +1939,103 @@ class CDPBossDriver(BossActionDriver):
             return {"ok": False, "error": str(e)}
 
     def recover_draft_delivery(self, message: str) -> dict[str, Any]:
-        """Open a matching Boss chat draft and send it with Enter.
-
-        This recovers from the state where a previous click filled the chat
-        editor but did not trigger Boss's send event.
-        """
-        self._ensure_connected(platform="boss", initial_url="https://www.zhipin.com/web/geek/chat")
+        """Send an exact draft already present in the active bound conversation."""
+        self._ensure_connected(
+            platform="boss",
+            initial_url="https://www.zhipin.com/web/geek/chat",
+        )
+        expected_job_id = str(getattr(self, "_boss_expected_job_id", "") or "")
+        bound_chat_job_id = str(getattr(self, "_boss_bound_chat_job_id", "") or "")
         try:
-            self.cdp.send("Page.navigate", {"url": "https://www.zhipin.com/web/geek/chat"})
-            time.sleep(2.0)
-            preview = message[:20]
-            find_js = f"""
-            (function(){{
-              var preview = {json.dumps(preview)};
-              var items = Array.prototype.slice.call(document.querySelectorAll('li')).filter(function(el) {{
-                var text = (el.innerText || el.textContent || '').trim();
-                return text.indexOf('[草稿]') >= 0 && text.indexOf(preview) >= 0;
-              }});
-              if (!items.length) return JSON.stringify({{ok: false, delivered: false, error: 'draft_not_found'}});
-              var el = items[0];
-              var rect = el.getBoundingClientRect();
-              return JSON.stringify({{
-                ok: true,
-                count: items.length,
-                text: (el.innerText || el.textContent || '').trim().slice(0, 220),
-                x: rect.left + rect.width / 2,
-                y: rect.top + rect.height / 2
-              }});
-            }})()
-            """
-            found = json.loads(self.cdp.evaluate(find_js).get("result", {}).get("value", "{}"))
-            if not found.get("ok"):
-                return found
-
-            x = found["x"]
-            y = found["y"]
-            self.cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y, "button": "none"})
-            self.cdp.send("Input.dispatchMouseEvent", {
-                "type": "mousePressed",
-                "x": x,
-                "y": y,
-                "button": "left",
-                "clickCount": 1,
-            })
-            self.cdp.send("Input.dispatchMouseEvent", {
-                "type": "mouseReleased",
-                "x": x,
-                "y": y,
-                "button": "left",
-                "clickCount": 1,
-            })
-            time.sleep(1.0)
-
             editor_js = f"""
             (function(){{
-              var preview = {json.dumps(preview)};
-              var editor = document.querySelector('.chat-input');
-              var text = editor ? (editor.innerText || editor.textContent || '') : '';
+              var fullMessage = {json.dumps(message)};
+              var expectedJobId = {json.dumps(expected_job_id)};
+              var trustedBoundJobId = {json.dumps(bound_chat_job_id)};
+              function normalizeText(value) {{
+                return String(value || '').replace(/\\s+/g, ' ').trim();
+              }}
+              function isVisible(el) {{
+                if (!el) return false;
+                var style = window.getComputedStyle(el);
+                var rect = el.getBoundingClientRect();
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && Number(style.opacity || 1) > 0
+                  && rect.width > 0
+                  && rect.height > 0;
+              }}
+              var editor = Array.prototype.slice.call(document.querySelectorAll(
+                '.startchat-dialog textarea, .dialog-wrap.startchat-dialog textarea, '
+                + '.chat-input, [contenteditable="true"]'
+              )).find(isVisible);
+              var loginDialog = Array.prototype.slice.call(document.querySelectorAll(
+                '.sign-content, .login-dialog, .passport-login-container, '
+                + '.dialog-wrap .sign-form'
+              )).some(isVisible);
+              var pathMatch = (location.pathname || '').match(
+                /\\/job_detail\\/([^/]+?)(?:\\.html)?$/
+              );
+              var pathJobId = pathMatch
+                ? pathMatch[1].replace(/\\.html$/, '')
+                : '';
+              var queryJobId = '';
+              try {{
+                queryJobId = new URL(location.href).searchParams.get('jobId') || '';
+              }} catch (e) {{}}
+              var activeJobId = pathJobId || queryJobId || trustedBoundJobId;
+              var conversationBound = !!expectedJobId
+                && activeJobId === expectedJobId;
+              var editorText = editor
+                ? ((editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT')
+                    ? editor.value
+                    : (editor.innerText || editor.textContent || ''))
+                : '';
+              var normalizedMessage = normalizeText(fullMessage);
+              var matches = !!normalizedMessage
+                && normalizeText(editorText) === normalizedMessage;
               if (editor) editor.focus();
               return JSON.stringify({{
-                ok: true,
+                ok: !!editor && !loginDialog && conversationBound && matches,
                 editorFound: !!editor,
-                editorLen: text.length,
-                matches: text.indexOf(preview) >= 0
+                loginDialog: loginDialog,
+                conversationBound: conversationBound,
+                matches: matches,
+                editorLen: editorText.length
               }});
             }})()
             """
-            editor = json.loads(self.cdp.evaluate(editor_js).get("result", {}).get("value", "{}"))
+            editor = json.loads(
+                self.cdp.evaluate(editor_js).get("result", {}).get("value", "{}")
+            )
+            if editor.get("loginDialog"):
+                return {
+                    "ok": False,
+                    "delivered": False,
+                    "error": "login_required",
+                    "editor": editor,
+                }
             if not editor.get("editorFound"):
-                return {"ok": False, "delivered": False, "error": "draft_editor_not_found", "draft": found}
+                return {
+                    "ok": False,
+                    "delivered": False,
+                    "error": "draft_editor_not_found",
+                    "editor": editor,
+                }
+            if not editor.get("conversationBound"):
+                return {
+                    "ok": False,
+                    "delivered": False,
+                    "error": "draft_conversation_not_bound",
+                    "editor": editor,
+                }
             if not editor.get("matches"):
-                return {"ok": False, "delivered": False, "error": "draft_editor_mismatch", "draft": found, "editor": editor}
+                return {
+                    "ok": False,
+                    "delivered": False,
+                    "error": "draft_editor_mismatch",
+                    "editor": editor,
+                }
 
             self.cdp.send("Input.dispatchKeyEvent", {
                 "type": "keyDown",
@@ -1911,9 +2054,7 @@ class CDPBossDriver(BossActionDriver):
                 "nativeVirtualKeyCode": 13,
             })
             time.sleep(1.3)
-            verify = self.verify_delivery(message)
-            verify["draft"] = found
-            return verify
+            return self.verify_delivery(message)
         except Exception as e:
             return {"ok": False, "delivered": False, "error": str(e)}
 

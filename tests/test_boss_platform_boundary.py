@@ -324,7 +324,13 @@ class FlowDriver:
     def verify_delivery(self, message: str):
         self.calls.append("verify_delivery")
         delivered = self.delivered_sequence.pop(0) if self.delivered_sequence else self.delivered
-        return {"ok": True, "delivered": delivered}
+        return {
+            "ok": True,
+            "delivered": delivered,
+            "personalizedExact": delivered,
+            "conversationBound": delivered,
+            "statusBound": delivered,
+        }
 
 
 class NoEditorDeliveredDriver(FlowDriver):
@@ -342,7 +348,13 @@ class LoginDialogDriver(FlowDriver):
 class LoginDialogRecoveredDriver(LoginDialogDriver):
     def recover_draft_delivery(self, message: str):
         self.calls.append("recover_draft_delivery")
-        return {"ok": True, "delivered": True}
+        return {
+            "ok": True,
+            "delivered": True,
+            "personalizedExact": True,
+            "conversationBound": True,
+            "statusBound": True,
+        }
 
 
 class PlatformDefaultSentDriver(FlowDriver):
@@ -354,6 +366,31 @@ class PlatformDefaultSentDriver(FlowDriver):
             "platformDefaultSent": True,
             "sentMessage": "已发送 这是我的资料，希望能够成为贵团队的一员。",
         }
+
+
+class UnboundPreexistingAfterDefaultDriver(PlatformDefaultSentDriver):
+    def __init__(self):
+        super().__init__()
+        self.verifications = [
+            {
+                "ok": True,
+                "delivered": True,
+                "personalizedExact": False,
+                "conversationBound": False,
+                "statusBound": False,
+            },
+            {
+                "ok": True,
+                "delivered": True,
+                "personalizedExact": True,
+                "conversationBound": True,
+                "statusBound": True,
+            },
+        ]
+
+    def verify_delivery(self, message: str):
+        self.calls.append("verify_delivery")
+        return self.verifications.pop(0)
 
 
 class DelayedChatAfterEntryTimeoutDriver(FlowDriver):
@@ -463,6 +500,93 @@ def test_boss_send_flow_continues_after_platform_default_sent_dialog():
     ]
     assert attempt.steps[1]["platformDefaultSent"] is True
     assert attempt.steps[2]["step"] == "platform_default_does_not_complete_custom_greeting"
+
+
+def test_boss_send_flow_rejects_unbound_preexisting_delivery_after_platform_default():
+    driver = UnboundPreexistingAfterDefaultDriver()
+
+    attempt = execute_boss_greeting_flow(
+        driver,
+        "https://www.zhipin.com/job_detail/job-1.html",
+        "hello",
+    )
+
+    assert attempt.delivered is True
+    assert attempt.error == ""
+    assert driver.calls == [
+        "open_url_in_new_tab",
+        "click_chat_entry",
+        "inspect_chat_editor",
+        "verify_delivery",
+        "fill_chat_message",
+        "click_send",
+        "verify_delivery",
+    ]
+
+
+def test_boss_audit_rejects_unbound_preexisting_delivery_after_platform_default(
+    tmp_path,
+):
+    from jobagent.infra.audit import AuditLog
+
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(
+        json.dumps(
+            [
+                {
+                    "job_url": "https://www.zhipin.com/job_detail/default-only.html",
+                    "delivered": True,
+                    "steps": [
+                        {
+                            "step": "platform_default_sent",
+                            "platformDefaultSent": True,
+                        },
+                        {
+                            "step": "verify_pre_existing_delivery",
+                            "delivered": True,
+                            "personalizedExact": False,
+                            "conversationBound": False,
+                            "statusBound": False,
+                        },
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    log = AuditLog(path=audit_path)
+
+    assert log.delivered_job_keys() == set()
+    assert log.list_recent(1)[0]["error"] == "platform_default_only"
+
+
+def test_boss_audit_rejects_unbound_preexisting_delivery_without_default(tmp_path):
+    from jobagent.infra.audit import AuditLog
+
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(
+        json.dumps(
+            [
+                {
+                    "job_url": "https://www.zhipin.com/job_detail/ambiguous.html",
+                    "delivered": True,
+                    "steps": [
+                        {
+                            "step": "verify_pre_existing_delivery",
+                            "delivered": True,
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    log = AuditLog(path=audit_path)
+
+    assert log.delivered_job_keys() == set()
+    assert log.list_recent(1)[0]["error"] == "unverified_personalized_delivery"
 
 
 def test_boss_send_flow_recovers_job_chat_after_entry_timeout():

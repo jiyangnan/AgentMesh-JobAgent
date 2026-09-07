@@ -760,13 +760,44 @@ def test_click_send_targets_modal_button_for_textarea(monkeypatch):
 def test_verify_delivery_excludes_modal_draft_and_accepts_sent_marker():
     driver = make_driver(
         '{"ok":true,"delivered":true,"stillInEditor":false,'
-        '"hasMsg":true,"hasDeliveredNearMsg":true,"editorLen":0}'
+        '"hasMsg":true,"hasDeliveredNearMsg":true,"editorLen":0,'
+        '"personalizedExact":true,"conversationBound":true,"statusBound":true}'
     )
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = "job-1"
 
     result = driver.verify_delivery("hello")
 
     assert result["delivered"] is True
     verify_js = driver.cdp.js_calls[0]
-    assert "textarea, input" in verify_js
+    assert ".startchat-dialog textarea" in verify_js
     assert "formControl ? editor.value" in verify_js
     assert "已发送" in verify_js
+    assert "document.body" not in verify_js
+    assert "lastIndexOf(preview)" not in verify_js
+    assert ".message-list .message-item" in verify_js
+    assert "normalizedContent === normalizedMessage" in verify_js
+    assert "conversationBound" in verify_js
+
+
+def test_recover_draft_stays_in_exact_bound_conversation(monkeypatch):
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+    message = "shared greeting prefix with a unique ending"
+    driver = make_driver([
+        '{"ok":true,"editorFound":true,"loginDialog":false,'
+        '"conversationBound":true,"matches":true,"editorLen":41}',
+        '{"ok":true,"delivered":true,"stillInEditor":false,'
+        '"personalizedExact":true,"conversationBound":true,"statusBound":true}',
+    ])
+    driver._boss_expected_job_id = "job-1"
+    driver._boss_bound_chat_job_id = "job-1"
+
+    result = driver.recover_draft_delivery(message)
+
+    assert result["delivered"] is True
+    draft_js = driver.cdp.js_calls[0]
+    assert message in draft_js
+    assert "normalizeText(editorText) === normalizedMessage" in draft_js
+    assert "conversationBound" in draft_js
+    assert "[草稿]" not in draft_js
+    assert not any(method == "Page.navigate" for method, _ in driver.cdp.send_calls)

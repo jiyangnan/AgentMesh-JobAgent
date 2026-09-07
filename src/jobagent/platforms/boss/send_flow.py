@@ -9,6 +9,16 @@ from jobagent.domain.models import SendAttempt
 from jobagent.drivers.boss.base import BossActionDriver
 
 
+def _personalized_delivery_verified(result: dict[str, Any]) -> bool:
+    """Require exact message, active conversation, and same-bubble status evidence."""
+    return bool(
+        result.get("delivered")
+        and result.get("personalizedExact")
+        and result.get("conversationBound")
+        and result.get("statusBound")
+    )
+
+
 def execute_boss_greeting_flow(
     driver: BossActionDriver,
     job_url: str,
@@ -74,7 +84,7 @@ def execute_boss_greeting_flow(
         else:
             verify_result = driver.verify_delivery(message)
             steps.append({"step": "verify_auto_sent", **verify_result})
-            attempt.delivered = bool(verify_result.get("delivered"))
+            attempt.delivered = _personalized_delivery_verified(verify_result)
             if not attempt.delivered:
                 attempt.error = "auto_sent_not_verified"
             attempt.steps = steps
@@ -91,7 +101,7 @@ def execute_boss_greeting_flow(
         recovery = _recover_draft_delivery(driver, message)
         if recovery is not None:
             steps.append({"step": "recover_draft_delivery", **recovery})
-            attempt.delivered = bool(recovery.get("delivered"))
+            attempt.delivered = _personalized_delivery_verified(recovery)
             if attempt.delivered:
                 attempt.steps = steps
                 return attempt
@@ -101,7 +111,7 @@ def execute_boss_greeting_flow(
     if editor_result.get("autoSent"):
         verify_result = driver.verify_delivery(message)
         steps.append({"step": "verify_auto_sent", **verify_result})
-        attempt.delivered = bool(verify_result.get("delivered"))
+        attempt.delivered = _personalized_delivery_verified(verify_result)
         if not attempt.delivered:
             attempt.error = "auto_sent_not_verified"
         attempt.steps = steps
@@ -110,7 +120,7 @@ def execute_boss_greeting_flow(
     # in the chat transcript with a delivery marker, do not fill and send again.
     pre_verify = driver.verify_delivery(message)
     steps.append({"step": "verify_pre_existing_delivery", **pre_verify})
-    if pre_verify.get("delivered"):
+    if _personalized_delivery_verified(pre_verify):
         attempt.delivered = True
         attempt.steps = steps
         return attempt
@@ -146,12 +156,12 @@ def execute_boss_greeting_flow(
     if verify:
         verify_result = driver.verify_delivery(message)
         steps.append({"step": "verify_delivery", **verify_result})
-        attempt.delivered = bool(verify_result.get("delivered"))
+        attempt.delivered = _personalized_delivery_verified(verify_result)
         if not attempt.delivered:
             recovery = _recover_draft_delivery(driver, message)
             if recovery is not None:
                 steps.append({"step": "recover_draft_delivery", **recovery})
-                attempt.delivered = bool(recovery.get("delivered"))
+                attempt.delivered = _personalized_delivery_verified(recovery)
         if retry_on_unverified and not attempt.delivered:
             retry_fill = driver.fill_chat_message(message)
             steps.append({"step": "retry_fill_chat_message", **retry_fill})
@@ -161,7 +171,7 @@ def execute_boss_greeting_flow(
                 if retry_send.get("ok"):
                     retry_verify = driver.verify_delivery(message)
                     steps.append({"step": "retry_verify_delivery", **retry_verify})
-                    attempt.delivered = bool(retry_verify.get("delivered"))
+                    attempt.delivered = _personalized_delivery_verified(retry_verify)
         if not attempt.delivered:
             attempt.error = "delivery_not_verified"
     else:
