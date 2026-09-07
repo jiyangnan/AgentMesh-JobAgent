@@ -25,6 +25,14 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
       const title = document.title || '';
       const href = location.href || '';
       const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
+      let verificationRequired = false;
+      try {{
+        const currentUrl = new URL(href);
+        verificationRequired = currentUrl.protocol === 'https:'
+          && currentUrl.hostname === 'safe.liepin.com'
+          && !currentUrl.username && !currentUrl.password
+          && (!currentUrl.port || currentUrl.port === '443');
+      }} catch (error) {{ verificationRequired = false; }}
       const loginPromptPresent = /登录|验证码|扫码/.test(title + '\\n' + bodyText.slice(0, 500));
       const loginRequired = /\\/login|passport|account/.test(href) || /登录|账号|passport/i.test(title);
       const seen = new Set();
@@ -43,6 +51,34 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
           && rect.width > 0
           && rect.height > 0;
       }}
+      const noResults = resultCardCount === 0
+        && /暂无相关职位|暂时没有合适|没有找到相关职位|未找到相关职位/.test(bodyText.slice(0, 3000));
+      const paginationRoots = Array.from(document.querySelectorAll(
+        '.ant-pagination, .pagination, .pager, [class*="pagination"]'
+      )).filter(visible);
+      const nextControls = Array.from(new Set(paginationRoots.flatMap(root =>
+        Array.from(root.querySelectorAll(
+          '.ant-pagination-next, .next, [rel="next"], [aria-label="下一页"], [title="下一页"]'
+        )).filter(visible)
+      )));
+      const disabled = el => el.disabled === true
+        || el.getAttribute('aria-disabled') === 'true'
+        || /(?:^|[\\s-])disabled(?:$|[\\s-])/.test(String(el.className || ''))
+        || Array.from(el.querySelectorAll('[disabled], [aria-disabled="true"]')).some(child =>
+          child.disabled === true || child.getAttribute('aria-disabled') === 'true');
+      const activePages = Array.from(new Set(paginationRoots.flatMap(root =>
+        Array.from(root.querySelectorAll(
+          '.ant-pagination-item-active, [aria-current="page"], .active, .current'
+        )).filter(visible).map(el => String(el.innerText || el.textContent || '').trim())
+          .filter(value => /^[1-9]\\d*$/.test(value)).map(Number)
+      )));
+      const paginationEvidence = {{
+        source: 'visible_pagination',
+        currentPage: activePages.length === 1 ? activePages[0] : null,
+        nextControlPresent: nextControls.length > 0,
+        nextDisabled: nextControls.length > 0 && nextControls.every(disabled),
+        nextEnabled: nextControls.some(el => !disabled(el))
+      }};
       const keyInput = Array.from(document.querySelectorAll(
         'input[name="key"], input[placeholder*="搜索职位"], input[placeholder*="搜职位"]'
       )).find(visible) || null;
@@ -161,6 +197,8 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
         url: href,
         title,
         selectorVersion,
+        verificationRequired,
+        paginationEvidence,
         loginRequired,
         loginPromptPresent,
         bodySnippet: bodyText.slice(0, 500),
@@ -177,8 +215,8 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
           inputQuery: keyInput ? String(keyInput.value || keyInput.getAttribute('value') || keyInput.getAttribute('data-name') || '').trim() : '',
           urlQuery,
           jobCardCount: resultCardCount,
-          noResults: resultCardCount === 0 && /暂无相关职位|暂时没有合适|没有找到相关职位|非常抱歉/.test(bodyText.slice(0, 3000)),
-          resultSurface: resultCardCount > 0 || /暂无相关职位|暂时没有合适|没有找到相关职位|非常抱歉/.test(bodyText.slice(0, 3000))
+          noResults,
+          resultSurface: resultCardCount > 0 || noResults
         }},
         cards
       }});

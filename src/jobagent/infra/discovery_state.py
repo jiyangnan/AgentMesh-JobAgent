@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from jobagent.infra.state import discoveries_dir
+from jobagent.infra.protocol import digest_payload
 
 
 def _platform_dir(platform: str) -> Path:
@@ -92,6 +93,65 @@ def clear_pending_start(platform: str, *, request_id: str | None = None) -> None
         if payload and str(payload.get("request_id")) != request_id:
             return
     path.unlink()
+
+
+def collection_plan_digest(plan: dict[str, Any]) -> str:
+    """Bind a cursor to the signed plan's semantics, not its renewable TTL."""
+    return digest_payload({
+        key: value for key, value in plan.items()
+        if key not in {"signature", "issued_at", "expires_at", "renewal"}
+    })
+
+
+def load_collection_checkpoint(platform: str) -> dict[str, Any] | None:
+    pending = load_pending_start(platform)
+    checkpoint = pending.get("collection") if pending else None
+    if checkpoint is None:
+        return None  # Previous clients' schema v1 requests remain intact.
+    if (
+        not isinstance(checkpoint, dict)
+        or checkpoint.get("schema_version") != 1
+        or not isinstance(checkpoint.get("plan"), dict)
+        or not isinstance(checkpoint.get("progress"), dict)
+        or checkpoint.get("plan_digest") != collection_plan_digest(checkpoint["plan"])
+        or checkpoint.get("progress_digest") != digest_payload(checkpoint["progress"])
+    ):
+        raise ValueError("Invalid discovery collection checkpoint; preserved without changes")
+    return checkpoint
+
+
+def save_collection_checkpoint(
+    platform: str,
+    *,
+    request_id: str,
+    plan: dict[str, Any],
+    progress: dict[str, Any],
+) -> None:
+    """Atomically migrate v1 start state on the first verified completed page."""
+    pending = load_pending_start(platform)
+    if pending is None or pending.get("request_id") != request_id or plan.get("request_id") != request_id:
+        raise ValueError("Collection checkpoint request mismatch")
+    pending["schema_version"] = 2
+    pending["collection"] = {
+        "schema_version": 1,
+        "plan": plan,
+        "plan_digest": collection_plan_digest(plan),
+        "progress": progress,
+        "progress_digest": digest_payload(progress),
+    }
+    _write_pending_start(pending_start_path(platform), pending)
+
+
+def archive_pending_start(platform: str) -> None:
+    """Retain partial candidates when an explicitly new round replaces a request."""
+    pending = load_pending_start(platform)
+    if pending is None:
+        return
+    archive = discoveries_dir().parent / "archive" / "collection-checkpoints"
+    archive.mkdir(parents=True, exist_ok=True)
+    name = digest_payload(pending).removeprefix("sha256:") + ".json"
+    _write_pending_start(archive / name, pending)
+    clear_pending_start(platform, request_id=str(pending["request_id"]))
 
 
 def record_collection_recovery(

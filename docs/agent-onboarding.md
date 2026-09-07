@@ -199,6 +199,8 @@ The send command rechecks local delivery history. A stale or edited review file 
 
 ### 猎聘
 
+On Liepin `liepin_verification_required`, keep the existing browser tab and stop for the returned user prompt. Only after the user completes verification, run the exact `next_suggested` Discover command. Completed query pages and collected candidates resume from the preserved account-bound checkpoint; do not restart the round, request another login or repeat completed searches. Explicit no-results or verified final-page evidence retires only that query. An older request without a checkpoint remains preserved; never invent missing progress.
+
 ```bash
 jobagent liepin login --check
 jobagent liepin discover

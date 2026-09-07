@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 from jobagent.domain.models import Job
 from jobagent.drivers.boss import create_driver
@@ -21,6 +21,10 @@ LIEPIN_CITY_CODES = BUNDLED_CITY_CODES
 
 LIEPIN_SEARCH_URL = "https://www.liepin.com/zhaopin/"
 LIEPIN_CITY_LIST_URL = "https://www.liepin.com/citylist/"
+LIEPIN_VERIFICATION_USER_PROMPT = (
+    "猎聘当前需要安全验证。请在现有 Job Agent Chrome 标签页中完成验证，"
+    "不要关闭浏览器或新建求职轮次；完成后继续原 Discover 请求。"
+)
 
 
 def build_liepin_search_url(
@@ -117,12 +121,40 @@ class LiepinCollectResult:
         }
         if self.error:
             payload["error"] = self.error
-        if self.error == "liepin_login_required":
+        interruption = _interruption_payload(self.snapshot, error=self.error)
+        for key in ("message", "retryable", "requires_user_action", "user_action", "user_prompt", "next_suggested"):
+            if key in interruption:
+                payload[key] = interruption[key]
+        if self.error == "liepin_verification_required":
+            payload["message"] = "Liepin requires user verification in the existing browser tab."
+            payload["requires_user_action"] = True
+            payload["user_action"] = "complete_liepin_verification"
+            payload["user_prompt"] = (
+                _verification_prompt(self.snapshot) or LIEPIN_VERIFICATION_USER_PROMPT
+            )
+        elif self.error == "liepin_login_required":
             payload["message"] = "Liepin live collect requires an active logged-in session."
             payload["requires_user_action"] = True
             payload["user_action"] = "login_liepin"
             payload["user_prompt"] = LIEPIN_LOGIN_USER_PROMPT
             payload["next_suggested"] = "jobagent liepin login"
+        elif self.error == "liepin_search_state_unknown":
+            payload.setdefault("message", "Liepin search page could not be verified before submission.")
+            payload.setdefault("retryable", False)
+            payload.setdefault("user_prompt", (
+                "猎聘搜索页面状态暂时无法安全确认，已停止搜索操作。"
+                "请保留当前浏览器和求职轮次，通过只读浏览器诊断确认页面状态。"
+            ))
+            payload.setdefault("next_suggested", "jobagent browser diagnose --platform liepin")
+        elif self.error == "liepin_page_state_unknown":
+            payload.setdefault("message", "Liepin page state could not be verified safely.")
+            payload.setdefault("retryable", False)
+            payload.setdefault("requires_user_action", True)
+            payload.setdefault("user_prompt", (
+                "猎聘当前页面状态暂时无法确认，已停止操作。"
+                "请保留当前页面和求职轮次，先查看只读浏览器诊断结果。"
+            ))
+            payload.setdefault("next_suggested", "jobagent browser diagnose --platform liepin")
         elif self.error in {
             "liepin_city_code_not_found",
             "liepin_city_evidence_unverified",
@@ -225,7 +257,7 @@ class LiepinReadOnlyCollector:
                 city_route=city_route,
             )
             open_result = self.driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
-            if not open_result.get("ok"):
+            if not open_result.get("ok") or _requires_intervention(open_result):
                 return LiepinCollectResult(
                     query=query,
                     city=city,
@@ -238,13 +270,14 @@ class LiepinReadOnlyCollector:
                     page=start_page,
                     pages=page_count,
                     ok=False,
-                    error=str(open_result.get("error", "open_url_failed")),
+                    error=(_interruption_error(open_result) if _requires_intervention(open_result)
+                           else str(open_result.get("error", "open_url_failed"))),
                 )
 
-            self._submit_search_if_query_missing(query, wait_seconds=wait_seconds)
+            search_failure = self._submit_search_if_query_missing(query, wait_seconds=wait_seconds)
 
             remaining = max(1, limit - len(jobs))
-            snapshot = self._extract_snapshot(limit=remaining)
+            snapshot = search_failure or self._extract_snapshot(limit=remaining)
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
             failure = _snapshot_failure(snapshot)
@@ -290,6 +323,14 @@ class LiepinReadOnlyCollector:
                         query=query,
                         wait_seconds=wait_seconds,
                     )
+                    if _requires_intervention(city_resolution):
+                        return LiepinCollectResult(
+                            query=query, city=city,
+                            url=str(city_resolution.get("url") or url), jobs=jobs,
+                            snapshot=_combined_snapshot(snapshots, {"cityResolution": city_resolution}),
+                            page=start_page, pages=page_count, ok=False,
+                            error=_interruption_error(city_resolution),
+                        )
                     replacement_code = str(city_resolution.get("code") or "")
                     replacement_route = _safe_liepin_city_route(
                         str(city_resolution.get("route") or "")
@@ -308,15 +349,28 @@ class LiepinReadOnlyCollector:
                             url,
                             wait_seconds=wait_seconds,
                         )
+                        if _requires_intervention(open_result):
+                            return LiepinCollectResult(
+                                query=query, city=city, url=str(open_result.get("url") or url),
+                                jobs=jobs, snapshot=_combined_snapshot(snapshots, {"open_result": open_result}),
+                                page=start_page, pages=page_count, ok=False,
+                                error=_interruption_error(open_result),
+                            )
                         if open_result.get("ok"):
-                            self._submit_search_if_query_missing(
+                            search_failure = self._submit_search_if_query_missing(
                                 query,
                                 wait_seconds=wait_seconds,
                             )
-                            snapshot = self._extract_snapshot(limit=remaining)
+                            snapshot = search_failure or self._extract_snapshot(limit=remaining)
                             snapshot["page"] = current_page
                             snapshot["requestedUrl"] = url
                             failure = _snapshot_failure(snapshot)
+                            if failure:
+                                return LiepinCollectResult(
+                                    query=query, city=city, url=str(snapshot.get("url") or url),
+                                    jobs=jobs, snapshot=_combined_snapshot(snapshots, snapshot),
+                                    page=start_page, pages=page_count, ok=False, error=failure,
+                                )
                             if not failure:
                                 verification = self._verify_snapshot_city(
                                     snapshot,
@@ -356,6 +410,12 @@ class LiepinReadOnlyCollector:
                             observed_code,
                             numeric_verification,
                         )
+            termination_reason = _query_termination_reason(
+                snapshot, query=query, city=city, page=current_page,
+            )
+            if termination_reason:
+                snapshot["terminationReason"] = termination_reason
+                snapshot["paginationExhausted"] = True
             snapshots.append(snapshot)
 
             cards = snapshot.get("cards", []) if isinstance(snapshot, dict) else []
@@ -372,7 +432,7 @@ class LiepinReadOnlyCollector:
                 jobs.append(job)
                 if len(jobs) >= limit:
                     break
-            if len(jobs) >= limit:
+            if termination_reason or len(jobs) >= limit:
                 break
             if index < page_count - 1 and page_delay > 0:
                 time.sleep(page_delay)
@@ -422,6 +482,8 @@ class LiepinReadOnlyCollector:
     ) -> dict[str, Any]:
         """Discover and verify a city code or official readable city route."""
         current_evidence = self._extract_city_search_evidence()
+        if _requires_intervention(current_evidence):
+            return _city_interruption_failure(current_evidence, city=city)
         current = self.city_resolver.verify_evidence(
             current_evidence,
             city=city,
@@ -437,6 +499,8 @@ class LiepinReadOnlyCollector:
             }
 
         current_route = self._extract_city_route(city)
+        if _requires_intervention(current_route):
+            return _city_interruption_failure(current_route, city=city)
         current_route_url = _safe_liepin_city_route(
             str(current_route.get("route") or "")
         )
@@ -461,12 +525,18 @@ class LiepinReadOnlyCollector:
             search_directory_url,
             wait_seconds=wait_seconds,
         )
+        if _requires_intervention(search_open):
+            return _city_interruption_failure(search_open, city=city)
         if search_open.get("ok"):
             search_route = self._extract_city_route(city)
+            if _requires_intervention(search_route):
+                return _city_interruption_failure(search_route, city=city)
             search_route_url = _safe_liepin_city_route(
                 str(search_route.get("route") or "")
             )
             search_source_evidence = self._extract_city_search_evidence()
+            if _requires_intervention(search_source_evidence):
+                return _city_interruption_failure(search_source_evidence, city=city)
             search_source_url = str(
                 search_source_evidence.get("url")
                 or search_open.get("url")
@@ -487,6 +557,8 @@ class LiepinReadOnlyCollector:
             LIEPIN_CITY_LIST_URL,
             wait_seconds=wait_seconds,
         )
+        if _requires_intervention(open_result):
+            return _city_interruption_failure(open_result, city=city)
         if not open_result.get("ok"):
             return {
                 "ok": False,
@@ -497,7 +569,11 @@ class LiepinReadOnlyCollector:
                 "error": str(open_result.get("error") or "open_url_failed"),
             }
         route = self._extract_city_route(city)
+        if _requires_intervention(route):
+            return _city_interruption_failure(route, city=city)
         directory_evidence = self._extract_city_search_evidence()
+        if _requires_intervention(directory_evidence):
+            return _city_interruption_failure(directory_evidence, city=city)
         directory_url = str(
             directory_evidence.get("url")
             or open_result.get("url")
@@ -542,6 +618,8 @@ class LiepinReadOnlyCollector:
             city_search_url,
             wait_seconds=wait_seconds,
         )
+        if _requires_intervention(route_open):
+            return _city_interruption_failure(route_open, city=city)
         if not route_open.get("ok"):
             payload = {
                 "ok": False,
@@ -558,6 +636,8 @@ class LiepinReadOnlyCollector:
                 )
             return payload
         evidence = self._extract_city_search_evidence()
+        if _requires_intervention(evidence):
+            return _city_interruption_failure(evidence, city=city)
         evidence.setdefault(
             "url",
             str(route_open.get("url") or city_search_url),
@@ -618,6 +698,7 @@ class LiepinReadOnlyCollector:
           return JSON.stringify({{
             ok: Boolean(route),
             mode: mode,
+            url: location.href || '',
             city: normalize(expected),
             route: route,
             candidateCount: candidates.length,
@@ -679,7 +760,7 @@ class LiepinReadOnlyCollector:
           catch (error) { urlQuery = ''; }
           const jobCardCount = document.querySelectorAll('.job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"]').length;
           const body = (document.body && (document.body.innerText || document.body.textContent) || '').slice(0, 3000);
-          const noResults = /暂无相关职位|暂时没有合适|没有找到相关职位|非常抱歉/.test(body);
+          const noResults = jobCardCount === 0 && /暂无相关职位|暂时没有合适|没有找到相关职位|未找到相关职位/.test(body);
           return JSON.stringify({
             ok: true,
             mode,
@@ -718,7 +799,7 @@ class LiepinReadOnlyCollector:
                 return {"ok": False, "error": "snapshot_parse_failed", "raw": result["raw"]}
         return result if isinstance(result, dict) else {}
 
-    def _submit_search_if_query_missing(self, query: str, wait_seconds: int = 8) -> None:
+    def _submit_search_if_query_missing(self, query: str, wait_seconds: int = 8) -> dict[str, Any] | None:
         """Use the visible Liepin search bar when the URL shortcut is ignored.
 
         Liepin's current React search page can redirect old `?key=` URLs to a
@@ -729,10 +810,22 @@ class LiepinReadOnlyCollector:
         if cdp is None or not callable(click_at):
             return
         current = self._extract_search_state()
-        href = unquote(str(current.get("href", "")))
-        body = str(current.get("body", ""))
-        no_results = "非常抱歉" in body or "暂时没有合适" in body
-        if query and not no_results and (f"key={query}" in href or query in body[:300]):
+        if _requires_intervention(current):
+            return {**current, "ok": False, "error": _interruption_error(current),
+                    "url": str(current.get("href") or current.get("url") or "")}
+        original_path = _trusted_liepin_search_path(str(current.get("href") or ""))
+        if current.get("ok") is False or not original_path:
+            return {"ok": False, "error": "liepin_search_state_unknown"}
+        try:
+            parsed = urlsplit(str(current.get("href") or ""))
+            url_query = parse_qs(parsed.query).get("key", [""])
+        except ValueError:
+            return None
+        if parsed.scheme != "https" or parsed.hostname not in {"liepin.com", "www.liepin.com"}:
+            return None
+        # A verified no-result page is not evidence that submission failed.
+        # Match the complete decoded parameter, never a body-text substring.
+        if query and url_query == [query.strip()]:
             return
         input_target = current.get("input") if isinstance(current.get("input"), dict) else None
         button_target = current.get("button") if isinstance(current.get("button"), dict) else None
@@ -743,6 +836,25 @@ class LiepinReadOnlyCollector:
         _clear_visible_search_input(self.driver)
         _replace_focused_text(cdp, query)
         time.sleep(0.5)
+        # Typing may trigger a redirect. Re-observe the page and the visible
+        # control immediately before clicking instead of reusing coordinates.
+        before_submit = self._extract_search_state()
+        if _requires_intervention(before_submit):
+            return {
+                **before_submit, "ok": False, "error": _interruption_error(before_submit),
+                "url": str(before_submit.get("href") or before_submit.get("url") or ""),
+            }
+        button_target = before_submit.get("button")
+        if (
+            before_submit.get("ok") is False
+            or _trusted_liepin_search_path(str(before_submit.get("href") or "")) != original_path
+            or not isinstance(before_submit.get("input"), dict)
+            or not isinstance(button_target, dict)
+            or not all(isinstance(button_target.get(key), (int, float)) for key in ("x", "y"))
+        ):
+            return {"ok": False, "error": "liepin_search_state_unknown"}
+        if parse_qs(urlsplit(str(before_submit["href"])).query).get("key") == [query.strip()]:
+            return None
         click_at(button_target["x"], button_target["y"])
         time.sleep(max(3, min(8, int(wait_seconds))))
 
@@ -813,6 +925,9 @@ def _combined_snapshot(
         return snapshots[0]
     if snapshots:
         payload: dict[str, Any] = {"ok": True, "pages": snapshots}
+        if fallback is None and snapshots[-1].get("paginationExhausted") is True:
+            payload["paginationExhausted"] = True
+            payload["terminationReason"] = snapshots[-1]["terminationReason"]
         if fallback is not None:
             payload["ok"] = False
             payload["failure"] = fallback
@@ -831,6 +946,8 @@ def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:
     """Classify known live read-only collect blocking states."""
+    if _requires_intervention(snapshot):
+        return _interruption_error(snapshot)
     if snapshot.get("loginRequired"):
         return "liepin_login_required"
     if snapshot.get("loginPromptPresent"):
@@ -841,6 +958,157 @@ def _snapshot_failure(snapshot: dict[str, Any]) -> str:
         return "liepin_login_required"
     if snapshot.get("ok") is False:
         return str(snapshot.get("error") or "liepin_snapshot_failed")
+    return ""
+
+
+def _verification_required(payload: dict[str, Any]) -> bool:
+    if payload.get("error") == "liepin_verification_required":
+        return True
+    try:
+        parsed = urlsplit(str(payload.get("url") or payload.get("href") or ""))
+        return bool(
+            parsed.scheme == "https"
+            and parsed.hostname == "safe.liepin.com"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in {None, 443}
+        )
+    except ValueError:
+        return False
+
+
+def _trusted_liepin_search_path(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        path = parsed.path.rstrip("/")
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in {"liepin.com", "www.liepin.com"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in {None, 443}
+        ):
+            return ""
+        if path == "/zhaopin":
+            return path
+        if path.endswith("/zhaopin"):
+            route = "https://www.liepin.com" + path.removesuffix("/zhaopin") + "/"
+            if _safe_liepin_city_route(route):
+                return path
+    except ValueError:
+        pass
+    return ""
+
+
+def _verification_prompt(payload: dict[str, Any]) -> str:
+    prompt = str(payload.get("user_prompt") or "").strip()
+    if prompt:
+        return prompt
+    for key in ("failure", "open_result", "cityResolution"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            prompt = _verification_prompt(nested)
+            if prompt:
+                return prompt
+    for page in reversed(payload.get("pages") or []):
+        if isinstance(page, dict):
+            prompt = _verification_prompt(page)
+            if prompt:
+                return prompt
+    return ""
+
+
+def _requires_intervention(payload: dict[str, Any]) -> bool:
+    return bool(
+        _verification_required(payload)
+        or payload.get("requires_user_action") is True
+        or payload.get("error") in {"liepin_page_state_unknown", "liepin_search_state_unknown"}
+    )
+
+
+def _interruption_error(payload: dict[str, Any]) -> str:
+    if _verification_required(payload):
+        return "liepin_verification_required"
+    return str(payload.get("error") or "liepin_page_state_unknown")
+
+
+def _interruption_payload(snapshot: dict[str, Any], *, error: str) -> dict[str, Any]:
+    if _requires_intervention(snapshot) and _interruption_error(snapshot) == error:
+        return snapshot
+    nested_items = [snapshot.get(key) for key in ("failure", "open_result", "cityResolution")]
+    nested_items.extend(reversed(snapshot.get("pages") or []))
+    for nested in nested_items:
+        if isinstance(nested, dict):
+            result = _interruption_payload(nested, error=error)
+            if result:
+                return result
+    return {}
+
+
+def _city_interruption_failure(payload: dict[str, Any], *, city: str) -> dict[str, Any]:
+    return {
+        **payload,
+        "ok": False, "city": city, "code": "", "route": "", "source": "page_intervention",
+        "error": _interruption_error(payload), "requires_user_action": True,
+    }
+
+
+def _query_termination_reason(
+    snapshot: dict[str, Any], *, query: str, city: str, page: int,
+) -> str:
+    """Accept terminal evidence only on this query's independently verified result page."""
+    if _snapshot_failure(snapshot):
+        return ""
+    evidence = _snapshot_city_evidence(snapshot)
+    if city and snapshot.get("cityVerification", {}).get("verified") is not True:
+        return ""
+    try:
+        parsed = urlsplit(str(snapshot.get("url") or ""))
+        requested = urlsplit(str(snapshot.get("requestedUrl") or ""))
+        port = parsed.port
+        params = parse_qs(parsed.query)
+        requested_params = parse_qs(requested.query)
+        current_page = params.get("currentPage", [])
+        card_count = int(evidence.get("jobCardCount") or 0)
+    except (TypeError, ValueError):
+        return ""
+    path = parsed.path.rstrip("/")
+    official_result = (
+        parsed.scheme == "https"
+        and parsed.hostname in {"liepin.com", "www.liepin.com"}
+        and parsed.username is None and parsed.password is None
+        and port in {None, 443}
+        and (path == "/zhaopin" or (
+            path.startswith("/city-") and path.endswith("/zhaopin")
+            and len(path.split("/")) == 3
+        ))
+        and path == requested.path.rstrip("/")
+        and all(params.get(key) == value for key, value in requested_params.items()
+                if key in {"city", "dq"})
+    )
+    if not (
+        official_result
+        and params.get("key") == [query.strip()]
+        and str(evidence.get("inputQuery") or "").strip() == query.strip()
+        and str(evidence.get("urlQuery") or "").strip() == query.strip()
+        and evidence.get("resultSurface") is True
+    ):
+        return ""
+    if evidence.get("noResults") is True and card_count == 0 and not snapshot.get("cards"):
+        return "no_results"
+    pagination = snapshot.get("paginationEvidence")
+    if not isinstance(pagination, dict) or card_count <= 0:
+        return ""
+    # The visible active page and URL page must agree; absence of a next
+    # control, empty parsed cards, or a stale disabled control proves nothing.
+    if (
+        pagination.get("source") == "visible_pagination"
+        and pagination.get("currentPage") == page
+        and current_page == [str(page - 1)]
+        and pagination.get("nextControlPresent") is True
+        and pagination.get("nextDisabled") is True
+        and pagination.get("nextEnabled") is False
+    ):
+        return "last_page"
     return ""
 
 

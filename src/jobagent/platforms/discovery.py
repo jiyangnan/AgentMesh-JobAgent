@@ -192,10 +192,10 @@ def _collect_web_platform(
     return CollectedPage(
         jobs=result.jobs,
         exhausted=(
-            platform == "zhilian"
+            platform in {"zhilian", "liepin"}
             and (
                 str(snapshot.get("terminationReason") or "")
-                in {"pagination_exhausted", "no_results"}
+                in {"pagination_exhausted", "no_results", "last_page"}
                 or bool(snapshot.get("paginationExhausted"))
             )
         ),
@@ -210,6 +210,8 @@ def collect_from_search_plan(
     driver=None,
     login_verification: dict[str, Any] | None = None,
     progress_callback: Callable[..., None] | None = None,
+    resume_progress: dict[str, Any] | None = None,
+    checkpoint_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     from jobagent.drivers.boss import create_driver
     from jobagent.infra.exceptions import (
@@ -223,16 +225,27 @@ def collect_from_search_plan(
     queries = list(plan.get("queries") or [])
     if not queries:
         raise CollectionError("empty_search_plan", "SearchPlan contains no queries")
-    driver = driver or create_driver(platform=platform)
     max_pages = max(int(query.get("page_limit", 1)) for query in queries)
-    candidates: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    exhausted_queries: set[int] = set()
+    candidates, completed_pages, exhausted_queries = _restore_progress(
+        resume_progress, queries=queries, candidate_limit=candidate_limit
+    )
+    seen = {str(item["id"]) for item in candidates}
+    driver = driver or create_driver(platform=platform)
+
+    def checkpoint() -> None:
+        if checkpoint_callback is not None:
+            checkpoint_callback({
+                "candidates": list(candidates),
+                "completed_pages": [list(item) for item in sorted(completed_pages)],
+                "exhausted_queries": sorted(exhausted_queries),
+            })
 
     try:
         for page in range(1, max_pages + 1):
             for query_index, query in enumerate(queries):
                 if query_index in exhausted_queries:
+                    continue
+                if (query_index, page) in completed_pages:
                     continue
                 if page > int(query.get("page_limit", 1)):
                     continue
@@ -299,7 +312,7 @@ def collect_from_search_plan(
                         **progress_details,
                         candidate_count=len(jobs),
                         query_exhausted=bool(
-                            platform == "zhilian" and query_index in exhausted_queries
+                            query_index in exhausted_queries
                         ),
                     )
                 for job in jobs:
@@ -309,7 +322,11 @@ def collect_from_search_plan(
                     seen.add(candidate["id"])
                     candidates.append(candidate)
                     if len(candidates) >= candidate_limit:
+                        completed_pages.add((query_index, page))
+                        checkpoint()
                         return candidates
+                completed_pages.add((query_index, page))
+                checkpoint()
                 if page_delay > 0:
                     time.sleep(page_delay)
     except UserActionRequiredError as exc:
@@ -353,3 +370,45 @@ def collect_from_search_plan(
             },
         )
     return candidates
+
+
+def _restore_progress(
+    progress: dict[str, Any] | None,
+    *,
+    queries: list[dict[str, Any]],
+    candidate_limit: int,
+) -> tuple[list[dict[str, Any]], set[tuple[int, int]], set[int]]:
+    if progress is None:
+        return [], set(), set()
+    def require(condition: bool) -> None:
+        if not condition:
+            raise ValueError("Invalid collection progress")
+    try:
+        candidates = progress["candidates"]
+        pages = progress["completed_pages"]
+        exhausted = progress["exhausted_queries"]
+        require(isinstance(candidates, list) and len(candidates) <= candidate_limit)
+        require(all(isinstance(item, dict) and str(item.get("id") or "") for item in candidates))
+        require(len({str(item["id"]) for item in candidates}) == len(candidates))
+        require(isinstance(pages, list) and isinstance(exhausted, list))
+        require(all(
+            isinstance(item, list) and len(item) == 2
+            and all(type(value) is int for value in item)
+            and 0 <= item[0] < len(queries)
+            and 1 <= item[1] <= int(queries[item[0]].get("page_limit", 1))
+            for item in pages
+        ))
+        completed = {tuple(item) for item in pages}
+        require(len(completed) == len(pages))
+        require(all(type(index) is int and 0 <= index < len(queries) for index in exhausted))
+        require(all(any(index == item[0] for item in completed) for index in exhausted))
+        # Every completed page must have all earlier pages of that query.
+        require(all((index, prior) in completed for index, page in completed for prior in range(1, page)))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CollectionError(
+            "collection_checkpoint_invalid",
+            "Saved collection progress is invalid; no browser action was taken",
+            user_prompt="采集断点无法安全校验，已保留原请求与数据。请联系支持，不要新建轮次或删除本地状态。",
+            details={"retryable": False, "requires_user_action": True},
+        ) from exc
+    return list(candidates), completed, set(exhausted)

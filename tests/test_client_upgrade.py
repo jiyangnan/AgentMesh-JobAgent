@@ -38,6 +38,33 @@ def _seed_preserved_state(app_dir: Path) -> None:
     _write_json(state / "discoveries" / "boss-old.json", {"manifest": {"signed": True}})
 
 
+@pytest.mark.parametrize("schema", [1, 2])
+@pytest.mark.parametrize("expired_key", [False, True])
+def test_v0543_upgrade_preserves_liepin_request_and_optional_checkpoint(tmp_path, schema, expired_key):
+    upgrade = importlib.import_module("jobagent.infra.client_upgrade")
+    root = tmp_path / ".jobagent"
+    _seed_preserved_state(root)
+    if expired_key:
+        (root / "credentials").write_text("jba_live_retired_test_fixture\n", encoding="utf-8")
+    pending = root / "state/discoveries/liepin/pending-start.json"
+    payload = {"schema_version": schema, "platform": "liepin", "request_id": "liepin:stable",
+               "round_id": "round-test", "account_ref": "account-test", "profile_digest": "profile"}
+    if schema == 2:
+        payload["collection"] = {"schema_version": 1, "progress": {"candidates": [{"id": "one"}],
+                                  "completed_pages": [[0, 1]], "exhausted_queries": []}}
+    _write_json(pending, payload)
+    _write_json(root / "state/client_upgrade_state.json", {
+        "client_version": "0.5.43", "protocol_version": 1, "state_migration_version": 7})
+    preserved = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()
+                 and path.name != "client_upgrade_state.json"}
+    first = upgrade.run_client_upgrade(app_dir=root, current_version="0.5.44", protocol_version=1)
+    assert first["ok"] is (not expired_key)
+    second = upgrade.run_client_upgrade(app_dir=root, current_version="0.5.44", protocol_version=1)
+    assert second["upgrade_detected"] is False
+    assert second["cleared"] == second["migrated"] == second["archived"] == []
+    assert all(path.read_bytes() == content for path, content in preserved.items())
+
+
 def test_upgrade_json_writer_uses_process_unique_temporary_file(
     monkeypatch,
     tmp_path,

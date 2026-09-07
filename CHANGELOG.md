@@ -2,6 +2,20 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.44] - 2026-09-07
+
+### Fixed
+
+- Stop immediately on Liepin verification pages and preserve the existing browser tab. Verification is reported explicitly with a user prompt instead of a generic search timeout; unreadable page state cannot trigger blind navigation or clicks.
+- Avoid resubmitting an already matching search query when its verified results are empty. Explicit no-results and visible final-page evidence end only the current query, while the rest of the signed search plan continues.
+- Persist completed Liepin query pages and collected candidates atomically. After the user completes verification, resume only unfinished pages of the same signed request; duplicate candidates remain excluded.
+
+### Compatibility
+
+- Preserve credentials, account binding, Chrome profile, login state, active round, decisions, delivery confirmations and audits. A previous schema v1 pending request remains unchanged until the first completed page adds the optional schema v2 collection checkpoint.
+- Verify the saved plan and request before resuming. Expired plans renew against the same request and Discover with no renewal charge; changed scope, identity or damaged progress stops safely without discarding evidence.
+- Older requests have no recoverable page checkpoint; the client retains their request ID and never invents missing progress. These changes do not promise that a platform will never request verification.
+
 ## [0.5.43] - 2026-09-07
 
 ### Fixed

@@ -427,7 +427,8 @@ def _migrate_pre_delivery_profile_binding(
             / current_platform
             / "pending-decision.json"
         )
-        if pending_decision.exists():
+        pending_start = _read_json(pending_decision.with_name("pending-start.json"))
+        if pending_decision.exists() or (pending_start and pending_start.get("collection") is not None):
             conflicts.append(
                 {
                     "code": "active_round_has_pending_decision",

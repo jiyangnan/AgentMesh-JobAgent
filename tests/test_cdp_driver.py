@@ -1,5 +1,9 @@
 """Tests for CDP driver compatibility helpers."""
 
+import json
+
+import pytest
+
 from jobagent.drivers.boss import cdp_driver
 from jobagent.drivers.boss.cdp_driver import CDPBossDriver
 
@@ -373,6 +377,146 @@ def test_open_url_waits_for_late_liepin_job_cards(monkeypatch):
     assert result["reused"] is False
     assert len(driver.cdp.js_calls) == 3
     assert sleeps == [2.0, 2.0]
+    assert driver.cdp.send_calls == [("Page.navigate", {"url": url})]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.liepin.com/zhaopin/?key=AI&currentPage=1",
+        "https://www.liepin.com/job/1983061929.shtml",
+        "https://www.liepin.com/",
+    ],
+)
+def test_liepin_existing_verification_stops_before_navigation(monkeypatch, url):
+    driver = make_driver("{}")
+    challenge = "https://safe.liepin.com/captcha?token=private#private"
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: challenge)
+    sleeps = []
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = driver.open_url_in_new_tab(url)
+
+    assert result["error"] == "liepin_verification_required"
+    assert result["requires_user_action"] is True
+    assert result["user_action"] == "complete_liepin_verification"
+    assert "完成验证" in result["user_prompt"]
+    assert "登录" not in result["user_prompt"]
+    assert result["url"] == "https://safe.liepin.com/captcha"
+    assert "private" not in json.dumps(result)
+    assert driver.cdp.send_calls == []
+    assert driver.cdp.js_calls == []
+    assert sleeps == []
+
+
+def test_liepin_reconnected_verification_stops_before_navigation(monkeypatch):
+    driver = make_driver("https://safe.liepin.com/captcha?token=private")
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: "")
+
+    result = driver.open_url_in_new_tab("https://www.liepin.com/zhaopin/?key=AI")
+
+    assert result["error"] == "liepin_verification_required"
+    assert result["requires_user_action"] is True
+    assert result["user_prompt"]
+    assert driver.cdp.js_calls == ["location.href"]
+    assert driver.cdp.send_calls == []
+
+
+@pytest.mark.parametrize("observation", ["", None, RuntimeError("CDP unavailable")])
+def test_liepin_unobservable_current_page_stops_before_navigation(monkeypatch, observation):
+    driver = make_driver(observation)
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: "")
+    if isinstance(observation, Exception):
+        def unavailable(*args, **kwargs):
+            raise observation
+        monkeypatch.setattr(driver.cdp, "evaluate", unavailable)
+
+    result = driver.open_url_in_new_tab("https://www.liepin.com/zhaopin/?key=AI")
+
+    assert result["error"] == "liepin_page_state_unknown"
+    assert result["retryable"] is False
+    assert result["requires_user_action"] is True
+    assert result["user_prompt"]
+    assert result["next_suggested"] == "jobagent browser diagnose --platform liepin"
+    assert driver.cdp.send_calls == []
+
+
+@pytest.mark.parametrize("loading_probes", [0, 1])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.liepin.com/zhaopin/?key=AI&currentPage=1",
+        "https://www.liepin.com/job/1983061929.shtml",
+    ],
+)
+def test_liepin_verification_redirect_stops_on_first_challenge_probe(
+    monkeypatch, loading_probes, url
+):
+    loading = json.dumps({"url": url, "readyState": "loading"})
+    challenge = json.dumps({
+        "url": "https://safe.liepin.com/captcha?token=private",
+        "title": "安全验证",
+        "readyState": "interactive",
+    })
+    driver = make_driver([loading] * loading_probes + [challenge])
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: "about:blank")
+    sleeps = []
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = driver.open_url_in_new_tab(url)
+
+    assert result["error"] == "liepin_verification_required"
+    assert result["requires_user_action"] is True
+    assert result["user_prompt"]
+    assert result["url"] == "https://safe.liepin.com/captcha"
+    assert len(driver.cdp.js_calls) == loading_probes + 1
+    assert sleeps == [2.0] * loading_probes
+    assert driver.cdp.send_calls == [("Page.navigate", {"url": url})]
+
+
+def test_liepin_normal_search_captcha_wording_is_not_a_challenge(monkeypatch):
+    url = "https://www.liepin.com/zhaopin/?key=AI&currentPage=0"
+    driver = make_driver(json.dumps({
+        "url": url,
+        "title": "验证码测试开发工程师招聘",
+        "readyState": "complete",
+        "jobLinkCount": 3,
+        "noResults": False,
+        "loginRequired": False,
+        "bodySnippet": "职位要求：负责验证码组件的测试",
+    }))
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: url)
+
+    result = driver.open_url_in_new_tab(url)
+
+    assert result["ok"] is True
+    assert "error" not in result
+    assert driver.cdp.send_calls == []
+
+
+@pytest.mark.parametrize(
+    "current_url",
+    [
+        "https://safe.liepin.com.example.test/captcha",
+        "http://safe.liepin.com/captcha",
+        "https://user@safe.liepin.com/captcha",
+        "https://safe.liepin.com:8443/captcha",
+    ],
+)
+def test_liepin_verification_requires_trusted_origin(monkeypatch, current_url):
+    url = "https://www.liepin.com/zhaopin/?key=AI"
+    driver = make_driver(json.dumps({
+        "url": url,
+        "title": "猎聘",
+        "readyState": "complete",
+        "jobLinkCount": 3,
+    }))
+    monkeypatch.setattr(driver, "_ensure_connected_for_url", lambda _url: current_url)
+    monkeypatch.setattr(cdp_driver.time, "sleep", lambda _seconds: None)
+
+    result = driver.open_url_in_new_tab(url)
+
+    assert result["ok"] is True
     assert driver.cdp.send_calls == [("Page.navigate", {"url": url})]
 
 
