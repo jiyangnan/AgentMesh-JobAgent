@@ -63,7 +63,13 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m pytest -q
 
-      - name: Build and smoke-test wheel
+      - name: Headed Liepin collection recovery gate
+        # The headed fixture gate uses a fresh profile and blocks external traffic.
+        # It never opens a customer session or sends recruiting actions.
+        run: |
+          xvfb-run -a env PYTHONPATH=src python scripts/ci/liepin_collection_recovery_gate.py
+
+      - name: Build and smoke-test release wheel
         run: |
           python -m pip install build
           python -m build

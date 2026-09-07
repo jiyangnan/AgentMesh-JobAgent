@@ -369,9 +369,11 @@ def reconcile_active_round_profile(profile: dict[str, Any]) -> dict[str, Any]:
         from jobagent.infra.discovery_state import (
             clear_pending_start,
             load_pending_decision,
+            load_pending_start,
         )
 
-        if load_pending_decision(platform) is not None:
+        pending_start = load_pending_start(platform)
+        if load_pending_decision(platform) is not None or (pending_start and pending_start.get("collection") is not None):
             raise RoundOrderError(
                 {
                     "ok": False,

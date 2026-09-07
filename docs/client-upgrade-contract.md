@@ -70,6 +70,15 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 
 ## 验收标准
 
+### 0.5.43 → 0.5.44 猎聘采集断点
+
+- **preserve**：账户、API Key、Chrome profile/登录态、画像、活动轮次、已有决策、预览授权和 audit 原地保留；上一版本 `pending-start.json` schema v1 原请求不删除、不替换。
+- **migrate**：仅首次完整验证并完成一个查询页后，原子写入 schema v2 `pending-start.json` 的可选 `collection` v1 字段；包含原签名 SearchPlan、候选、已完成查询页和已耗尽查询。重复保存相同断点内容不变，不需要批量启动迁移。
+- **block**：恢复时重新验签并校验账户、本轮、画像、意图、请求与计划语义；过期计划只允许原请求/Discover 的零费用续签，查询或上限变化、签名失效、损坏断点均保留数据并停止。已有断点不能被自动画像重绑清除。
+- **archive**：用户显式创建另一轮后，旧轮的部分采集状态归档；不同账户不能触发此替换。完成采集后先持久化同一 pending decision，再清除 start 断点。
+- **clear**：本次不新增任何浏览器或账户状态清理。旧版本未保存逐页候选，因此不能凭日志伪造历史断点；保留原 request，首次新版执行正常验证计划与页面，之后支持逐页恢复。
+- 猎聘验证码返回 `liepin_verification_required`、明确 `user_prompt` 与 `requires_user_action=true`；用户完成验证后才执行返回的原 Discover 命令。无结果/末页证据仅结束当前已验证查询，解析空列表本身不等于查询耗尽。
+
 - 旧安装首次启动：自动迁移一次，报告 `cleared`、`migrated`、`archived` 和 `conflicts`。
 - 真实新版：受管安装按阶段输出版本号与状态，成功后原命令自动恢复；当前已是最新版时不输出升级事件。
 - 旧事件协议兼容：从尚不具备阶段事件的旧客户端升级后，新进程至少补发一次 `client_update_completed` 和 `client_command_resumed`，后续版本升级输出完整四阶段。

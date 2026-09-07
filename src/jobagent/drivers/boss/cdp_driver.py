@@ -809,6 +809,36 @@ class CDPBossDriver(BossActionDriver):
         # CDP does not use AppleScript; always report ready.
         return True, "cdp"
 
+    @staticmethod
+    def _liepin_verification_result(info: dict[str, Any]) -> dict[str, Any] | None:
+        """Recognize Liepin's trusted verification origin, not job-page text."""
+        try:
+            parsed = urlsplit(str(info.get("url") or ""))
+            trusted = (
+                parsed.scheme == "https"
+                and parsed.hostname == "safe.liepin.com"
+                and parsed.port in {None, 443}
+                and parsed.username is None
+                and parsed.password is None
+            )
+        except ValueError:
+            trusted = False
+        if not trusted:
+            return None
+        return {
+            "ok": False,
+            "error": "liepin_verification_required",
+            "requires_user_action": True,
+            "user_action": "complete_liepin_verification",
+            "user_prompt": (
+                "猎聘需要完成安全验证。请在已经打开的 Job Agent 猎聘浏览器窗口中"
+                "完成验证，完成后回复我“验证好了”。"
+            ),
+            "url": f"https://safe.liepin.com{parsed.path}",
+            "title": str(info.get("title") or "猎聘安全验证"),
+            "readyState": str(info.get("readyState") or ""),
+        }
+
     def open_url_in_new_tab(self, url: str, wait_seconds: int = 5) -> dict[str, Any]:
         """Navigate the current CDP page to the given URL.
 
@@ -828,6 +858,30 @@ class CDPBossDriver(BossActionDriver):
             )
             self._boss_bound_chat_job_id = ""
         current_url = self._ensure_connected_for_url(url)
+        if platform_for_url(url) == "liepin":
+            # Reconnecting can select an existing challenge tab while returning
+            # an unknown URL. Observe it before any new navigation replaces it.
+            if not current_url:
+                try:
+                    result = self.cdp.evaluate("location.href", timeout=5)
+                    current_url = str(result.get("result", {}).get("value") or "")
+                except Exception:
+                    current_url = ""
+                if not current_url:
+                    return {
+                        "ok": False,
+                        "error": "liepin_page_state_unknown",
+                        "retryable": False,
+                        "requires_user_action": True,
+                        "user_prompt": (
+                            "猎聘当前页面状态暂时无法确认，已暂停操作并保留当前页面。"
+                            "请先检查浏览器诊断结果，再继续本轮搜索。"
+                        ),
+                        "next_suggested": "jobagent browser diagnose --platform liepin",
+                    }
+            verification = self._liepin_verification_result({"url": current_url})
+            if verification is not None:
+                return verification
         reused = self._same_search_url(current_url, url)
         try:
             if platform_for_url(url) == "zhilian":
@@ -927,6 +981,9 @@ class CDPBossDriver(BossActionDriver):
                     try:
                         result = self.cdp.evaluate(snapshot_js, timeout=5)
                         info = json.loads(result.get("result", {}).get("value", "{}"))
+                        verification = self._liepin_verification_result(info)
+                        if verification is not None:
+                            return verification
                         navigated = self._same_search_url(
                             str(info.get("url") or ""),
                             url,
@@ -1006,6 +1063,9 @@ class CDPBossDriver(BossActionDriver):
                     try:
                         result = self.cdp.evaluate(snapshot_js, timeout=5)
                         info = json.loads(result.get("result", {}).get("value", "{}"))
+                        verification = self._liepin_verification_result(info)
+                        if verification is not None:
+                            return verification
                         navigated = self._same_search_url(
                             str(info.get("url") or ""),
                             url,
@@ -1040,6 +1100,10 @@ class CDPBossDriver(BossActionDriver):
                     "JSON.stringify({url: location.href, title: document.title})"
                 )
                 info = json.loads(result.get("result", {}).get("value", "{}"))
+            if platform_for_url(url) == "liepin":
+                verification = self._liepin_verification_result(info)
+                if verification is not None:
+                    return verification
             current_url = info.get("url", "")
             # Verification detection: upstream may redirect to a verify page
             if "verify" in current_url or "code=36" in current_url:

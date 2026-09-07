@@ -10,14 +10,18 @@ from jobagent.infra import cloud_client, rounds
 from jobagent.infra.activity import active_command
 from jobagent.infra.diagnostics import emit_stage, progress_heartbeat
 from jobagent.infra.discovery_state import (
+    archive_pending_start,
     clear_pending_decision,
     clear_pending_start,
     load_pending_decision,
     load_pending_start,
+    load_collection_checkpoint,
+    collection_plan_digest,
     record_collection_recovery,
     save_manifest,
     save_pending_decision,
     save_pending_start,
+    save_collection_checkpoint,
 )
 from jobagent.infra.platform_lock import PlatformSessionLock
 from jobagent.infra.profile_contract import require_compatible_profile
@@ -380,6 +384,15 @@ def _preserved_request_id(context: dict[str, Any]) -> str:
     ):
         return str(pending["request_id"])
     if pending:
+        if pending.get("collection") is not None:
+            if pending.get("account_ref") != context.get("account_ref") or pending.get("round_id") == context.get("round_id"):
+                raise CollectionError(
+                    "collection_checkpoint_context_mismatch",
+                    "Saved collection belongs to a different account, profile or intent",
+                    user_prompt="采集断点与当前账户或本轮条件不一致，已保留数据并停止。请联系支持，不要删除状态或重新采集。",
+                    details={"retryable": False, "requires_user_action": True},
+                )
+            archive_pending_start(platform)
         clear_pending_start(platform, request_id=str(pending.get("request_id") or ""))
     request_id = f"{platform}:{uuid.uuid4().hex}"
     save_pending_start(
@@ -425,13 +438,12 @@ def run_discover(
         round_intent=round_intent,
     )
     request_id = _preserved_request_id(context)
+    collection = load_collection_checkpoint(platform) if platform == "liepin" else None
     emit_stage("search_plan_requested", platform=platform)
     try:
         with progress_heartbeat("search_plan_waiting", platform=platform):
-            plan = cloud_client.discovery_start(
-                platform=platform,
-                profile=profile,
-                request_id=request_id,
+            plan = collection["plan"] if collection is not None else cloud_client.discovery_start(
+                platform=platform, profile=profile, request_id=request_id,
                 round_intent=round_intent,
             )
     except cloud_client.CloudError as exc:
@@ -457,6 +469,7 @@ def run_discover(
             profile=profile,
             round_intent=round_intent,
             request_id=request_id,
+            require_request_id=platform == "liepin",
         )
     except SearchPlanExpiredError as exc:
         plan = _renew_expired_plan(
@@ -474,6 +487,15 @@ def run_discover(
             request_id=request_id,
             require_request_id=True,
         )
+    if collection is not None and collection_plan_digest(plan) != collection["plan_digest"]:
+        raise CollectionError(
+            "collection_checkpoint_plan_mismatch",
+            "Renewed SearchPlan changed collection scope; saved progress was not replayed",
+            user_prompt="续签后的搜索条件与已保存断点不一致，已停止并保留原数据。请联系支持。",
+            details={"retryable": False, "requires_user_action": True,
+                     "request_preserved": True, "request_id": request_id,
+                     "billing_status": "not_charged"},
+        )
     emit_stage(
         "search_plan_received",
         platform=platform,
@@ -481,6 +503,18 @@ def run_discover(
     )
     emit_stage("browser_collection_started", platform=platform)
     login_verification = rounds.recent_platform_login_verification(platform)
+    collection_kwargs = {}
+    if platform == "liepin":
+        collection_kwargs = {
+            "resume_progress": collection["progress"] if collection else None,
+            "checkpoint_callback": lambda progress: save_collection_checkpoint(
+                platform, request_id=request_id, plan=plan, progress=progress
+            ),
+        }
+        if collection:
+            emit_stage("browser_collection_resumed", platform=platform,
+                       completed_page_count=len(collection["progress"].get("completed_pages", [])),
+                       candidate_count=len(collection["progress"].get("candidates", [])))
     try:
         with progress_heartbeat("browser_collection_in_progress", platform=platform):
             with active_command(f"jobagent {platform} discover"):
@@ -493,6 +527,7 @@ def run_discover(
                         page_delay=page_delay,
                         login_verification=login_verification,
                         progress_callback=emit_stage,
+                        **collection_kwargs,
                     )
     except CollectionError as exc:
         details = dict(exc.details or {})
@@ -513,6 +548,15 @@ def run_discover(
             details.get("retryable", _collection_error_retryable(exc.code))
         )
         details["retryable"] = retryable
+        if platform == "liepin":
+            saved_collection = load_collection_checkpoint(platform)
+            details["collection_progress_preserved"] = saved_collection is not None
+            if saved_collection:
+                details["completed_page_count"] = len(saved_collection["progress"].get("completed_pages", []))
+                details["collected_candidate_count"] = len(saved_collection["progress"].get("candidates", []))
+            if exc.code == "liepin_verification_required":
+                details.update({"retryable": False, "requires_user_action": True,
+                                "next_suggested": "jobagent liepin discover"})
         if retryable:
             details.setdefault("next_suggested", f"jobagent {platform} discover")
         else:
