@@ -1114,6 +1114,7 @@ class CDPBossDriver(BossActionDriver):
         Matches boss-radar's verified 6-step flow (2026-05-07).
         """
         self._ensure_connected()
+        expected_job_id = str(getattr(self, "_boss_expected_job_id", "") or "")
         # Step 1: click 立即沟通
         click_js = r"""
         (function(){
@@ -1211,10 +1212,36 @@ class CDPBossDriver(BossActionDriver):
             chat_redirect_url = self._trusted_boss_chat_redirect(
                 str(click_data.pop("redirectUrl", "") or "")
             )
+            clicked_job_id = str(click_data.get("jobId") or "")
+            exact_target_job = bool(
+                expected_job_id and clicked_job_id == expected_job_id
+            )
+
+            # An already-contacted job exposes its signed, same-origin chat
+            # route on the visible continuation control. Follow that official
+            # route before a coordinate click, because a busy renderer can
+            # complete the click but time out before the exact binding is kept.
+            if (
+                chat_redirect_url
+                and exact_target_job
+                and click_data.get("label") in {"继续沟通", "继续聊"}
+            ):
+                self.cdp.send("Page.navigate", {"url": chat_redirect_url})
+                self._boss_bound_chat_job_id = clicked_job_id
+                click_data["clicked"] = False
+                click_data["autoSent"] = False
+                click_data["step"] = "navigated_chat_redirect"
+                click_data["chatPath"] = "/web/geek/chat"
+                return click_data
+
             if "x" in click_data and "y" in click_data:
                 self._click_at(click_data["x"], click_data["y"])
                 click_data["clicked"] = True
                 click_data["step"] = "clicked_" + str(click_data.get("label", "chat"))
+                if exact_target_job:
+                    # This is the last mutating operation. Preserve its exact
+                    # signed-detail lineage if a later DOM probe times out.
+                    self._boss_bound_chat_job_id = clicked_job_id
                 time.sleep(0.5)
 
             # Step 2: wait for popup and click 继续沟通 (up to 5 retries, 1s each)
@@ -1311,11 +1338,8 @@ class CDPBossDriver(BossActionDriver):
                                 "Page.navigate",
                                 {"url": chat_redirect_url},
                             )
-                            self._boss_bound_chat_job_id = str(
-                                click_data.get("jobId")
-                                or getattr(self, "_boss_expected_job_id", "")
-                                or ""
-                            )
+                            if exact_target_job:
+                                self._boss_bound_chat_job_id = clicked_job_id
                             popup_data["step"] = "navigated_chat_redirect_after_default"
                             popup_data["chatPath"] = "/web/geek/chat"
                         except Exception:
@@ -1338,11 +1362,8 @@ class CDPBossDriver(BossActionDriver):
             if click_data.get("label") in {"立即沟通", "继续沟通", "继续聊"}:
                 if chat_redirect_url:
                     self.cdp.send("Page.navigate", {"url": chat_redirect_url})
-                    self._boss_bound_chat_job_id = str(
-                        click_data.get("jobId")
-                        or getattr(self, "_boss_expected_job_id", "")
-                        or ""
-                    )
+                    if exact_target_job:
+                        self._boss_bound_chat_job_id = clicked_job_id
                     click_data["autoSent"] = False
                     click_data["step"] = "navigated_chat_redirect"
                     click_data["chatPath"] = "/web/geek/chat"
@@ -1382,11 +1403,8 @@ class CDPBossDriver(BossActionDriver):
                 )
                 if redirect_data.get("ok") and redirect_data.get("url"):
                     self.cdp.send("Page.navigate", {"url": redirect_data["url"]})
-                    self._boss_bound_chat_job_id = str(
-                        click_data.get("jobId")
-                        or getattr(self, "_boss_expected_job_id", "")
-                        or ""
-                    )
+                    if exact_target_job:
+                        self._boss_bound_chat_job_id = clicked_job_id
                     click_data["autoSent"] = False
                     click_data["step"] = "navigated_chat_redirect"
                     click_data["chatPath"] = "/web/geek/chat"
@@ -1833,10 +1851,23 @@ class CDPBossDriver(BossActionDriver):
               '.startchat-dialog, .dialog-wrap.startchat-dialog'
             );
             if (modal && (!editor || modal.contains(editor))) return modal;
+            var transcriptSelector = [
+              '.message-list .message-item',
+              '.chat-record .message-item',
+              '.chat-message .message-item',
+              '.im-list .message-item'
+            ].join(', ');
+            var conversation = editor && editor.closest
+              ? editor.closest('.chat-conversation')
+              : null;
+            if (conversation
+                && conversation.querySelector(transcriptSelector)) {{
+              return conversation;
+            }}
             var node = editor;
             while (node && node.tagName !== 'BODY') {{
               if (node.querySelector
-                  && node.querySelector('.message-list .message-item')) {{
+                  && node.querySelector(transcriptSelector)) {{
                 return node;
               }}
               node = node.parentElement;
@@ -1871,14 +1902,28 @@ class CDPBossDriver(BossActionDriver):
           var scope = activeConversationScope(editor);
           var items = scope
             ? Array.prototype.slice.call(
-                scope.querySelectorAll('.message-list .message-item')
+                scope.querySelectorAll(
+                  '.message-list .message-item, .chat-record .message-item, '
+                  + '.chat-message .message-item, .im-list .message-item'
+                )
               ).filter(isVisible)
             : [];
           var personalizedExact = false;
           var statusBound = false;
           for (var itemIndex = 0; itemIndex < items.length; itemIndex++) {{
             var item = items[itemIndex];
+            var outgoing = item.matches(
+              '.item-myself, [class*="item-myself"], '
+              + '[class*="message-mine"], [class*="message-self"], '
+              + '[class*="outgoing"]'
+            );
+            if (!outgoing) continue;
+            // Prefer the leaf text node. The surrounding ``.text`` container
+            // also contains Boss's status icon, whose accessible text (for
+            // example "送达") is rendered before the greeting.
             var contentNode = item.querySelector(
+              '.text-content, [class~="text-content"]'
+            ) || item.querySelector(
               '.text, [class~="text"], [class*="message-content"], '
               + '[class*="messageContent"]'
             );
@@ -1900,16 +1945,21 @@ class CDPBossDriver(BossActionDriver):
             }}
             if (normalizedContent === normalizedMessage) {{
               personalizedExact = true;
-              var statusText = Array.prototype.slice.call(
+              var statusNodes = Array.prototype.slice.call(
                 item.querySelectorAll(
                   '.status, [class~="status"], [class*="status"]'
                 )
-              ).map(function(node) {{
+              );
+              var statusText = statusNodes.map(function(node) {{
                 return node.innerText || node.textContent || '';
               }}).join(' ');
-              statusBound = /\\[?送达\\]?|已送达|\\[?已读\\]?|已发送/.test(
-                normalizeText(statusText)
-              );
+              statusBound = statusNodes.some(function(node) {{
+                return /(^|\\s)status-(delivery|delivered|read|sent)(\\s|$)/.test(
+                  String(node.className || '')
+                );
+              }}) || /\\[?送达\\]?|已送达|\\[?已读\\]?|已发送/.test(
+                  normalizeText(statusText)
+                );
               if (statusBound) break;
             }}
           }}

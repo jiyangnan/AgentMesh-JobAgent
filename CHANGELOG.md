@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.5.43] - 2026-09-07
+
+### Fixed
+
+- Recognize Boss's active chat transcript across both the legacy message-list markup and the current chat-record/im-list markup, while remaining scoped to the visible job-bound conversation.
+- Read the personalized greeting from its leaf text node so the adjacent accessible delivery-status label cannot be mistaken for part of the message. Delivery still requires the exact normalized greeting, an outgoing message bubble and a status marker on that same bubble.
+- Preserve exact signed job-detail binding immediately after a successful chat-entry click, and follow a trusted same-origin continuation route before clicking when Boss provides one. A later read-only renderer timeout can no longer discard the binding or trigger a duplicate greeting.
+
+### Compatibility
+
+- Existing API Keys, account binding, managed Chrome profile, login session, active round, signed decision, delivery preview and delivery authorization remain unchanged. Managed clients resume the original authorized Boss send command after upgrade without a new round, relogin, recollection, confirmation or additional cloud charge.
+- Re-running an authorized Boss batch first recognizes an exact already-delivered personalized greeting in the active conversation and continues without sending it again.
+
 ## [0.5.42] - 2026-09-07
 
 ### Fixed
