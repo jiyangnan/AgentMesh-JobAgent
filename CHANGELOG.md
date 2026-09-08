@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.1] - 2026-09-08
+
+### Fixed
+
+- Make native search receipts explicit for non-empty results, verified final pages and official no-results notices, including accepted evidence-source values and candidate field types.
+- Refresh every search receipt example with the current work nonce and bound session. Samples remain shapes only; missing observations never authorize invented candidates or exhaustion.
+- Preserve the original native workflow, signed search bounds, user confirmation, account state and no-repeat delivery safeguards.
+
 ## [0.6.0] - 2026-09-08
 
 ### Added

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -168,6 +169,15 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     schema["branch_selection"] = "Success evidence requirements apply only to normal completion. For requires_user_action=true, use pause_result_schema and omit all unobserved action-specific fields."
     task["result_schema"] = schema
     task["result_example"] = example
+    if "result_examples" in task:
+        variants = copy.deepcopy(task["result_examples"])
+        for variant in variants.values():
+            variant.update(nonce=work.get("nonce"), binding=copy.deepcopy(work["binding"]))
+            variant["evidence"] = {**_example(work)["evidence"], **variant.get("evidence", {})}
+            for field in ("window_reference", "profile_label", "account_label"):
+                if field in example["evidence"]:
+                    variant["evidence"][field] = example["evidence"][field]
+        task["result_examples"] = variants
     pause_evidence = dict(_example(work)["evidence"])
     for field in ("window_reference", "profile_label"):
         if session.get(field):

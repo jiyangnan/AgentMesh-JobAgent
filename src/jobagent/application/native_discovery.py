@@ -226,7 +226,10 @@ def _task(plan: dict, progress: dict, index: int, page: int) -> dict:
     query = plan["queries"][index]
     example = {
         "receipt_id": "<new unique receipt ID>", "nonce": "<work nonce>", "binding": "<copy complete work.binding>",
-        "outcome": "page_collected", "candidates": [],
+        "outcome": "page_collected", "candidates": [{
+            "id": "<exact observed platform job ID>", "title": "<observed job title>",
+            "company": "<observed company>", "area": "<observed location in the requested city>",
+            "url": "<exact observed official detail URL identifying this job ID>"}],
         "evidence": {"source": "host_ui_observation", "page_url": "<observed official search URL>",
             "observed_at": "<current ISO-8601 timestamp with timezone>",
             "observation": "<visible search and result state observed in the bound session>",
@@ -241,6 +244,22 @@ def _task(plan: dict, progress: dict, index: int, page: int) -> dict:
                               {"source": "page_title", "value": query["city"], "text": "<independent city evidence>"}],
             "has_next_page": True, "exhaustion": None},
     }
+    last_page = copy.deepcopy(example)
+    last_page["evidence"].update(has_next_page=False,
+        exhaustion={"kind": "last_page", "text": "<actual visible final-page evidence>"})
+    no_results = copy.deepcopy(example)
+    no_results["candidates"] = []
+    no_results["evidence"].update(page_state="no_results", has_next_page=False,
+        exhaustion={"kind": "explicit_no_results", "text": "<actual visible explicit no-results notice>"})
+    candidate_fields = ["id", "title", "company", "area", "salary", "experience", "degree", "skills",
+                        "company_size", "industry", "finance_stage", "boss_name", "boss_title", "url", "security_id", "jd"]
+    candidate_properties = {field: {"type": "string", "maxLength": 20000 if field == "jd" else 2000}
+                            for field in candidate_fields if field != "skills"}
+    candidate_properties["skills"] = {"type": "array", "maxItems": 100,
+        "items": {"type": "string", "maxLength": 200}}
+    candidate_properties["id"].update(pattern="^[A-Za-z0-9_-]{1,160}$")
+    for field in ("id", "title", "company", "area", "url"):
+        candidate_properties[field]["minLength"] = 1
     return {"query": query["keyword"], "city": query["city"], "query_index": index,
             "page": page, "page_limit": int(query["page_limit"]),
             "candidate_limit": min(100, int(plan["candidate_limit"])) - len(progress["candidates"]),
@@ -250,11 +269,46 @@ def _task(plan: dict, progress: dict, index: int, page: int) -> dict:
             "required_evidence": ["official_search_page", "search_input_and_independent_query", "two_independent_readable_city_sources", "verified_result_state", "exact_observed_job_id_and_detail_url", "explicit_no_results_or_last_page_to_retire_query"],
             "result_schema": {"type": "object", "required": ["receipt_id", "nonce", "binding", "outcome", "evidence", "candidates"],
                 "evidence_required": ["source", "observed_at", "observation", "window_reference", "profile_label", "account_label", "page_url", "query", "city", "query_index", "page", "page_state", "search_transition_observed", "query_evidence", "city_evidence", "has_next_page"],
-                "candidate_fields": ["id", "title", "company", "area", "salary", "experience", "degree", "skills", "company_size", "industry", "finance_stage", "boss_name", "boss_title", "url", "security_id", "jd"],
+                "evidence": {
+                    "query": {"type": "string", "const": query["keyword"]},
+                    "city": {"type": "string", "const": query["city"]},
+                    "query_index": {"type": "integer", "const": index}, "page": {"type": "integer", "const": page},
+                    "page_state": {"type": "string", "enum": ["results", "no_results"]},
+                    "search_transition_observed": {"type": "boolean", "const": True},
+                    "query_evidence": {"type": "array", "minItems": 2, "distinct_source_minimum": 2,
+                        "required_source": "search_input", "items": {"type": "object", "required": ["source", "value", "text"],
+                            "properties": {"source": {"enum": sorted(_QUERY_SOURCES)},
+                                "value": {"type": "string", "description": "Exact readable signed query"},
+                                "text": {"type": "string", "minLength": 1}}}},
+                    "city_evidence": {"type": "array", "minItems": 2, "distinct_source_minimum": 2,
+                        "items": {"type": "object", "required": ["source", "value", "text"],
+                            "properties": {"source": {"enum": sorted(_CITY_SOURCES)},
+                                "value": {"type": "string", "description": "Exact readable signed city; optional trailing 市"},
+                                "text": {"type": "string", "minLength": 1}}}},
+                    "has_next_page": {"type": "boolean"},
+                    "exhaustion": {"type": ["object", "null"], "required_when_no_next_page": ["kind", "text"],
+                        "properties": {"kind": {"enum": ["explicit_no_results", "last_page"]},
+                            "text": {"type": "string", "minLength": 1}}}},
+                "candidate_fields": candidate_fields,
                 "candidate_required": ["id", "title", "company", "area", "url"],
+                "candidate_properties": candidate_properties,
+                "candidate_rules": "Use observed strings and a list of strings for skills; omit unobserved optional fields, never use null. Required fields must be non-empty after trimming. IDs must be unique on the page, the official detail URL must identify that exact ID, and area must agree with the signed city. Examples contain placeholders, not candidate evidence.",
+                "state_combinations": {
+                    "results": {"page_state": "results", "candidate_min_items": 1, "has_next_page": True, "exhaustion": None},
+                    "last_page": {"page_state": "results", "candidate_min_items": 1, "has_next_page": False,
+                        "exhaustion_kind": "last_page", "exhaustion_text_required": True},
+                    "no_results": {"page_state": "no_results", "candidate_max_items": 0, "has_next_page": False,
+                        "exhaustion_kind": "explicit_no_results", "exhaustion_text_required": True}},
+                "combination_rules": {
+                    "results": "page_state=results, at least one actual candidate, has_next_page=true, exhaustion=null.",
+                    "last_page": "page_state=results, at least one actual candidate, has_next_page=false, exhaustion.kind=last_page with actual visible evidence.",
+                    "no_results": "page_state=no_results, candidates=[], has_next_page=false, exhaustion.kind=explicit_no_results with actual visible notice.",
+                    "signed_limit": "page_limit is only an upper bound, not final-page evidence. Report the actual next-page state; the CLI enforces the signed bound.",
+                    "inconclusive": "Missing cards, loading, missing required identity or incomplete evidence is not exhaustion; use the declared pause branch without inventing success."},
                 "exhaustion": {"kind": "explicit_no_results | last_page", "text": "non-empty visible evidence"},
                 "empty_candidates": "Requires explicit_no_results and has_next_page=false; an empty parser result is not exhaustion."},
-            "result_example": example}
+            "result_example": example,
+            "result_examples": {"results": copy.deepcopy(example), "last_page": last_page, "no_results": no_results}}
 
 
 def _response(work: dict) -> dict:

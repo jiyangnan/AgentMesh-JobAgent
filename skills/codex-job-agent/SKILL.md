@@ -80,6 +80,11 @@ The protocol cannot guarantee exactly-once actions on an external website.
   state. Follow the signed page upper bound and saved progress. Explicit empty
   results or verified last-page evidence ends that query only; missing cards,
   loading or truncated text does not prove exhaustion. Do not invent city codes.
+  Select the matching `result_examples` branch (`results`, `last_page` or
+  `no_results`) and follow `state_combinations`, declared evidence-source enums
+  and `candidate_properties`. Replace placeholders only with observations;
+  omit unobserved optional fields rather than filling null or invented values.
+  A signed page limit is not proof of the website's final page.
 - Read details before returning candidates. Scroll truncated descriptions and
   use screenshots to resolve unreadable accessibility text, including salaries.
   Preserve the site's raw salary text; do not guess missing units or fields.
