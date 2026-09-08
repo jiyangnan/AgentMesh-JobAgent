@@ -79,11 +79,70 @@ def _example(work: dict[str, Any]) -> dict[str, Any]:
                          "observation": "What the current UI actually shows"}}
 
 
+def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
+    """Expose the validator's receipt fields, including non-success branches."""
+    if "delivery_source" not in task:
+        return
+    job = task["job"]
+    identity = {"job_id": str(job["id"]), "job_url": job["url"],
+                "title": job["title"], "company": job["company"], "page_url": job["url"]}
+    fields = {"job_id": "string; exact task.job.id after visible verification",
+        "job_url": "string; exact task.job.url", "title": "string; exact verified task.job.title",
+        "company": "string; exact verified task.job.company", "receipt_checked": "boolean; true only after official receipt/history inspection",
+        "availability": "unavailable; required only for outcome=unavailable",
+        "unavailable_text": "non-empty observed notice; required only for outcome=unavailable"}
+    action = work["action"]
+    success = dict(identity)
+    if action == "inspect_delivery":
+        fields.update(history_checked="boolean; must be true for success", login_state="authenticated for success",
+            resume_state="sent|not_sent|not_applicable|unknown; unknown requires uncertain/unresolved except Boss",
+            communication_state="open|not_open|not_applicable|unknown; unknown requires uncertain/unresolved for Boss/Liepin",
+            resume_reference="observed resume name/reference; required before submission or when resume_state=sent; otherwise omit or null",
+            receipt_kind="application_history|resume_card|application_success_and_history; required when resume_state=sent; otherwise omit or null",
+            existing_outgoing_text="exact observed existing message; empty string, null or omitted only when no existing message was observed",
+            message_state="sent|delivered|not_sent|unknown; unknown requires uncertain/unresolved for Boss/Liepin; omit when not applicable",
+            conversation_job_verified="boolean; must be true when existing_outgoing_text is non-empty")
+        success.update(history_checked=True, login_state="authenticated", resume_state="not_sent",
+            resume_reference="Replace with the actual visible existing account resume reference",
+            communication_state="not_open", existing_outgoing_text="", message_state="not_sent")
+        if work["binding"]["platform"] == "boss":
+            success.update(resume_state="not_applicable", resume_reference=None)
+        if work["binding"]["platform"] in {"zhilian", "51job"}:
+            success.update(communication_state="not_applicable")
+            success.pop("message_state")
+    elif action == "open_communication":
+        fields.update(communication_state="open for success", conversation_job_verified="boolean; must be true for success",
+            default_greeting_observed="optional boolean; platform default text never proves personalized delivery")
+        success.update(communication_state="open", conversation_job_verified=True)
+    elif action == "send_greeting":
+        fields.update(outgoing_text="string; exact task.job.cloud_greeting observed as outgoing text",
+            message_state="sent|delivered for success; use uncertain/unresolved if unknown, with no fabricated success fields",
+            conversation_job_verified="boolean; must be true for success")
+        success.update(outgoing_text=job["cloud_greeting"], message_state="sent", conversation_job_verified=True)
+    elif action == "submit_resume":
+        fields.update(resume_state="sent for success", resume_reference="string; exact task.resume_reference observed in receipt",
+            receipt_kind="application_history|resume_card|application_success_and_history")
+        success.update(resume_state="sent", resume_reference=task.get("resume_reference"),
+                       receipt_kind="application_history", receipt_checked=True)
+    task["result_schema"] = {**task.get("result_schema", {}), "outcome": "success|uncertain|unresolved|unavailable",
+        "evidence": fields,
+        "outcome_rules": {
+            "success": "Verify common evidence, exact job identity and this action's success fields. Examples are shapes, never proof.",
+            "uncertain": "Common evidence + exact verified job identity + receipt_checked=true. Keep work pending for read-only reconciliation; omit unknown success fields, do not guess or set them to sent.",
+            "unresolved": "Same minimal fields as uncertain; terminal unverified outcome. Never click this action again.",
+            "unavailable": "Same minimal fields plus availability=unavailable and the actual unavailable_text notice.",
+            "user_pause": "Use pause_result_schema instead if capability, login, verification, permission or identity prevents inspection."}}
+    task["result_example"] = {**_example(work), "evidence": success}
+    task["unresolved_result_example"] = {**_example(work), "outcome": "unresolved",
+        "evidence": {**identity, "receipt_checked": True}}
+
+
 def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     from jobagent.infra.codex_skill import skill_contract
     work = dict(work)
     task = dict(work.get("task") or {})
     task["rules"] = list(RULES)
+    _delivery_contract(work, task)
     example = {**_example(work), **task.get("result_example", {})}
     example.update(nonce=work.get("nonce"), binding=work["binding"])
     example["evidence"] = {**_example(work)["evidence"], **example.get("evidence", {})}
@@ -94,11 +153,41 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     account = session.get("accounts", {}).get(work["binding"].get("platform"))
     if account:
         example["evidence"]["account_label"] = account
+    schema = dict(task.get("result_schema") or {})
+    schema.setdefault("outcome", example["outcome"])
+    common = {"source": "host_ui_observation", "observed_at": "fresh timezone-qualified ISO-8601 string; at most 30 minutes old",
+              "observation": "non-empty actual UI observation string"}
+    if work["action"] != "bind_session":
+        common.update(window_reference="exact bound session.window_reference", profile_label="exact bound session.profile_label",
+                      page_url="actual official HTTPS page URL", account_label="actual visible account label; match bound platform account when present")
+    schema["envelope"] = {"receipt_id": "unique non-empty observation ID; reuse only for an identical receipt replay",
+        "nonce": "copy current begun work.nonce exactly", "binding": "copy work.binding exactly",
+        "outcome": schema.get("outcome", "success"), "evidence": "object of actual UI observations"}
+    schema["evidence_common"] = common
+    schema["evidence"] = {**common, **schema.get("evidence", {})}
+    schema["branch_selection"] = "Success evidence requirements apply only to normal completion. For requires_user_action=true, use pause_result_schema and omit all unobserved action-specific fields."
+    task["result_schema"] = schema
     task["result_example"] = example
-    task["pause_result_example"] = {**example, "outcome": "uncertain",
+    pause_evidence = dict(_example(work)["evidence"])
+    for field in ("window_reference", "profile_label"):
+        if session.get(field):
+            pause_evidence[field] = session[field]
+    pause_evidence["observation"] = "Describe the actual challenge or missing capability; do not claim completion."
+    task["pause_result_example"] = {**_example(work), "outcome": "uncertain",
         "requires_user_action": True, "reason": "verification_required",
-        "evidence": {**example["evidence"], "observation": "Describe the actual challenge or missing capability; do not claim completion."}}
+        "evidence": pause_evidence}
     task["pause_reason_values"] = ["login_required", "verification_required", "challenge", "permission_required", "session_unknown"]
+    task["pause_result_schema"] = {"type": "object",
+        "required": ["receipt_id", "nonce", "binding", "outcome", "requires_user_action", "reason", "evidence"],
+        "outcome": "uncertain", "requires_user_action": True, "reason": task["pause_reason_values"],
+        "evidence_required": list(pause_evidence), "evidence_optional": ["page_url", "account_label"],
+        "action_specific_success_fields_required": False,
+        "instructions": "Copy current nonce/binding. Fill fresh observed_at and actual observation; use exact bound window/profile after binding. Omit unobserved optional fields; do not invent query/city, results, candidates, job identity or receipts. Before binding, missing capability requires only source/observed_at/observation. A pause grants no new action permission."}
+    if "unresolved_result_example" in task:
+        unresolved = task["unresolved_result_example"]
+        unresolved["evidence"] = {**_example(work)["evidence"],
+            **{k: example["evidence"][k] for k in ("window_reference", "profile_label", "account_label") if k in example["evidence"]},
+            **unresolved["evidence"]}
     work["task"] = task
     can_execute = bool(execution and work.get("execution_permitted"))
     reconcile = work.get("state") in {"intent_recorded", "reconcile_only"} and not can_execute

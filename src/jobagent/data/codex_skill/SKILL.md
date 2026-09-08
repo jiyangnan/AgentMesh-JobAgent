@@ -53,7 +53,12 @@ responsibility; do not replace them with locally invented decisions or greetings
    account or session identity is a stopping condition, not permission to guess.
 5. Write a local JSON result using the exact current `result_schema`. Copy the
    entire `work.binding` and the returned nonce without changing them; use the required
-   receipt ID semantics. Report observed facts only, including missing evidence
+   receipt ID semantics. On a user challenge, use `pause_result_schema` and its
+   minimal `pause_result_example` instead of the normal success schema; omit
+   unobserved query, city, candidate and success fields. For delivery with
+   verified identity but an unconfirmed receipt, use the declared outcome rules
+   and `unresolved_result_example` rather than inventing sent states.
+   Report observed facts only, including missing evidence
    and user-intervention states. Never populate success from the sample or from
    the intended action. Keep credentials, cookies and unrelated personal data out
    of results. Save only the evidence the task requires in local private storage.
@@ -90,7 +95,11 @@ The protocol cannot guarantee exactly-once actions on an external website.
 Show every row of the CLI's complete delivery preview, including the exact
 message and resume selection when supplied. Stop for the declared user decision:
 `confirm_all`, `exclude_jobs` or `cancel_delivery`. Use the returned native card
-only if callable; otherwise relay the exact fallback. Continue through the exact
+only if callable; otherwise relay the exact fallback. If the response supplies
+messages in `selected[].greeting` outside `delivery_preview.items`, append those
+exact messages keyed by the same job ID before asking for confirmation; do not
+rewrite the fallback, omit supplied messages or mismatch them by position.
+Continue through the exact
 `jobagent interaction respond` command. Exclusions require a regenerated complete
 preview and another confirmation. Old blanket approval is not authority for a
 new platform or changed list. A `review` job requires user-selected IDs and
