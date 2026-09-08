@@ -65,10 +65,11 @@ def review_decision(
     promoted_ids: list[str] | None = None,
     confirm_promote: bool = False,
     output_path: str | None = None,
+    native: bool = False,
 ) -> dict[str, Any]:
     envelope = load_envelope(platform, input_path, reviewed=False if input_path is None else None)
     decision_repair: dict[str, Any] | None = None
-    if platform == "zhilian":
+    if platform == "zhilian" and not native:
         from jobagent.application.decision_repair import (
             repair_zhilian_decision_if_needed,
         )

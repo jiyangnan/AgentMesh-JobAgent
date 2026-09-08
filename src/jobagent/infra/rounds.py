@@ -11,7 +11,9 @@ from jobagent.infra.state import current_round_path, rounds_dir, save_json, load
 
 DEFAULT_PLATFORM_ORDER = ["boss", "liepin", "zhilian", "51job"]
 TERMINAL_PLATFORM_STATUSES = {"completed", "skipped_this_round"}
-ROUND_SCHEMA_VERSION = 3
+ROUND_SCHEMA_VERSION = 4
+DEFAULT_BROWSER_EXECUTOR = "codex_native"
+UNBOUND_BROWSER_SESSION = "native-unbound"
 PLATFORM_LOGIN_VERIFICATION_TTL_SECONDS = 30 * 60
 DELIVERY_POLICY = {
     "selected": "user_confirmed_after_preview",
@@ -96,7 +98,9 @@ def _create_round(
         "created_at": now,
         "updated_at": now,
         "platform_order": list(DEFAULT_PLATFORM_ORDER),
-        "browser_session_id": "local-cdp-19222",
+        "browser_executor": DEFAULT_BROWSER_EXECUTOR,
+        "browser_session_id": UNBOUND_BROWSER_SESSION,
+        "native_session": None,
         "intent": intent or {
             "status": "legacy_implicit",
             "target_roles": [],
@@ -138,6 +142,13 @@ def start_new_round(
 def _migrate_round(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("schema_version") == ROUND_SCHEMA_VERSION:
         return state
+    # Recovery commands may read a pre-migration round with an unresolved
+    # native effect. Preserve that original binding until reconciliation.
+    from jobagent.infra.client_upgrade import _native_work_upgrade_conflict
+
+    path = current_round_path()
+    if _native_work_upgrade_conflict(path.parent.parent, ledger_path=path.with_name("browser-work.sqlite3")):
+        return deepcopy(state)
     migrated = migrate_round_payload(state)
     save_round(migrated)
     return migrated
@@ -146,9 +157,18 @@ def _migrate_round(state: dict[str, Any]) -> dict[str, Any]:
 def migrate_round_payload(state: dict[str, Any]) -> dict[str, Any]:
     """Return a current-schema round without reading or writing global state."""
     if state.get("schema_version") == ROUND_SCHEMA_VERSION:
-        return dict(state)
+        return deepcopy(state)
+    if state.get("schema_version") == 3:
+        migrated = deepcopy(state)
+        migrated["schema_version"] = ROUND_SCHEMA_VERSION
+        migrated["updated_at"] = utc_now()
+        migrated.setdefault("migration", {
+            "from_schema_version": 3,
+            "reason": "preserve_round_and_bind_native_executor",
+        })
+        return _migrate_browser_executor(migrated)
     if state.get("schema_version") == 2:
-        migrated = dict(state)
+        migrated = deepcopy(state)
         migrated["schema_version"] = ROUND_SCHEMA_VERSION
         migrated["updated_at"] = utc_now()
         migrated["intent"] = {
@@ -161,8 +181,8 @@ def migrate_round_payload(state: dict[str, Any]) -> dict[str, Any]:
             "from_schema_version": 2,
             "reason": "preserve_active_round_and_mark_legacy_intent",
         }
-        return migrated
-    return {
+        return _migrate_browser_executor(migrated)
+    return _migrate_browser_executor({
         "schema_version": ROUND_SCHEMA_VERSION,
         "round_id": state.get("round_id") or new_round_id(),
         "status": "active",
@@ -181,7 +201,19 @@ def migrate_round_payload(state: dict[str, Any]) -> dict[str, Any]:
             "from_schema_version": state.get("schema_version"),
             "reason": "reset_legacy_ambiguous_platform_statuses",
         },
-    }
+    })
+
+
+def _migrate_browser_executor(state: dict[str, Any]) -> dict[str, Any]:
+    """Change transport metadata without discarding an existing native binding."""
+    state["browser_executor"] = DEFAULT_BROWSER_EXECUTOR
+    if not isinstance(state.get("native_session"), dict):
+        previous = state.get("browser_session_id")
+        if previous and previous != UNBOUND_BROWSER_SESSION:
+            state.setdefault("legacy_browser_session_id", previous)
+        state["browser_session_id"] = UNBOUND_BROWSER_SESSION
+        state["native_session"] = None
+    return state
 
 
 def _same_intent(current: Any, requested: dict[str, Any]) -> bool:
@@ -537,12 +569,15 @@ def round_status() -> dict[str, Any]:
             },
             "platform_order": list(DEFAULT_PLATFORM_ORDER),
             "browser_session_id": None,
+            "browser_executor": DEFAULT_BROWSER_EXECUTOR,
+            "native_session": None,
             "platforms": {},
             "current_platform": None,
             "remaining_platforms": [],
             "next_suggested": "jobagent round start",
         }
     state = _migrate_round(state)
+    migration_deferred = state.get("schema_version") != ROUND_SCHEMA_VERSION
     order = list(state.get("platform_order") or DEFAULT_PLATFORM_ORDER)
     platforms = state.setdefault("platforms", _default_platform_state())
     remaining = [
@@ -554,7 +589,8 @@ def round_status() -> dict[str, Any]:
     workflow_complete = not remaining
     if workflow_complete and state.get("status") != "completed":
         state["status"] = "completed"
-        save_round(state)
+        if not migration_deferred:
+            save_round(state)
     current_platform = remaining[0] if remaining else None
     next_suggested = None
     if current_platform:
@@ -563,7 +599,8 @@ def round_status() -> dict[str, Any]:
         migrated_next = _migrate_next_command(stored_next)
         if migrated_next != stored_next:
             item["next_suggested"] = migrated_next
-            save_round(state)
+            if not migration_deferred:
+                save_round(state)
         next_suggested = migrated_next or _default_next_command(
             current_platform,
             str(item.get("status") or "pending"),
@@ -580,6 +617,8 @@ def round_status() -> dict[str, Any]:
         },
         "platform_order": order,
         "browser_session_id": state.get("browser_session_id"),
+        "browser_executor": state.get("browser_executor", DEFAULT_BROWSER_EXECUTOR),
+        "native_session": deepcopy(state.get("native_session")),
         "intent": state.get("intent"),
         "profile_reconciliation": state.get("profile_reconciliation"),
         "platforms": platforms,

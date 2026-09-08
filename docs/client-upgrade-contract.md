@@ -2,6 +2,8 @@
 
 本文定义公开 CLI 从历史版本原地升级时，哪些本地资产必须保留、哪些状态可以自动清理、哪些数据需要迁移，以及什么情况必须阻断平台操作。它是客户端状态兼容性的唯一工程依据。
 
+关联文档：[用户指南](../README.md)、[Agent 工作流](./agent-onboarding.md)、[Codex 原生操作 Skill](../skills/codex-job-agent/SKILL.md)。
+
 ## 目标
 
 已安装旧版的客户升级后，应当直接得到一个可继续工作的客户端，而不是由宿主 Agent 猜测是否需要清缓存、重登平台或删除目录。升级过程必须满足：
@@ -22,6 +24,7 @@
 | Job Agent Chrome profile / cookies | 永远保留 | 自动升级不得删除或重建浏览器 profile；需要重新登录时由平台登录检查显式提示 |
 | `state/profile.json` | 保留并校验 schema | 可兼容则原样保留；不兼容时阻断平台命令并要求重新分析简历 |
 | 四个平台 audit log | 永远保留 | 它们是投递、消息送达和去重证据，不参与缓存清理 |
+| `state/browser-work.sqlite3` 与原生会话绑定 | 保留并只读预检 | 不清理、不重建、不迁移此账本；存在未决副作用或无法安全读取时暂停升级，不能将缺失回执当作未发送 |
 | `accounts/<account_ref>/state/analytics_spool.json` | 按账户保留 | 仅保存最多 25 条去标识化 committed facts 与固定去重标记，文件权限 `0600`；固定保存在既有账户命名空间中，降级期间切换账户也不会移动或误认，owner 或 Key 证明不一致时不得发送 |
 | `state/support_state.json` | 保留 | 首次投递后的单次提示状态不得因升级重置 |
 | `state/current_round.json` | 按 schema 迁移 | v2 活动 round 原样保留平台进度并标记 `legacy_implicit` 目标岗位意图；状态迁移 v4 将旧版尚未发送的 `reviewed` 平台退回 `awaiting_delivery_confirmation`，不得沿用旧自动发送命令；状态迁移 v7 仅允许尚未产生候选、签名决策、预览、授权或投递证据的活动轮次重新绑定用户明确更新后的画像；更旧且含义不明确的平台状态重置为安全的待执行状态；损坏 JSON 保留到 archive 后重建 |
@@ -29,7 +32,7 @@
 | `state/discoveries/` | 同协议保留，协议变化时归档 | 归档到 `state/archive/`，不得连同 audit 一起删除；状态迁移 v4 只移除旧 review 文件中的自动继续预览与旧授权，保留签名 manifest、`send_candidates`、用户提升项和 pending Discover，从 review 原地重建清单，不重新采集或收费 |
 | `state/pending_interaction.json` | 按交互类型迁移 | 目标岗位等仍有效交互原样保留；旧投递确认交互在迁移 v4 清除并从保留的 review 重新生成，避免旧交互 ID 授权新清单 |
 | release manifest cache | 自动清理 | 新版本重新获取并验证签名策略 |
-| platform tab / browser-session marker | 自动清理 | 只清理可重建的 CDP 映射，不触碰 Chrome cookies/profile |
+| platform tab / browser-session marker | 仅旧迁移按需清理 | v7 → v8 同协议迁移原样保留；旧迁移仅清理可重建的 CDP 映射，明确标记的原生会话始终保留，不触碰 Chrome cookies/profile |
 | last doctor / probe 输出 | 自动清理 | 旧诊断结论不应冒充新版状态 |
 | activity / browser / update lock | 死亡进程自动清理 | 锁所属 PID 存活时阻断迁移；不得抢占真实运行中的命令 |
 | logs | 保留 | 用于跨版本排障；不得写入 API Key 等秘密 |
@@ -43,15 +46,17 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 
 每条 CLI 命令按以下顺序执行：
 
-1. 验证签名版本策略，受管安装按政策完成客户端更新；仅在真实发现新版时输出 `client_update_detected -> client_update_started -> client_update_completed -> client_command_resumed`，更新成功后自动恢复原命令。
+1. 验证签名版本策略；已有原生执行意图未完成时延后程序替换，先按同一任务完成或只读核验。无在途冲突时受管安装按政策完成客户端更新；仅在真实发现新版时输出 `client_update_detected -> client_update_started -> client_update_completed -> client_command_resumed`，更新成功后自动恢复原命令。
 2. 检测 `client_version`、协议版本和状态迁移版本。
-3. 检查是否存在仍存活的 Job Agent 进程；有则记录 `migration_pending=true` 并停止迁移。
+3. 对目标安装目录的原生工作账本执行只读预检：未决副作用、不可读或不支持的 schema 均阻断任何清理、迁移、归档和升级完成标记写入。随后检查是否存在仍存活的 Job Agent 进程；有则保留原迁移版本、记录 `migration_pending=true` 并停止迁移。
 4. 清理可重建状态、迁移旧 schema、按协议边界归档运行时决策；旧版待发送平台必须回到完整预览与最终确认，不能继承自动发送权限。
 5. 校验 API Key 与画像兼容性。
 6. 从云端取得不可枚举的稳定 `account_ref`，校验本地业务状态归属；旧状态未认领或账户不匹配时阻断。
 7. 无冲突才允许 Boss、猎聘、智联和 51Job 的真实平台命令进入 dispatch。
 
 `account`、`init`、`doctor`、`upgrade-check`、`platforms` 和 `update` 等恢复或只读命令在冲突期间仍可运行。画像属于账户业务状态，`resume analyze` 必须等 owner 归属问题解决后再执行。平台自动化命令收到 `client_upgrade_required` 后，宿主 Agent 必须执行响应中的 `next_suggested`，不可绕过检查。
+
+若唯一冲突为 `native_browser_work_inflight`，`work next/begin/submit/status` 可继续原任务的恢复协议，不能借此重新发放已记录副作用的许可；账户与画像校验仍必需。Key、画像或账本兼容性冲突不能用 work 命令豁免。账本不可读时执行只读 `jobagent upgrade-check` 查看冲突，保留原文件并使用兼容客户端处理；不得删除账本来解除阻断。
 
 ## 发布门槛
 
@@ -69,6 +74,14 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 禁止用“让用户删除 `~/.jobagent` 后重装”作为正常升级方案。只有在已经确认具体文件不可恢复、完成备份并获得用户明确同意后，才可对单个文件执行人工修复。
 
 ## 验收标准
+
+### 0.5.44 → 0.6.0 原生执行器迁移
+
+- **migrate**：状态迁移 v8、round schema v4。活动轮次新增 `browser_executor=codex_native`；旧 `browser_session_id` 记为 `legacy_browser_session_id`，当前会话标为 `native-unbound`、`native_session=null`，随后由宿主只读确认实际窗口并绑定。旧登录证据保留但不自动证明新会话已登录。新轮次同样从原生未绑定状态开始。
+- **preserve**：账户、API Key、画像、round ID、意图、request/Discover、采集断点、候选、签名决策、完整预览、有效授权、交互、原生投递进度、历史轮次、四平台审计及 Chrome profile/cookies 全部保留；已存在的原生会话绑定不清空。v7 → v8 同协议只修改当前轮次执行器元数据与升级标记，不清理已有映射或业务文件。
+- **block**：目标安装目录 `state/browser-work.sqlite3` 以只读模式打开并核对 schema；`side_effect=1` 且状态为 `intent_recorded` 或 `reconcile_only` 时返回 `native_browser_work_inflight` 和 `jobagent work status`。不受另一目录的默认账本影响，不因超时、旧 PID 消失或没有最终回执就清除意图。账本损坏、不可读、未知 schema 同样失败关闭。
+- **no mutation while blocked**：不清缓存、不删除锁、不迁移轮次、不归档决策、不写新版完成标记。恢复读取旧轮次时也不隐式迁移其绑定。原任务回执明确结束后，下一次启动才执行幂等迁移。
+- **boundaries**：兼容的预览和授权不因执行器切换自动失效；发送入口仍重新验证签名、账户、轮次与最终确认。只读的 `round status` 返回执行器和既有 `native_delivery`，不将未确定项提升为成功。协议只协调产品任务，不保证外部网页 exactly-once，也不能拦截宿主在协议外的 UI 行为。
 
 ### 0.5.43 → 0.5.44 猎聘采集断点
 

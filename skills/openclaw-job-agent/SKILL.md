@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.5.44
+version: 0.6.0
 metadata:
   openclaw:
     emoji: "💼"
@@ -18,6 +18,23 @@ metadata:
 # AgentMesh Job Agent
 
 Drive the official Job Agent CLI while keeping the user in control of credentials, login and review overrides.
+
+## Native mode takes precedence
+
+In Codex, use the dedicated `codex-job-agent` skill and start with
+`jobagent work next`. In `codex_native` mode, existing browser-facing commands
+below return host tasks, not permission to use a legacy driver. Read each task's
+complete instructions and result schema; run `jobagent work begin --work-id ID`
+before the allowed native UI action, then
+`jobagent work submit --work-id ID --result FILE`. On uncertainty, use
+`jobagent work status` and read-only reconciliation, never repeat a send click.
+Discover native Computer Use from this host's current tool documentation. If
+unavailable, pause; do not fall back to CDP, browser JavaScript or hidden site
+APIs. Reuse the bound session and preserve the final-preview confirmation rules.
+Legacy platform examples below remain compatible command entry points; their
+driver-specific recovery descriptions do not override native tasks. The full
+Codex instructions are in the public
+[Codex skill](https://github.com/jiyangnan/AgentMesh-JobAgent/blob/main/skills/codex-job-agent/SKILL.md).
 
 ## Safety Contract
 

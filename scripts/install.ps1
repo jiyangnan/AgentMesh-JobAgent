@@ -89,7 +89,9 @@ $venvPy  = Join-Path $venvDir "Scripts\python.exe"
 $venvPip = Join-Path $venvDir "Scripts\pip.exe"
 Info "Installing dependencies (this may take a minute)"
 & $venvPy -m pip install --upgrade pip --quiet
+if ($LASTEXITCODE -ne 0) { Die "Failed to prepare pip in the client environment." }
 & $venvPip install -e $InstallDir --quiet
+if ($LASTEXITCODE -ne 0) { Die "Client package installation failed; managed installation was not marked complete." }
 Ok "CLI installed"
 
 $metadata = @{
@@ -109,6 +111,11 @@ $shimPath = Join-Path $BinDir "jobagent.cmd"
 "$venvPy" -m jobagent %*
 "@ | Set-Content -Path $shimPath -Encoding ASCII
 Ok "Shim at $shimPath"
+
+# Register only product-owned Codex skill files; custom skills are never replaced.
+& $venvPy -m jobagent.infra.codex_skill install
+if ($LASTEXITCODE -ne 0) { Die "Codex skill installation did not complete. Review the returned conflict; existing custom files were preserved." }
+Ok "Codex native skill installed"
 
 # 6. Persist PATH if not already present
 $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -134,13 +141,14 @@ Write-Host "3. Verify environment:"
 Write-Host "     jobagent doctor env"
 Write-Host ""
 Write-Host "4. Analyze your resume:"
-Write-Host "     jobagent resume analyze --file %USERPROFILE%\Downloads\your-resume.pdf"
+Write-Host '     jobagent resume analyze --file "$env:USERPROFILE\Downloads\your-resume.pdf"'
 Write-Host ""
 Write-Host "5. Start the four-platform round:"
 Write-Host "     jobagent round start"
 Write-Host ""
 Write-Host "6. Follow the current platform:"
-Write-Host "     jobagent boss login --check"
+Write-Host "     jobagent work next"
+Write-Host "   Compatibility commands such as jobagent boss login --check also return native work in Codex."
 Write-Host ""
 Write-Host "7. Read the full guide:"
 Write-Host "     $InstallDir\README.md"

@@ -288,8 +288,8 @@ def test_active_pre_delivery_round_rebinds_to_updated_profile(
 
     assert result["workflow"]["round_id"] == first["workflow"]["round_id"]
     assert result["workflow"]["intent"]["profile_digest"] == digest_payload(profile)
-    assert result["workflow"]["platforms"]["boss"]["status"] == "login_verified"
-    assert result["workflow"]["next_suggested"] == "jobagent boss discover"
+    assert result["workflow"]["platforms"]["boss"]["status"] == "pending"
+    assert result["workflow"]["next_suggested"] == "jobagent boss login --check"
     assert result["workflow"]["profile_reconciliation"]["reason"] == (
         "pre_delivery_profile_update"
     )
@@ -487,7 +487,7 @@ def test_schema_v2_active_round_is_preserved_with_legacy_intent():
 
     migrated = rounds.migrate_round_payload(payload)
 
-    assert migrated["schema_version"] == 3
+    assert migrated["schema_version"] == rounds.ROUND_SCHEMA_VERSION
     assert migrated["platforms"] == payload["platforms"]
     assert migrated["intent"]["status"] == "legacy_implicit"
     assert migrated["migration"]["reason"] == "preserve_active_round_and_mark_legacy_intent"

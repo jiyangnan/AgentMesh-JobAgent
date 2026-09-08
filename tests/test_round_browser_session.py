@@ -23,6 +23,9 @@ def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tm
 
     assert state["round_id"] == "round-1"
     assert state["platforms"]["boss"]["status"] == "pending"
+    assert state["browser_executor"] == "codex_native"
+    assert state["browser_session_id"] == "native-unbound"
+    assert state["native_session"] is None
 
     workflow = rounds.round_status()
     assert workflow["execution_policy"] == {
@@ -59,6 +62,7 @@ def test_recent_login_verification_is_bound_to_round_platform_and_browser_sessio
     monkeypatch.setattr(rounds, "new_round_id", lambda: "round-1")
 
     state = rounds.start_new_round()
+    rounds.mark_browser_session("local-cdp-19222")
     verified_at = datetime.now(timezone.utc).isoformat()
     rounds.set_platform_status(
         "zhilian",
@@ -288,7 +292,7 @@ def test_legacy_round_is_migrated_to_four_platform_pending_state(monkeypatch, tm
     assert workflow["platform_order"] == ["boss", "liepin", "zhilian", "51job"]
     assert workflow["remaining_platforms"] == ["boss", "liepin", "zhilian", "51job"]
     assert all(item["status"] == "pending" for item in workflow["platforms"].values())
-    assert json.loads(current_path.read_text(encoding="utf-8"))["schema_version"] == 3
+    assert json.loads(current_path.read_text(encoding="utf-8"))["schema_version"] == rounds.ROUND_SCHEMA_VERSION
 
 
 def test_auto_driver_reports_cdp_failure_without_switching_browser_profiles(monkeypatch):

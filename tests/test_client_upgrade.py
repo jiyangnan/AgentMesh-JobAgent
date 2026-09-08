@@ -149,7 +149,7 @@ def test_old_install_clears_only_ephemeral_state_and_migrates_round(tmp_path):
     assert (state / "product_announcements.json").exists()
     assert (state / "discoveries" / "boss-old.json").exists()
     migrated_round = json.loads((state / "current_round.json").read_text(encoding="utf-8"))
-    assert migrated_round["schema_version"] == 3
+    assert migrated_round["schema_version"] == 4
     assert migrated_round["migration"]["from_schema_version"] == 1
     assert migrated_round["intent"]["status"] == "legacy_implicit"
     marker = json.loads((state / "client_upgrade_state.json").read_text(encoding="utf-8"))
@@ -271,7 +271,7 @@ def test_upgrade_migrates_legacy_51job_reconciliation_state_without_losing_click
     )
 
     records = json.loads((state / "job51_audit_log.json").read_text(encoding="utf-8"))
-    assert report["state_migration_version"] == 7
+    assert report["state_migration_version"] == upgrade.STATE_MIGRATION_VERSION
     assert "state/job51_audit_log.json" in report["migrated"]
     assert records[0]["evidence"]["delivery_state_version"] == 1
     assert records[0]["evidence"]["reconcile_attempt"] == 0
@@ -373,12 +373,13 @@ def test_upgrade_reconciles_pre_delivery_round_after_profile_city_update(tmp_pat
 
     current = json.loads((state / "current_round.json").read_text(encoding="utf-8"))
     assert report["ok"] is True
-    assert report["state_migration_version"] == 7
+    assert report["state_migration_version"] == upgrade.STATE_MIGRATION_VERSION
     assert "state/current_round.json" in report["migrated"]
     assert "state/discoveries/boss/pending-start.json" in report["cleared"]
     assert current["intent"]["profile_digest"] == digest_payload(profile)
-    assert current["platforms"]["boss"]["status"] == "login_verified"
-    assert current["platforms"]["boss"]["next_suggested"] == "jobagent boss discover"
+    # The legacy receipt is retained but cannot verify a newly bound native session.
+    assert current["platforms"]["boss"]["status"] == "pending"
+    assert current["platforms"]["boss"]["next_suggested"] == "jobagent boss login --check"
     assert current["profile_reconciliation"]["reason"] == (
         "pre_delivery_profile_update"
     )
@@ -640,9 +641,10 @@ def test_reviewability_upgrade_preserves_other_platform_preview_and_interaction(
     assert json.loads(
         (state / "pending_interaction.json").read_text(encoding="utf-8")
     ) == interaction
-    assert json.loads(
-        (state / "current_round.json").read_text(encoding="utf-8")
-    ) == current_round
+    migrated = json.loads((state / "current_round.json").read_text(encoding="utf-8"))
+    assert migrated["schema_version"] == 4
+    for key in ("round_id", "status", "platform_order", "platforms"):
+        assert migrated[key] == current_round[key]
 
 
 def test_protocol_change_archives_unsigned_runtime_decisions_without_touching_audit(tmp_path):

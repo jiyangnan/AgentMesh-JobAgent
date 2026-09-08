@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -21,7 +22,7 @@ from jobagent.infra.rounds import (
 )
 from jobagent.infra.state import APP_DIR
 
-STATE_MIGRATION_VERSION = 7
+STATE_MIGRATION_VERSION = 8
 
 _EPHEMERAL_FILES = (
     "state/release_manifest_cache.json",
@@ -48,6 +49,8 @@ _RECOVERY_COMMANDS = {
     "update",
     "upgrade-check",
 }
+_NATIVE_RECOVERY_COMMANDS = {"work", "work-next", "work-begin", "work-submit", "work-status"}
+_NATIVE_UPGRADE_CONFLICTS = {"native_browser_work_inflight"}
 
 
 class UpgradeCompatibilityError(RuntimeError):
@@ -128,8 +131,65 @@ def _has_existing_state(app_dir: Path) -> bool:
         state / "job51_audit_log.json",
         state / "release_manifest_cache.json",
         state / "platform_tabs.json",
+        state / "browser-work.sqlite3",
     )
     return any(path.exists() for path in candidates)
+
+
+def _native_work_upgrade_conflict(root: Path, *, ledger_path: Path | None = None) -> dict[str, Any] | None:
+    """Inspect this installation's native ledger without creating or migrating it."""
+    path = ledger_path if ledger_path is not None else root / "state" / "browser-work.sqlite3"
+    connection = None
+    try:
+        if path.is_symlink():
+            raise ValueError("Unexpected ledger path")
+        if not path.exists():
+            return None
+        if not path.is_file():
+            raise ValueError("Unexpected ledger type")
+        connection = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=1.0)
+        connection.execute("PRAGMA query_only = ON")
+        if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+            raise ValueError("Unsupported native ledger schema")
+        columns = {
+            "works": {"work_id", "specification_digest", "action", "task_json", "binding_json",
+                      "side_effect", "state", "nonce", "result_json", "observation_attempts",
+                      "created_at", "updated_at"},
+            "receipts": {"receipt_id", "work_id", "digest", "result_json", "received_at"},
+        }
+        for table, expected in columns.items():
+            actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if actual != expected:
+                raise ValueError("Invalid native ledger schema")
+        invalid = connection.execute(
+            "SELECT 1 FROM works WHERE typeof(state) != 'text' OR "
+            "state NOT IN ('ready', 'intent_recorded', 'reconcile_only', 'closed') OR "
+            "typeof(side_effect) != 'integer' OR side_effect NOT IN (0, 1) LIMIT 1"
+        ).fetchone()
+        if invalid:
+            raise ValueError("Invalid native ledger state")
+        pending = connection.execute(
+            "SELECT work_id, state FROM works WHERE side_effect = 1 "
+            "AND state IN ('intent_recorded', 'reconcile_only') ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if pending:
+            return {
+                "code": "native_browser_work_inflight",
+                "message": "A native browser action may already have occurred; reconcile its receipt before upgrading state.",
+                "work_id": pending[0],
+                "work_state": pending[1],
+                "next_suggested": "jobagent work status",
+            }
+        return None
+    except (OSError, sqlite3.Error, ValueError):
+        return {
+            "code": "native_browser_work_storage_unavailable",
+            "message": "Native browser work cannot be safely inspected; preserve the ledger and use a compatible client before upgrading.",
+            "next_suggested": "jobagent upgrade-check",
+        }
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def _conflicts(app_dir: Path) -> list[dict[str, Any]]:
@@ -518,6 +578,23 @@ def run_client_upgrade(
     archived: list[str] = []
     conflicts = _conflicts(root)
 
+    native_conflict = _native_work_upgrade_conflict(root)
+    if native_conflict is not None:
+        conflicts.append(native_conflict)
+        return {
+            "ok": False,
+            "upgrade_detected": upgrade_detected,
+            "version_changed": version_changed,
+            "from_version": prior_version or "unknown",
+            "to_version": current_version,
+            "state_migration_version": STATE_MIGRATION_VERSION,
+            "migration_pending": True,
+            "request_preserved": True,
+            "cleared": [], "migrated": [], "archived": [],
+            "conflicts": conflicts,
+            "next_suggested": conflicts[0]["next_suggested"],
+        }
+
     live_locks: list[Path] = []
     if upgrade_detected:
         for relative in _LOCK_FILES:
@@ -536,11 +613,18 @@ def run_client_upgrade(
                 )
 
     if upgrade_detected and not live_locks:
-        for relative in _EPHEMERAL_FILES:
-            path = root / relative
-            if path.exists():
-                path.unlink()
-                cleared.append(relative)
+        # v8 switches executor metadata only. Native session/receipt context
+        # must not be treated as the old driver's rebuildable cache.
+        if prior_migration_version < 7 or protocol_changed:
+            for relative in _EPHEMERAL_FILES:
+                path = root / relative
+                if path.exists():
+                    if relative == "state/browser_session.json":
+                        session = _read_json(path) or {}
+                        if session.get("executor") == "codex_native" or session.get("browser_executor") == "codex_native" or session.get("native_session") is not None:
+                            continue
+                    path.unlink()
+                    cleared.append(relative)
 
         for relative in _LOCK_FILES:
             path = root / relative
@@ -595,9 +679,9 @@ def run_client_upgrade(
         conflicts[0]["next_suggested"] if conflicts else "jobagent round status"
     )
     marker_payload = {
-        "state_migration_version": STATE_MIGRATION_VERSION,
-        "client_version": current_version,
-        "protocol_version": protocol_version,
+        "state_migration_version": prior_migration_version if live_locks else STATE_MIGRATION_VERSION,
+        "client_version": (prior_version or current_version) if live_locks else current_version,
+        "protocol_version": (prior_protocol if prior_protocol is not None else protocol_version) if live_locks else protocol_version,
         "status": "blocked" if conflicts else "ready",
         "migration_pending": bool(live_locks),
         "conflicts": conflicts,
@@ -625,6 +709,10 @@ def enforce_upgrade_for_command(
 ) -> dict[str, Any]:
     """Block state-changing platform commands until upgrade conflicts are repaired."""
     if report.get("ok") or command in _RECOVERY_COMMANDS:
+        return report
+    if command in _NATIVE_RECOVERY_COMMANDS and report.get("conflicts") and all(
+        item.get("code") in _NATIVE_UPGRADE_CONFLICTS for item in report["conflicts"]
+    ):
         return report
     raise UpgradeCompatibilityError(
         {

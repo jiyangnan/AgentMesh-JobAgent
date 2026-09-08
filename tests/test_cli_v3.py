@@ -1008,7 +1008,7 @@ def test_send_dispatch_passes_delivery_authorization_handoff(monkeypatch):
         "jobagent.infra.rounds.assert_platform_turn", lambda platform: None
     )
     monkeypatch.setattr(
-        "jobagent.application.delivery.send_reviewed",
+        "jobagent.application.native_work.start_delivery",
         lambda platform, **kwargs: calls.append((platform, kwargs)) or {"ok": True},
     )
     args = build_parser().parse_args(["liepin", "apply", "send"])
