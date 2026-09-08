@@ -1,0 +1,4 @@
+interface:
+  display_name: "Job Agent for Codex"
+  short_description: "User-confirmed job applications through native UI"
+  default_prompt: "Use $codex-job-agent to continue my job search and show the complete list before sending applications."

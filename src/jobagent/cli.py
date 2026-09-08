@@ -96,6 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose = browser_sub.add_parser("diagnose")
     diagnose.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
 
+    work = sub.add_parser("work", help="Continue native Computer Use tasks without a browser driver")
+    work_sub = work.add_subparsers(dest="work_command", required=True)
+    for name in ("next", "status", "contract"):
+        work_sub.add_parser(name)
+    for name in ("begin", "submit", "cancel"):
+        action = work_sub.add_parser(name)
+        action.add_argument("--work-id", required=True)
+        if name == "submit":
+            action.add_argument("--result", required=True, help="Local typed UI-observation JSON")
+        if name == "cancel":
+            action.add_argument("--confirm-cancel", action="store_true")
+
     update = sub.add_parser("update", help="Check signed client release policy")
     update.add_subparsers(dest="update_command", required=True).add_parser("check")
 
@@ -367,6 +379,8 @@ def _offline_local_control_allowed(args: argparse.Namespace) -> bool:
 
 
 def _verify_state_owner_for_command(args: argparse.Namespace) -> dict[str, Any] | None:
+    if args.command == "work" and args.work_command == "contract":
+        return None
     if args.command in {"account", "doctor", "init", "platforms", "update", "upgrade-check"}:
         return None
     if (
@@ -516,6 +530,8 @@ def _doctor_env() -> dict[str, Any]:
     return {
         "ok": environment_healthy,
         "environment_healthy": environment_healthy,
+        "browser_executor": "codex_native",
+        "host_capability": {"native_computer_use": "requires_host_verification", "browser_driver": "none"},
         "python": sys.version.split()[0],
         "chrome": chrome_available,
         "api_key_configured": key_present,
@@ -1036,6 +1052,12 @@ def _maybe_update(args: argparse.Namespace) -> None:
                 setattr(args, "_client_update_resume_reported", True)
     if os.environ.get("JOBAGENT_SKIP_UPDATE") == "1" or args.command == "update":
         return
+    from jobagent.infra.browser_work import has_inflight
+    if has_inflight():
+        # A UI executor lives outside the CLI process. PID expiry cannot make an
+        # unresolved action safe to replay or replace during an update.
+        setattr(args, "_native_update_deferred", True)
+        return
     from jobagent.infra.release_update import maybe_auto_update
 
     result = maybe_auto_update(on_event=emit_stage)
@@ -1093,6 +1115,8 @@ def _prepare_client_upgrade(args: argparse.Namespace) -> dict[str, Any]:
     command = args.command
     if command == "round":
         command = f"round-{args.round_command}"
+    if command == "work":
+        command = f"work-{args.work_command}"
     result = enforce_upgrade_for_command(command, report)
     if bootstrap_update:
         emit_stage(
@@ -1106,7 +1130,86 @@ def _prepare_client_upgrade(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
+    from jobagent.application import native_work
+    from jobagent.infra import browser_work, rounds, state
+    changes_context = (
+        args.command == "init"
+        or (args.command == "account" and args.account_command in {"bind", "switch"})
+        or (args.command == "round" and args.round_command in {"start", "skip"})
+        or args.command == "resume"
+        or args.command == "interaction"
+    )
+    if changes_context and browser_work.has_open():
+        return {"ok": False, "error": "native_work_context_locked", "request_preserved": True,
+                "message": "Complete or explicitly cancel safe pending native work before changing account, profile or round. An issued external action requires receipt reconciliation.",
+                "next_suggested": "jobagent work status"}
+    if args.command == "work":
+        if args.work_command == "contract":
+            from jobagent.infra.codex_skill import skill_contract
+            return skill_contract()
+        if args.work_command == "next":
+            return native_work.next_work()
+        if args.work_command == "status":
+            return native_work.status()
+        if args.work_command == "begin":
+            return native_work.begin(args.work_id)
+        if args.work_command == "submit":
+            return native_work.submit(args.work_id, args.result)
+        return native_work.cancel(args.work_id, confirmed=args.confirm_cancel)
+    if args.command == "browser":
+        return native_work.request_login(args.platform, diagnose=True)
+    if args.command == "round" and args.round_command == "audit":
+        active = state.load_json(state.current_round_path()) or {}
+        if any(item.get("native_delivery") for item in active.get("platforms", {}).values()):
+            return native_work.audit_round(args.platform)
+    if args.command == "platforms" and args.platforms_command == "health":
+        return {"ok": True, "browser_executor": "codex_native", "browser_probe_executed": False,
+                "message": "Browser health is verified through the current platform's native session task; no separate browser is started.",
+                "next_suggested": "jobagent work next"}
+    if args.command not in native_work.PLATFORMS:
+        return None
+    platform = args.command
+    action = args.platform_command
+    if action == "login":
+        return native_work.request_login(platform)
+    if action == "discover":
+        return native_work.request_discovery(platform)
+    if action == "audit":
+        active = state.load_json(state.current_round_path()) or {}
+        if active.get("platforms", {}).get(platform, {}).get("native_delivery"):
+            return native_work.audit(platform)
+        return None
+    subcommand = getattr(args, "greet_command", None) or getattr(args, "apply_command", None)
+    if subcommand in {"preview", "review"}:
+        rounds.assert_platform_turn(platform)
+        from jobagent.application.native_repair import prepare_review
+        response = prepare_review(platform, input_path=args.input, promoted_ids=args.promote,
+            confirm_promote=args.confirm_promote, output_path=args.output)
+        return native_work.present(response["work"]) if response.get("work") else response
+    if subcommand == "send":
+        return native_work.start_delivery(platform, input_path=args.input,
+            preview_id=args.preview_id, authorization_id=args.authorization_id,
+            limit=args.limit, dry_run=args.dry_run, stop_on_failure=not args.continue_on_failure)
+    return None
+
+
 def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
+    from jobagent.infra.native_command_lock import command_lock
+    if getattr(args, "_native_command_locked", False):
+        return _dispatch_unlocked(args)
+    # Serializes only CLI ledger/checkpoint/round transitions. It is deliberately
+    # not held while Codex is operating the external native browser UI.
+    if args.command in {"boss", "liepin", "zhilian", "51job", "browser", "work", "round", "interaction", "resume", "init", "account"} and not (args.command == "work" and args.work_command == "contract"):
+        with command_lock():
+            return _dispatch_unlocked(args)
+    return _dispatch_unlocked(args)
+
+
+def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
+    native = _native_dispatch(args)
+    if native is not None:
+        return native
     if args.command == "init":
         return _init(args)
     if args.command == "account":
@@ -1335,11 +1438,29 @@ def main() -> None:
     args = parser.parse_args()
     account_verification: dict[str, Any] | None = None
     try:
-        _maybe_update(args)
-        _prepare_client_upgrade(args)
-        account_verification = _verify_state_owner_for_command(args)
-        _schedule_analytics_flush_safely()
-        result = _dispatch(args)
+        from jobagent.infra.native_command_lock import command_lock
+        # Keep the update/migration check and intent issuance in one critical
+        # section. Python file descriptors are non-inheritable: an updater exec
+        # releases this lock and the resumed command acquires it anew.
+        with command_lock():
+            setattr(args, "_native_command_locked", True)
+            _maybe_update(args)
+            _prepare_client_upgrade(args)
+            skill_installation = None
+            if not getattr(args, "_native_update_deferred", False):
+                from jobagent.infra.browser_work import has_inflight
+                if not has_inflight():
+                    from jobagent.infra.codex_skill import install_skill
+                    # Refresh before a business error can consume update state.
+                    skill_installation = install_skill()
+            account_verification = _verify_state_owner_for_command(args)
+            _schedule_analytics_flush_safely()
+            result = _dispatch(args)
+        if skill_installation and skill_installation.get("status") != "current":
+            result["codex_skill_installation"] = skill_installation
+        if getattr(args, "_native_update_deferred", False):
+            result["client_update_deferred"] = {"reason": "native_browser_work_inflight",
+                "next_suggested": "jobagent work next", "request_preserved": True}
         if account_verification and account_verification.get("offline"):
             result = {
                 **result,
@@ -1365,6 +1486,7 @@ def main() -> None:
         from jobagent.infra.platform_lock import PlatformLockError
         from jobagent.infra.rounds import RoundOrderError
         from jobagent.infra.protocol import ProtocolError
+        from jobagent.infra.browser_work import BrowserWorkError
         from jobagent.platforms.discovery import CollectionError
 
         try:
@@ -1377,7 +1499,9 @@ def main() -> None:
             UserInterventionRequired = ()  # type: ignore[assignment,misc]
             DeliveryPreviewError = ()  # type: ignore[assignment,misc]
             DeliveryAuthorizationError = ()  # type: ignore[assignment,misc]
-        if isinstance(exc, AccountStateError):
+        if isinstance(exc, BrowserWorkError):
+            payload = exc.payload
+        elif isinstance(exc, AccountStateError):
             payload = exc.payload
         elif isinstance(exc, UpgradeCompatibilityError):
             payload = exc.payload
@@ -1388,10 +1512,8 @@ def main() -> None:
                 "ok": False,
                 "error": exc.code,
                 "message": exc.message,
-                "no_charge": True,
-                "requires_user_action": bool(
-                    exc.user_prompt or details.get("requires_user_action")
-                ),
+                "no_charge": details.get("no_charge", True),
+                "requires_user_action": details.get("requires_user_action", bool(exc.user_prompt)),
                 "user_prompt": exc.user_prompt or details.get("user_prompt") or None,
             }
         elif UserInterventionRequired and isinstance(exc, UserInterventionRequired):

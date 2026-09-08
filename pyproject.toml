@@ -1,6 +1,6 @@
 [project]
 name = "job-agent"
-version = "0.5.44"
+version = "0.6.0"
 description = "Agent-native job discovery and delivery CLI for AgentMesh 360"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,6 +27,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+jobagent = ["data/codex_skill/SKILL.md", "data/codex_skill/agents/openai.yaml"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

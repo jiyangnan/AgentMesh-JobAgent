@@ -32,6 +32,41 @@ Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creat
 
 ## Install
 
+### Codex native Computer Use
+
+The default Codex workflow uses native Computer Use in the user's existing
+Chrome session. Job Agent supplies one account-bound task at a time and keeps
+cloud decisions, final-list confirmation, progress and audit in the CLI. Read
+the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
+
+```bash
+jobagent work next
+```
+
+Read each returned task and result schema, run `jobagent work begin --work-id ID`
+before its browser action, and report the observed result with
+`jobagent work submit --work-id ID --result FILE`. `jobagent work status` is the
+read-only recovery entry. Native mode does not use CDP, browser scripts or hidden
+site APIs. If this host lacks native Computer Use, pause rather than switching
+drivers. Browser permissions and real UI observations still belong to the host;
+the task protocol cannot intercept actions taken outside it.
+
+The official installer also installs the product-managed `codex-job-agent` skill
+under `$CODEX_HOME/skills` (or `~/.codex/skills`). A same-name custom skill or a
+locally modified managed file produces an explicit conflict and is not
+overwritten. Extra user files are preserved. Current instructions are also
+available from the installed package with
+`python -m jobagent.infra.codex_skill contract`; choose that installation's Python.
+
+The platform commands below remain compatible entry points. In native mode,
+browser-facing commands return host work rather than starting the legacy browser
+driver; the native task instructions take precedence over driver-specific
+diagnostic descriptions below. Finish or reconcile an active work item before
+upgrading its protocol. See the [canonical workflow](docs/agent-onboarding.md).
+State preservation and recovery are defined in the [upgrade contract](docs/client-upgrade-contract.md).
+
+### Official client installer
+
 macOS or Linux:
 
 ```bash
@@ -298,6 +333,7 @@ The canonical agent workflow is in [docs/agent-onboarding.md](docs/agent-onboard
 
 - [Claude Code](skills/claude-code/SKILL.md)
 - [OpenClaw / ClawHub](skills/openclaw-job-agent/SKILL.md)
+- [Codex native Computer Use](skills/codex-job-agent/SKILL.md)
 
 ## Safety and Privacy
 

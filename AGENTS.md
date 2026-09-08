@@ -30,6 +30,14 @@ This is the public Job Agent CLI repository in the AgentMesh ecosystem. It conta
 
 ## Product Rules
 
+### Native execution takes precedence in 0.6.0
+
+- Browser-facing `login`, `discover`, `review`, `send` and `browser diagnose` commands use the account-bound BrowserWork protocol. Read the returned task, result schema, `allowed_mode` and top-level `next_suggested`; these are authoritative for the current action.
+- Use native Computer Use from the host's current callable tool documentation. Never invent a host API. Keep one bound Chrome window/profile and a small reusable task tab group; all real browser actions remain serial.
+- Run the exact `work begin` command before an allowed action and submit only actual UI observations with its nonce and binding. `reconcile_only` permits receipt inspection, never another send or submit click. Missing native capability, login, verification, permission or inconclusive state requires the returned user handoff; do not fall back to CDP, browser JavaScript, hidden site APIs or another driver.
+- Keep account ownership, signed search scope, user-confirmed cities and roles, full final preview and per-platform delivery authorization unchanged. Default platform greetings are not custom-message success; resume and application evidence remain separate. Uncertain external outcomes remain unresolved and are never retried by clicking again.
+- The older CDP and driver-specific rules below govern maintenance of legacy implementation only. They do not authorize a customer agent to override a native task or return to a legacy browser executor. The Skill is operating guidance, not a technical interceptor of host UI actions.
+
 - On Liepin `liepin_verification_required`, keep the existing browser tab and stop for the returned user prompt. Only after the user completes verification, run the exact `next_suggested` Discover command. Completed query pages and collected candidates resume from the preserved account-bound checkpoint; do not restart the round, request another login or repeat completed searches. Explicit no-results or verified final-page evidence retires only that query. An older request without a checkpoint remains preserved; never invent missing progress.
 
 - Before suggesting a paid pass, run `jobagent doctor env`. Read `environment_healthy` separately from `workflow.ready`. New accounts start with zero cloud credits. If Core returns `signup_trial_active` for a grandfathered account, report the returned balance and expiry and continue with the top-level `next_suggested`; do not block on the absence of a paid pass. Suggest a pass only for `insufficient_credits` with `paid_pass_required=true`.

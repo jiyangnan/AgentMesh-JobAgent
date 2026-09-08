@@ -4,6 +4,11 @@ __pycache__/
 .jobagent/
 .jobagent-install.json
 data/
+!src/jobagent/data/
+!src/jobagent/data/codex_skill/
+!src/jobagent/data/codex_skill/SKILL.md
+!src/jobagent/data/codex_skill/agents/
+!src/jobagent/data/codex_skill/agents/openai.yaml
 .venv/
 *.egg-info/
 build/

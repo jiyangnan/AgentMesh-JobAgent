@@ -101,6 +101,10 @@ EOF
 chmod +x "$SHIM"
 ok "Shim at $SHIM"
 
+# Register only product-owned Codex skill files; custom skills are never replaced.
+"$INSTALL_DIR/.venv/bin/python" -m jobagent.infra.codex_skill install
+ok "Codex native skill installed"
+
 # 6. PATH check
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
@@ -134,7 +138,8 @@ Next steps:
      jobagent round start
 
 6. Follow the current platform:
-     jobagent boss login --check
+     jobagent work next
+   Compatibility commands such as jobagent boss login --check also return native work in Codex.
 
 7. Read the full guide:
      $INSTALL_DIR/README.md

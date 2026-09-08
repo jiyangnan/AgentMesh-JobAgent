@@ -39,3 +39,20 @@ def test_official_installer_targets_public_repo_and_current_credential_term(rela
     assert "jobagent boss discover" not in text
     assert "config tar.umask 002" in text
     assert text.index("jobagent round start") < text.index("jobagent boss login --check")
+
+
+def test_windows_installer_stops_on_native_package_failures_before_marking_success():
+    text = (ROOT / "scripts/install.ps1").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    commands = (
+        "& $venvPy -m pip install --upgrade pip --quiet",
+        "& $venvPip install -e $InstallDir --quiet",
+        "& $venvPy -m jobagent.infra.codex_skill install",
+    )
+    for command in commands:
+        position = lines.index(command)
+        assert lines[position + 1].startswith("if ($LASTEXITCODE -ne 0) { Die ")
+    assert text.index(commands[1]) < text.index('Ok "CLI installed"') < text.index("$metadata = @{")
+    assert text.index(commands[2]) < text.index('Ok "Codex native skill installed"')
+    assert "%USERPROFILE%\\Downloads" not in text
+    assert "Write-Host '     jobagent resume analyze --file \"$env:USERPROFILE\\Downloads\\your-resume.pdf\"'" in text

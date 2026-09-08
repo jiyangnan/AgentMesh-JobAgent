@@ -2,6 +2,20 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.0] - 2026-09-08
+
+### Added
+
+- Native Computer Use workflow for Codex: login, job search, detail reading, confirmed delivery and receipt inspection now use one bound Chrome window and a small reusable task tab group. Browser commands return structured tasks instead of starting a separate browser driver.
+- `jobagent work next`, `begin`, `submit`, `status`, `contract` and explicitly confirmed safe `cancel` commands, with account/round/job bindings, transactional intent and receipt records, and read-only recovery for uncertain external actions.
+- A packaged Codex skill, conservative installer and current instruction contract carried by browser-work responses. Hosts without native Computer Use stop with a capability handoff instead of silently using another driver.
+
+### Safety and compatibility
+
+- Cloud-signed search plans, decisions and personalized greetings, full per-platform delivery previews and user confirmation remain required. Default platform messages do not count as personalized greeting delivery; resume/application evidence is reported separately.
+- Existing account data, browser profiles, rounds, preserved requests, decisions, authorizations and audits remain in place. Upgrade migration records the new executor without transferring cookies or replacing profiles; unresolved native actions defer updates until reconciliation.
+- Platform verification remains a user-intervention boundary. The client validates host observation structure and context, not a platform-signed proof; no guarantee of exactly-once website actions or absence of future verification is made.
+
 ## [0.5.44] - 2026-09-07
 
 ### Fixed
