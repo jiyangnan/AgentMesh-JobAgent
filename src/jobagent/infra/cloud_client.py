@@ -309,6 +309,21 @@ def health() -> dict[str, Any]:
     )
 
 
+def resume_center_preparation() -> dict[str, Any]:
+    """Read-only workbench fact: resume list, confirmation state and receipt.
+
+    Never charges credits and never writes; 503 resume_center_unavailable
+    means the server has not enabled the resume center yet.
+    """
+    return _request(
+        "GET",
+        "/v1/resume-center/preparation",
+        timeout=20,
+        max_attempts=2,
+        operation="resume_center_preparation",
+    )
+
+
 def me(*, api_key: str | None = None) -> dict[str, Any]:
     return _request(
         "GET",

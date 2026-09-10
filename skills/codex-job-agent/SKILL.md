@@ -23,6 +23,13 @@ create a replacement round to recover a failure, or edit account/state files.
 Only `jobagent round start` creates a round; use it only for a user-requested new
 round. Preserve the same account, round, request, Discover and browser session.
 
+When the user asks about their resumes (how many, what the profile looks like,
+or whether preparation is ready), run the read-only `jobagent resume list` and
+answer from its `source=resume_center` output; it never charges credits. If it
+reports `local_snapshot`, say the data is this machine's last CLI snapshot and
+may be outdated; if `resume_center_unavailable`, tell the user the online
+resume center is not enabled. Do not guess from local files instead.
+
 The platform order is Boss -> Liepin -> Zhilian -> 51Job. Complete the current
 platform's login, discovery, signed review, full preview, confirmation, delivery
 and audit before entering the next platform. Do not batch-login platforms.

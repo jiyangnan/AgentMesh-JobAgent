@@ -138,6 +138,13 @@ Start a new round explicitly. Reading status never creates a round:
 jobagent round start
 ```
 
+Read the online resumes the user keeps in the workbench — a free, read-only
+listing with confirmation state and the preparation receipt:
+
+```bash
+jobagent resume list
+```
+
 At least one target city is required. A fresh `resume analyze` asks for cities
 before the cloud call when none were supplied or saved, preventing a second
 paid analysis just to repair an empty city. An older city-less profile receives
