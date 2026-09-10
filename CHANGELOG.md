@@ -2,6 +2,17 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.2] - 2026-09-11
+
+### Added
+
+- `jobagent resume list` and `jobagent resume status`: a free, read-only view of the online resumes the user keeps in the workbench — name, direction, version, confirmation state and the preparation receipt — so host agents answer resume questions from cloud facts instead of guessing.
+- `jobagent profile show` is now cloud-first: it reports the online resume list with `source=resume_center`, and only falls back to the local snapshot with an explicit `source=local_snapshot` label, stale warning and fallback reason. Authentication failures are never masked as local data.
+
+### Changed
+
+- Onboarding guide, README and the packaged Codex skill instruct agents to run `resume list` for resume questions and to name the data source when answering.
+
 ## [0.6.1] - 2026-09-08
 
 ### Fixed
