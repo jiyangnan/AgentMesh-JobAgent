@@ -208,6 +208,28 @@ If `resume analyze` returns `target_cities_required`, ask for the cities and rer
 
 Then execute the returned `jobagent round start`. If it returns `interaction_required`, render its card or fallback text and wait for the target-role answer. Continue through `jobagent interaction respond`; only an accepted structured response or an already-explicit direct `round start` creates the four-platform round. Final delivery authorization is still collected separately after each platform preview.
 
+<a id="resume-online-facts"></a>
+
+### Reading the user's online resumes (workbench facts)
+
+When the user asks how many resumes they have, what their resume profile looks
+like, or whether their resume preparation is ready, run the read-only listing
+first — it reflects the resumes the user maintains in the workbench and never
+charges credits:
+
+```bash
+jobagent resume list
+```
+
+Acceptance: `ok=true` with `source=resume_center`, an online-resume list
+(name, direction, version, confirmation state) and the preparation receipt.
+Answer the user from this output. If `source` is `local_snapshot`, say so: the
+data is this machine's last CLI snapshot and may be outdated. If the command
+returns `resume_center_unavailable`, tell the user the server has not enabled
+the online resume center yet; do not guess from local files instead.
+`jobagent profile show` uses the same cloud-first order and labels its source
+the same way. `resume status --id` is reserved for a later release.
+
 ## 4. Run One Platform
 
 ### Boss直聘

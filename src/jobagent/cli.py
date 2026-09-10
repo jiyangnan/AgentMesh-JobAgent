@@ -81,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--target-role")
     analyze.add_argument("--target-cities", nargs="*")
     analyze.add_argument("--output", "-o")
+    resume_sub.add_parser("list", help="List the online resumes kept in the workbench")
+    resume_status = resume_sub.add_parser(
+        "status", help="Summarize online resume preparation state"
+    )
+    resume_status.add_argument("--id", help="Reserved for a single-resume view (planned)")
 
     profile = sub.add_parser("profile", help="View the current resume profile")
     profile.add_subparsers(dest="profile_command", required=True).add_parser("show")
@@ -554,6 +559,74 @@ def _doctor_env() -> dict[str, Any]:
         },
         "next_suggested": next_suggested,
         "cloud": cloud,
+    }
+
+
+def _resume_center_overview() -> dict[str, Any]:
+    """Read-only workbench facts: online resumes, confirmation state, receipt."""
+    from jobagent.infra import cloud_client
+
+    preparation = cloud_client.resume_center_preparation()
+    resumes = [
+        {
+            "id": resume.get("id"),
+            "name": resume.get("name"),
+            "target_role": resume.get("target_role"),
+            "version": resume.get("version"),
+            "confirmed": bool(resume.get("confirmed_revision_id")),
+            "has_draft": bool(resume.get("has_draft")),
+            "updated_at": resume.get("updated_at"),
+        }
+        for resume in preparation.get("resumes") or []
+        if isinstance(resume, dict)
+    ]
+    return {
+        "ok": True,
+        "source": "resume_center",
+        "state": preparation.get("state"),
+        "ready": bool(preparation.get("ready")),
+        "resumes": resumes,
+        "receipt": preparation.get("receipt"),
+        "next_suggested": preparation.get("next_suggested"),
+        "workbench_url": preparation.get("workbench_url"),
+    }
+
+
+def _profile_show() -> dict[str, Any]:
+    """Cloud facts first (resume center), local snapshot only as a fallback."""
+    from jobagent.infra import cloud_client
+    from jobagent.infra.state import load_json, profile_path
+
+    fallback_reason: str | None = None
+    try:
+        overview = _resume_center_overview()
+        if overview["resumes"]:
+            return {
+                "ok": True,
+                "source": "resume_center",
+                "state": overview["state"],
+                "resumes": overview["resumes"],
+                "receipt": overview["receipt"],
+                "next_suggested": overview["next_suggested"],
+                "workbench_url": overview["workbench_url"],
+            }
+        fallback_reason = "resume_center_empty"
+    except cloud_client.CloudError as exc:
+        # Auth and permission failures must surface, never mask as local data.
+        if exc.status in (401, 403, 404):
+            raise
+        fallback_reason = f"cloud_error:{exc.code or exc.status}"
+    return {
+        "ok": True,
+        "source": "local_snapshot",
+        "profile": load_json(profile_path()),
+        "stale_warning": (
+            "This is the local snapshot from the last CLI analysis on this "
+            "machine. It may be outdated and does not include workbench "
+            "resumes."
+        ),
+        "fallback_reason": fallback_reason,
+        "next_suggested": "jobagent resume list",
     }
 
 
@@ -1137,7 +1210,7 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
         args.command == "init"
         or (args.command == "account" and args.account_command in {"bind", "switch"})
         or (args.command == "round" and args.round_command in {"start", "skip"})
-        or args.command == "resume"
+        or (args.command == "resume" and args.resume_command == "analyze")
         or args.command == "interaction"
     )
     if changes_context and browser_work.has_open():
@@ -1223,11 +1296,22 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "doctor":
         return _doctor_env()
     if args.command == "resume":
-        return _resume_analyze(args)
-    if args.command == "profile":
-        from jobagent.infra.state import load_json, profile_path
+        if args.resume_command == "analyze":
+            return _resume_analyze(args)
+        if args.resume_command in ("list", "status"):
+            if getattr(args, "id", None):
+                from jobagent.infra.cloud_client import CloudError
 
-        return {"ok": True, "profile": load_json(profile_path())}
+                raise CloudError(
+                    "Single-resume detail arrives in a later release; "
+                    "this version lists every online resume.",
+                    status=400,
+                    code="resume_detail_not_available",
+                )
+            return _resume_center_overview()
+        raise ValueError(f"unknown resume command: {args.resume_command}")
+    if args.command == "profile":
+        return _profile_show()
     if args.command == "platforms":
         from jobagent.platforms import check_all_platforms, check_platform_health, list_platforms
 
