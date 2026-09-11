@@ -329,3 +329,58 @@ def test_capability_pause_schema_is_self_contained(env):
     sample["evidence"]["observation"] = "Native tool not available in synthetic host"
     paused = submit(env, work, sample)
     assert paused["requires_user_action"] and not state.load_json(state.current_round_path())["native_session"]
+
+
+def _pause_receipt(work, reason="session_unknown", attempt=0):
+    return {"receipt_id": f"{work['work_id']}-pause-{attempt}", "nonce": work["nonce"], "binding": work["binding"],
+            "outcome": "uncertain", "requires_user_action": True, "reason": reason,
+            "evidence": {"source": "host_ui_observation",
+                         "observed_at": datetime.now(timezone.utc).isoformat(),
+                         "observation": "Synthetic ambiguous Chrome windows; only a new tab identified"}}
+
+
+def _bind_receipt(work):
+    return {"receipt_id": work["work_id"] + "-final", "nonce": work["nonce"], "binding": work["binding"],
+            "outcome": "success",
+            "evidence": {"source": "host_ui_observation",
+                         "observed_at": datetime.now(timezone.utc).isoformat(),
+                         "observation": "Single synthetic Chrome window stably identified",
+                         "native_computer_use_available": True, "browser": "chrome",
+                         "window_reference": "chrome-window-9", "profile_label": "Profile 1",
+                         "group_reference": "Job Agent", "reuse_status": "created_no_existing"}}
+
+
+def test_observation_limit_recovery_still_accepts_final_receipt(env):
+    env.choose("boss", session=False)
+    response = native.request_login("boss")
+    work_id = response["work"]["work_id"]
+    assert response["work"]["action"] == "bind_session"
+    for attempt in range(store.MAX_OBSERVATION_ATTEMPTS):
+        begun = native.begin(work_id)["work"]
+        submit(env, begun, _pause_receipt(begun, attempt=attempt))
+    with pytest.raises(store.BrowserWorkError) as caught:
+        native.begin(work_id)
+    payload = caught.value.payload
+    assert payload["error"] == "browser_work_observation_limit"
+    assert payload["work_id"] == work_id
+    assert payload["next_suggested"].startswith("jobagent work submit")
+    assert payload["cancel_command"].startswith("jobagent work cancel")
+    status = native.request_login("boss")
+    assert status["next_suggested"].startswith("jobagent work submit")
+    assert status["work"]["allowed_mode"] == "reconcile_only"
+    assert "关闭多余的 Chrome 窗口" in status["user_prompt"]
+    submit(env, status["work"], _bind_receipt(status["work"]))
+    assert rounds.ensure_current_round()["native_session"]["window_reference"] == "chrome-window-9"
+
+
+def test_explicit_login_clears_cancelled_bind_marker(env):
+    env.choose("boss", session=False)
+    response = native.request_login("boss")
+    native.cancel(response["work"]["work_id"], confirmed=True)
+    cancelled = native.next_work()
+    assert cancelled["event"] == "browser_work_cancelled"
+    assert "jobagent boss login" in cancelled["user_prompt"]
+    resumed = native.request_login("boss")
+    assert resumed["event"] == "browser_work_required"
+    assert resumed["work"]["action"] == "bind_session"
+    assert native.next_work()["event"] == "browser_work_required"

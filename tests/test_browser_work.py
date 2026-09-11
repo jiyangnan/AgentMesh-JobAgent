@@ -227,7 +227,14 @@ def test_read_only_work_reobserves_boundedly_with_same_nonce(ledger, binding):
         paused = store.submit_work(work["work_id"], binding, receipt(
             started, receipt_id=f"pause-{attempt}", outcome="uncertain"))
         assert paused["state"] == "reconcile_only"
-    assert_error("browser_work_observation_limit", store.begin_work, work["work_id"], binding)
+    with pytest.raises(store.BrowserWorkError) as caught:
+        store.begin_work(work["work_id"], binding)
+    payload = caught.value.payload
+    assert payload["error"] == "browser_work_observation_limit"
+    assert payload["request_preserved"] is True
+    assert payload["work_id"] == work["work_id"]
+    assert payload["next_suggested"] == f"jobagent work submit --work-id {work['work_id']} --result <result.json>"
+    assert payload["cancel_command"] == f"jobagent work cancel --work-id {work['work_id']} --confirm-cancel"
     assert store.pending_work(binding)["execution_permitted"] is False
     # The observation limit does not prevent evidence already obtained arriving.
     done = store.submit_work(work["work_id"], binding, receipt(
