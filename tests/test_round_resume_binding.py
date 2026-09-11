@@ -580,3 +580,94 @@ def test_rebind_then_round_start_reaches_selection_again(monkeypatch):
     again = _dispatch(_args("round start"))
     assert again["error"] == "interaction_required"
     assert again["interaction"]["kind"] == "resume_selection"
+
+
+def test_staged_binding_profile_incomplete_keeps_binding_and_guides(monkeypatch):
+    """Server 409 resume_profile_invalid: the binding itself is still valid,
+    so it stays staged and the user is routed to the workbench (or the
+    --no-resume-binding escape hatch) instead of a pointless retry."""
+    binding = _binding(resume_id="resume-b")
+    _stage_binding(monkeypatch, binding)
+
+    def _draft(binding_id):
+        raise CloudError(
+            "Analyze or complete a draft profile, then explicitly confirm its revision.",
+            status=409, code="resume_profile_invalid",
+        )
+
+    monkeypatch.setattr(cloud_client, "resume_binding_material", _draft)
+    result = _dispatch(_args("round start"))
+    assert result["error"] == "resume_binding_profile_incomplete"
+    assert result["retryable"] is False
+    assert "工作台" in result["message"]
+    assert result["next_suggested"] == "jobagent round start --no-resume-binding"
+    import jobagent.infra.state as state_mod
+
+    # Completing the workbench profile makes a plain retry work, so the
+    # staged binding must survive — unlike preparation_required, nothing
+    # is cleared and no round is started.
+    assert (state_mod.STATE_DIR / "pending_round_binding.json").exists()
+    assert _current_round() is None
+
+
+def test_respond_material_profile_incomplete_keeps_pending(monkeypatch):
+    binding = _binding(resume_id="resume-b")
+    _stage_binding(monkeypatch, binding)
+    card = _dispatch(_args("round start"))
+    interaction_id = card["interaction"]["interaction_id"]
+
+    def draft(binding_id):
+        raise CloudError(
+            "Analyze or complete a draft profile, then explicitly confirm its revision.",
+            status=409, code="resume_profile_invalid",
+        )
+
+    monkeypatch.setattr(cloud_client, "resume_binding_material", draft)
+    result = _dispatch(
+        _args(f"interaction respond --interaction-id {interaction_id} --choice accept_suggested")
+    )
+    assert result["error"] == "resume_binding_profile_incomplete"
+    assert "工作台" in result["message"]
+    # Unlike preparation_required, both the pending interaction and the
+    # staged binding survive: the user confirms the profile server-side
+    # and answers the same interaction again.
+    assert load_pending_interaction()
+    import jobagent.infra.state as state_mod
+
+    assert (state_mod.STATE_DIR / "pending_round_binding.json").exists()
+    assert _current_round() is None
+
+
+def test_legacy_discover_profile_incomplete_keeps_binding(monkeypatch):
+    """Legacy run_discover with a 409 resume_profile_invalid: the round keeps
+    its binding and the guidance points at the workbench, not a rebind."""
+    from jobagent.application import discover as discover_mod
+    from jobagent.infra import rounds as rounds_mod
+
+    rounds_mod.clear_round_resume_binding()
+    cleared: list[str] = []
+    monkeypatch.setattr(rounds_mod, "clear_round_resume_binding", lambda: cleared.append("cleared"))
+
+    def _draft(binding_id):
+        raise CloudError(
+            "Analyze or complete a draft profile, then explicitly confirm its revision.",
+            status=409, code="resume_profile_invalid",
+        )
+
+    active = {"round_id": "round-1", "status": "active", "resume_binding": _binding(),
+              "intent": {"status": "confirmed", "target_roles": ["数据产品经理"]}, "platforms": {}}
+    monkeypatch.setattr(rounds_mod, "ensure_current_round", lambda: active)
+    monkeypatch.setattr(cloud_client, "resume_binding_material", _draft)
+    monkeypatch.setattr(discover_mod, "_resume_pending_decision", lambda *a, **k: None)
+    import jobagent.infra.state as state_mod
+    monkeypatch.setattr(state_mod, "profile_path", lambda: __import__("pathlib").Path("/nonexistent"))
+    with pytest.raises(CloudError) as error:
+        discover_mod.run_discover("boss")
+    assert error.value.code == "resume_profile_invalid"
+    details = error.value.details
+    assert details["resume_binding_paused"] is True
+    assert details["no_charge"] is True
+    assert details["next_suggested"] == "jobagent boss discover"
+    assert "工作台" in details["message"]
+    # The binding must NOT be detached — only preparation_required unwinds it.
+    assert cleared == []

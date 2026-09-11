@@ -432,6 +432,11 @@ def run_discover(
         try:
             binding_material = cloud_client.resume_binding_material(round_binding["id"])
         except cloud_client.CloudError as exc:
+            from jobagent.application.round_resume_binding import (
+                BINDING_PROFILE_INCOMPLETE_CODE,
+                BINDING_PROFILE_INCOMPLETE_DISCOVER,
+            )
+
             if exc.code == "preparation_required":
                 # Same unwind as the native path: the bound resume changed
                 # underneath this round, so detach it and route the user back
@@ -448,6 +453,19 @@ def run_discover(
                             "请重新执行 jobagent round start 选择简历后再继续。"
                         ),
                         "next_suggested": "jobagent round start",
+                    }
+                )
+            elif exc.code == BINDING_PROFILE_INCOMPLETE_CODE:
+                # The binding stays attached; the workbench profile needs
+                # re-confirmation before this platform can continue.
+                exc.details.update(
+                    {
+                        "request_preserved": False,
+                        "no_charge": True,
+                        "billing_status": "not_charged",
+                        "resume_binding_paused": True,
+                        "message": BINDING_PROFILE_INCOMPLETE_DISCOVER,
+                        "next_suggested": f"jobagent {platform} discover",
                     }
                 )
             raise
@@ -487,6 +505,11 @@ def run_discover(
                 round_id=str(active_round.get("round_id")) if round_binding.get("id") else None,
             )
     except cloud_client.CloudError as exc:
+        from jobagent.application.round_resume_binding import (
+            BINDING_PROFILE_INCOMPLETE_CODE,
+            BINDING_PROFILE_INCOMPLETE_DISCOVER,
+        )
+
         if exc.code == "preparation_required" and round_binding.get("id"):
             # The bound resume changed underneath this round. Pause this
             # platform's flow and ask for a fresh user-confirmed selection.
@@ -500,6 +523,19 @@ def run_discover(
                         "before continuing."
                     ),
                     "next_suggested": "jobagent round start",
+                    "no_charge": True,
+                    "billing_status": "not_charged",
+                }
+            )
+            raise
+        if exc.code == BINDING_PROFILE_INCOMPLETE_CODE:
+            # The binding stays attached; only the workbench profile needs
+            # re-confirmation, so guide back to the workbench, not a rebind.
+            exc.details.update(
+                {
+                    "resume_binding_paused": True,
+                    "message": BINDING_PROFILE_INCOMPLETE_DISCOVER,
+                    "next_suggested": f"jobagent {platform} discover",
                     "no_charge": True,
                     "billing_status": "not_charged",
                 }
