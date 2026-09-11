@@ -133,6 +133,49 @@ def _same_city(left: str, right: str) -> bool:
     return left.strip().removesuffix("市") == right.strip().removesuffix("市")
 
 
+def _binding_material_or_pause(platform: str, binding: dict) -> dict:
+    """Bound rounds discover with the confirmed resume's own material."""
+    from jobagent.application.round_resume_binding import binding_material_profile
+
+    try:
+        return binding_material_profile(binding)["profile"]
+    except existing.cloud_client.CloudError as exc:
+        if exc.code == "preparation_required":
+            existing.rounds.clear_round_resume_binding()
+            raise CollectionError(
+                "resume_binding_paused",
+                "绑定的简历已变更或不再可用，本平台已暂停。请重新选择简历后再继续。",
+                user_prompt=(
+                    "绑定的简历已变更或不再可用，本轮投递已暂停。"
+                    "请重新执行 jobagent round start 选择简历；不要删除状态。"
+                ),
+                details={
+                    "retryable": False,
+                    "requires_user_action": True,
+                    "request_preserved": False,
+                    "no_charge": True,
+                    "billing_status": "not_charged",
+                    "resume_binding_paused": True,
+                    "next_suggested": "jobagent round start",
+                    "platform": platform,
+                },
+            ) from exc
+        raise CollectionError(
+            "resume_binding_material_unavailable",
+            "暂时无法获取绑定简历的材料（网络或服务不可用）。请稍后重试。",
+            user_prompt="暂时无法获取绑定简历的材料，本次未发起搜索、未扣费。请稍后重试同一命令。",
+            details={
+                "retryable": bool(exc.retryable),
+                "requires_user_action": True,
+                "request_preserved": False,
+                "no_charge": True,
+                "billing_status": "not_charged",
+                "next_suggested": f"jobagent {platform} discover",
+                "platform": platform,
+            },
+        ) from exc
+
+
 def _context(platform: str, session_id: str) -> tuple[dict, dict, dict]:
     if platform not in _ENTRY_URLS or not isinstance(session_id, str) or not session_id:
         _fail("native_discovery_context_invalid", "Platform and host session are required", platform=platform)
@@ -142,6 +185,10 @@ def _context(platform: str, session_id: str) -> tuple[dict, dict, dict]:
     existing.require_compatible_profile(profile)
     active = existing.rounds.ensure_current_round()
     existing.rounds.assert_platform_turn(platform)
+    round_binding = active.get("resume_binding") or {}
+    if round_binding.get("id"):
+        profile = _binding_material_or_pause(platform, round_binding)
+        existing.require_compatible_profile(profile)
     session = active.get("native_session") or {}
     if session.get("id") != session_id:
         _fail("native_session_mismatch", "Host session does not match the current round", platform=platform)
@@ -417,10 +464,37 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
         return resumed
     request_id = existing._preserved_request_id(context)
     if storage.load_collection_checkpoint(platform) is None:
+        round_binding = active.get("resume_binding") or {}
         try:
             plan = existing.cloud_client.discovery_start(platform=platform, profile=profile,
-                request_id=request_id, round_intent=active.get("intent"))
+                request_id=request_id, round_intent=active.get("intent"),
+                resume_binding_id=str(round_binding.get("id")) if round_binding.get("id") else None,
+                context_id=str(round_binding.get("context_id")) if round_binding.get("context_id") else None,
+                round_id=str(active.get("round_id")) if round_binding.get("id") else None)
         except existing.cloud_client.CloudError as exc:
+            if exc.code == "preparation_required":
+                reason = str((exc.details or {}).get("reason") or "")
+                if round_binding.get("id"):
+                    existing.rounds.clear_round_resume_binding()
+                guidance = {
+                    "explicit_round_city_required": (
+                        "本轮缺少目标城市（旧版本创建的轮次）。请重新开轮：jobagent round start。"
+                    ),
+                }.get(
+                    reason,
+                    "绑定的简历已变更或不再可用。请重新执行 jobagent round start 选择简历。",
+                )
+                exc.details.update({
+                    "request_preserved": False,
+                    "request_id": request_id,
+                    "no_charge": True,
+                    "billing_status": "not_charged",
+                    "resume_binding_paused": True,
+                    "reason": reason,
+                    "message": guidance,
+                    "next_suggested": "jobagent round start",
+                })
+                raise
             exc.details.update({"request_preserved": True, "request_id": request_id,
                 "no_charge": True, "billing_status": "not_charged", "next_suggested": f"jobagent {platform} discover"})
             raise

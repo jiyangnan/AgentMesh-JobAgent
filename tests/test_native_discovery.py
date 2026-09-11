@@ -199,6 +199,82 @@ def test_closed_work_replays_after_ledger_checkpoint_crash(env):
     assert storage.load_collection_checkpoint("zhilian")["progress"]["completed_pages"] == [[0, 1]]
 
 
+def _bound_env(env, monkeypatch, *, material=None, material_error=None):
+    binding = {"id": "binding-1", "context_id": "ctx-1", "resume_id": "resume-b",
+               "resume_revision_id": "rev-2", "content_digest": "digest",
+               "target_role": "项目经理", "resume_name": "项目方向",
+               "confirmed_at": "2026-09-11T00:00:00Z"}
+    env.active["resume_binding"] = binding
+    env.active["intent"]["target_roles"] = ["项目经理"]
+    if material_error is None:
+        material = material or {"schema_version": 1,
+                                "professional_profile": {"summary": "Bound resume material"}}
+        env.profile.clear()
+        env.profile.update(material)
+
+        def fetch(binding_id):
+            return {"ok": True, "account_ref": "account-test", "binding": binding,
+                    "profile": material, "profile_digest": protocol.digest_payload(material),
+                    "resume_text": "text", "checked_at": "2026-09-11T00:00:00Z",
+                    "offline": False, "stale": False}
+    else:
+        def fetch(binding_id):
+            raise material_error
+    monkeypatch.setattr(existing.cloud_client, "resume_binding_material", fetch)
+    # The real clearer reads the user's live state dir; keep the test hermetic.
+    monkeypatch.setattr(existing.rounds, "clear_round_resume_binding",
+                        lambda: env.active.pop("resume_binding", None))
+    return binding
+
+
+def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypatch):
+    binding = _bound_env(env, monkeypatch)
+    response = native.start_discovery("boss", "session-test")
+    assert response["ok"] is True
+    captured = env.starts[0]
+    # The server adopts the task only when these three fields tie the search to
+    # the confirmed resume; a bound round must always carry them.
+    assert captured["resume_binding_id"] == "binding-1"
+    assert captured["context_id"] == "ctx-1"
+    assert captured["round_id"] == "round-test"
+    assert captured["profile"] == env.profile  # the bound resume's own material
+
+
+def test_bound_discovery_preparation_required_unwinds_binding(env, monkeypatch):
+    _bound_env(env, monkeypatch)
+
+    def stale(**kwargs):
+        raise existing.cloud_client.CloudError(
+            "Confirm resume preparation and explicitly select material for this task.",
+            status=409, code="preparation_required",
+            details={"reason": "resume_not_in_prepared_set"},
+        )
+
+    monkeypatch.setattr(existing.cloud_client, "discovery_start", stale)
+    with pytest.raises(existing.cloud_client.CloudError) as error:
+        native.start_discovery("boss", "session-test")
+    assert error.value.code == "preparation_required"
+    details = error.value.details
+    assert details["request_preserved"] is False
+    assert details["resume_binding_paused"] is True
+    assert details["next_suggested"] == "jobagent round start"
+    # The stale binding is dropped so the next round start reselects a resume.
+    assert "resume_binding" not in env.active
+
+
+def test_bound_material_preparation_required_pauses_without_retry(env, monkeypatch):
+    _bound_env(env, monkeypatch, material_error=existing.cloud_client.CloudError(
+        "Confirm resume preparation and explicitly select material for this task.",
+        status=409, code="preparation_required",
+    ))
+    with pytest.raises(CollectionError) as error:
+        native.start_discovery("boss", "session-test")
+    assert error.value.code == "resume_binding_paused"
+    assert error.value.details["request_preserved"] is False
+    assert error.value.details["next_suggested"] == "jobagent round start"
+    assert "resume_binding" not in env.active
+
+
 def test_only_ledger_closed_work_can_commit_page(env):
     work = native.start_discovery("boss", "session-test")["work"]
     with pytest.raises(CollectionError) as error:

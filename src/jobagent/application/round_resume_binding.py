@@ -149,6 +149,57 @@ def respond_resume_selection(pending: dict[str, Any], resume_id: str) -> dict[st
     }
 
 
+def binding_direction_conflict(
+    round_state: dict[str, Any] | None, binding: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Refuse to attach a binding whose direction contradicts the active round.
+
+    The server only signs bound-round plans for exactly the bound resume's
+    direction, so a mismatched attachment can never discover. Guide the user
+    to finish (or skip) the round, or to re-select a matching resume.
+    """
+    if not binding or not binding.get("id"):
+        return None
+    intent = (round_state or {}).get("intent") or {}
+    direction = str(binding.get("target_role") or "").strip()
+    roles = [str(role).strip().casefold() for role in intent.get("target_roles") or []]
+    if intent.get("status") == "confirmed" and roles == [direction.casefold()]:
+        return None
+    current_roles = [str(role) for role in intent.get("target_roles") or []]
+    return {
+        "ok": False,
+        "error": "resume_binding_direction_mismatch",
+        "message": (
+            f"当前轮次的目标岗位是 {'、'.join(current_roles) or '（未确认）'}，"
+            f"与绑定简历《{binding.get('resume_name') or binding.get('id')}》的方向"
+            f"（{direction}）不一致。绑定简历的轮次只能投递该简历的方向。"
+            "请先完成或跳过当前轮次，或重新选择与目标岗位同方向的简历。"
+        ),
+        "next_suggested": "jobagent round status",
+    }
+
+
+def binding_material_profile(binding: dict[str, Any]) -> dict[str, Any]:
+    """Fetch the bound resume's own material: profile, digest, binding snapshot.
+
+    The server returns the binding under ``binding`` (with ``context_id``
+    inside it) and never leaks a top-level ``context_id``; tolerate the older
+    mock shape ``resume_binding`` so tests can pin either contract.
+    """
+    material = cloud_client.resume_binding_material(str(binding.get("id")))
+    snapshot = material.get("binding") or material.get("resume_binding") or {}
+    if not snapshot.get("id"):
+        raise cloud_client.CloudError(
+            "The server did not return a usable resume binding.",
+            code="resume_binding_invalid",
+        )
+    return {
+        "binding": snapshot,
+        "profile": material.get("profile") or {},
+        "profile_digest": str(material.get("profile_digest") or ""),
+    }
+
+
 def resolve_round_binding(
     *, explicit_binding: str | None, no_binding: bool, current_round: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -169,7 +220,7 @@ def resolve_round_binding(
         return {"binding": staged["binding"]}
     if explicit_binding:
         material = cloud_client.resume_binding_material(explicit_binding)
-        binding = material.get("resume_binding") or {}
+        binding = material.get("binding") or material.get("resume_binding") or {}
         if binding.get("id") != explicit_binding:
             return {
                 "error": {

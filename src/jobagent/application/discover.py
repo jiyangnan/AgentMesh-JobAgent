@@ -453,7 +453,16 @@ def run_discover(
                 platform=platform, profile=profile, request_id=request_id,
                 round_intent=round_intent,
                 resume_binding_id=round_binding.get("id") if round_binding.get("id") else None,
-                context_id=binding_material.get("context_id") if binding_material else None,
+                context_id=(
+                    str(
+                        round_binding.get("context_id")
+                        or (binding_material.get("binding") or {}).get("context_id")
+                        or ""
+                    )
+                    or None
+                )
+                if binding_material
+                else None,
                 round_id=str(active_round.get("round_id")) if round_binding.get("id") else None,
             )
     except cloud_client.CloudError as exc:
