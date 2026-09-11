@@ -2,6 +2,19 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.6] - 2026-09-12
+
+### Fixed
+
+- A bound resume whose workbench analysis profile is not confirmed (server
+  409 `resume_profile_invalid`) now pauses with accurate guidance on every
+  path — round start, target-role respond, native and legacy discovery —
+  instead of the misleading "network unavailable, retry later" message. The
+  staged binding and pending interaction are kept, because completing and
+  confirming the analysis in the workbench makes a plain retry succeed;
+  users can also fall back to the classic local-profile path with
+  `jobagent round start --no-resume-binding`.
+
 ## [0.6.5] - 2026-09-11
 
 ### Fixed
