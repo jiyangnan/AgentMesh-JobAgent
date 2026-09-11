@@ -200,9 +200,16 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             **unresolved["evidence"]}
     work["task"] = task
     can_execute = bool(execution and work.get("execution_permitted"))
+    # A read-only work that exhausted its observation attempts can no longer
+    # begin; its only settlement is a final receipt or explicit cancellation.
+    observation_locked = bool(not work.get("side_effect")
+                              and work.get("observation_attempts", 0) >= store.MAX_OBSERVATION_ATTEMPTS)
     reconcile = work.get("state") in {"intent_recorded", "reconcile_only"} and not can_execute
-    work["allowed_mode"] = "reconcile_only" if reconcile and work.get("side_effect") else (
-        "execute_once" if can_execute and work.get("side_effect") else "observe")
+    if work.get("side_effect"):
+        work["allowed_mode"] = "reconcile_only" if reconcile else (
+            "execute_once" if can_execute else "observe")
+    else:
+        work["allowed_mode"] = "reconcile_only" if observation_locked else "observe"
     result = work.get("result") or {}
     paused = bool(result.get("requires_user_action")) and not execution
     return {"ok": True, "event": "browser_work_required", "executor": EXECUTOR,
@@ -212,7 +219,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             **({"user_prompt": _pause_prompt(result.get("reason"), result.get("evidence", {}).get("page_url") or ENTRY_URLS[work["binding"]["platform"]])} if paused else {}),
             "request_preserved": True,
             "next_suggested": (f"jobagent work submit --work-id {work['work_id']} --result <result.json>"
-                               if execution else f"jobagent work begin --work-id {work['work_id']}"),
+                               if execution or observation_locked else f"jobagent work begin --work-id {work['work_id']}"),
             "workflow": rounds.round_status()}
 
 
@@ -221,12 +228,23 @@ def _pause_prompt(reason: Any, url: str) -> str:
         return f"请在当前已绑定的 Chrome 页面 {url} 完成登录，完成后回复“登录好了”；不会新开另一套浏览器。"
     if reason in {"verification_required", "challenge"}:
         return f"当前平台要求安全验证，已暂停。请在同一 Chrome 页面 {url} 亲自完成验证后回复“验证好了”。"
+    if reason == "session_unknown":
+        return (f"无法唯一确认 Job Agent 应使用的 Chrome 窗口，已暂停。请关闭多余的 Chrome 窗口，"
+                f"只保留助手使用的这一个（相关页面 {url}），或让助手新开一个专用窗口；完成后回复“好了”。")
     return f"当前界面或宿主权限无法确认，已保留进度并暂停；请检查当前 Chrome 页面 {url} 或 Computer Use 权限，完成后回复“好了”。"
 
 
 def ensure_session(platform: str) -> dict[str, Any] | None:
     if _session():
         return None
+    # An explicit platform command restarting session work supersedes an
+    # earlier user-confirmed cancellation of that platform's bind task, and a
+    # closed bind task must not be re-presented as fresh work.
+    binding = _binding(platform)
+    active = rounds.ensure_current_round()
+    if active.get("native_cancelled_work", {}).get("platform") == platform:
+        del active["native_cancelled_work"]
+        rounds.save_round(active)
     task = {
         "instruction": "First verify native Computer Use is callable and app access is allowed. Inspect existing Chrome windows; reuse the existing Job Agent window/profile if uniquely identifiable. Bind that same window for login, search, details, delivery and receipts. If ambiguous, pause. Only if no reusable window exists may native UI open one. Do not copy cookies or clear profiles.",
         "required_evidence": ["native_computer_use_available=true", "browser=chrome", "window_reference", "profile_label", "group_reference", "observation", "reuse_status=reused|created_no_existing"],
@@ -234,7 +252,10 @@ def ensure_session(platform: str) -> dict[str, Any] | None:
             "window_reference": "observed stable window reference", "profile_label": "observed profile label",
             "group_reference": "observed task group reference", "reuse_status": "reused|created_no_existing"}},
     }
-    return present(store.ensure_work(action="bind_session", task=task, binding=_binding(platform)))
+    revision = len(store.list_work(binding))
+    work = store.ensure_work(action="bind_session", task=task, binding=binding,
+        key=f"bind:{active['round_id']}:{platform}:{revision}")
+    return present(work)
 
 
 def request_login(platform: str, *, diagnose: bool = False) -> dict[str, Any]:
@@ -492,7 +513,8 @@ def next_work() -> dict[str, Any]:
     if cancelled.get("platform") == platform:
         return {"ok": True, "event": "browser_work_cancelled", "requires_user_action": True,
                 "request_preserved": True, "work_id": cancelled["work_id"],
-                "user_prompt": "本平台的浏览器任务已按你的确认取消，未执行后续投递。若要结束本平台，请明确确认跳过；已有回执与本轮进度会保留。",
+                "user_prompt": (f"本平台的浏览器任务已按你的确认取消，未执行后续投递。若要结束本平台，请明确确认跳过；"
+                                f"若要恢复本平台，可重新运行 jobagent {platform} login。已有回执与本轮进度会保留。"),
                 "workflow": workflow, "next_suggested": "jobagent round status"}
     binding = _binding(platform)
     pending = store.pending_work(binding)

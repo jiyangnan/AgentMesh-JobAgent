@@ -30,18 +30,19 @@ _STATES = {"ready", "intent_recorded", "reconcile_only", "closed"}
 class BrowserWorkError(Exception):
     """A public-safe protocol failure that preserves existing work."""
 
-    def __init__(self, error: str, message: str):
+    def __init__(self, error: str, message: str, **extra: object):
         self.payload = {
             "ok": False,
             "error": error,
             "message": message,
             "request_preserved": True,
+            **extra,
         }
         super().__init__(message)
 
 
-def _error(error: str, message: str) -> BrowserWorkError:
-    return BrowserWorkError(error, message)
+def _error(error: str, message: str, **extra: object) -> BrowserWorkError:
+    return BrowserWorkError(error, message, **extra)
 
 
 def _canonical(value: object) -> str:
@@ -332,7 +333,12 @@ def begin_work(work_id, binding) -> dict:
             return _get(conn, work_id, binding)
         if not work["side_effect"] and work["observation_attempts"] >= MAX_OBSERVATION_ATTEMPTS:
             raise _error("browser_work_observation_limit",
-                         "The read-only observation limit was reached; preserve the current work.")
+                         "The read-only observation limit was reached; work begin is closed. "
+                         "A final verified observation receipt can still close this work with "
+                         "its preserved nonce, or cancel it explicitly.",
+                         work_id=work_id,
+                         next_suggested=f"jobagent work submit --work-id {work_id} --result <result.json>",
+                         cancel_command=f"jobagent work cancel --work-id {work_id} --confirm-cancel")
         nonce = work["nonce"] or secrets.token_urlsafe(32)
         attempts = work["observation_attempts"] + (0 if work["side_effect"] else 1)
         conn.execute("""
