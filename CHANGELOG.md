@@ -2,6 +2,26 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.3] - 2026-09-11
+
+### Added
+
+- Delivery rounds bind to a user-confirmed resume: `round start` offers a
+  resume-selection interaction whenever confirmed workbench resumes exist
+  (always user-confirmed, even with a single resume), answered with
+  `jobagent interaction respond --resume-id`. Every delivered job then records
+  the exact resume revision in the workbench's applications view instead of
+  "material unknown". `--resume-binding <id>` adopts an existing binding and
+  `--no-resume-binding` keeps the classic local-profile path.
+- Bound rounds discover with the confirmed resume's own material snapshot, and
+  `round status` shows the binding.
+
+### Changed
+
+- A stale or released binding pauses that platform's discovery and directs the
+  user to choose a resume again; authentication failures never fall back to
+  local data.
+
 ## [0.6.2] - 2026-09-11
 
 ### Added
