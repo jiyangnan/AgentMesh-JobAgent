@@ -233,6 +233,14 @@ design; do not work around the refusal. If a platform command returns
 `preparation_required` with `resume_binding_paused`, the bound resume changed:
 the platform is paused — ask the user to choose a resume again via
 `jobagent round start`; do not deliver with an unbound profile in that round.
+A 409 `resume_profile_invalid` is different: the binding is still valid but
+the resume's workbench analysis profile is not confirmed. It surfaces as
+`resume_binding_profile_incomplete` with workbench guidance — the staged
+binding and pending interaction are kept, so tell the user to complete and
+confirm the analysis in the workbench (then simply retry), or to fall back to
+the classic local-profile path with `jobagent round start --no-resume-binding`.
+Do not clear the binding, and do not advise a plain retry without the
+workbench step.
 
 <a id="resume-online-facts"></a>
 

@@ -895,6 +895,11 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
         try:
             material = binding_material_profile(respond_binding)
         except cloud_client.CloudError as exc:
+            from jobagent.application.round_resume_binding import (
+                BINDING_PROFILE_INCOMPLETE_CODE,
+                BINDING_PROFILE_INCOMPLETE_ROUND_START,
+            )
+
             if exc.code == "preparation_required":
                 _consume_staged_resume_binding()
                 clear_pending_interaction()
@@ -905,6 +910,16 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                         "绑定的简历已变更或不再可用。请重新选择简历后再开轮。"
                     ),
                     "next_suggested": "jobagent round start",
+                }
+            if exc.code == BINDING_PROFILE_INCOMPLETE_CODE:
+                # The binding stays staged: completing the workbench profile
+                # makes a plain retry work, so nothing is cleared here.
+                return {
+                    "ok": False,
+                    "error": "resume_binding_profile_incomplete",
+                    "message": BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                    "retryable": False,
+                    "next_suggested": "jobagent round start --no-resume-binding",
                 }
             return {
                 "ok": False,
@@ -1590,6 +1605,11 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 try:
                     binding_material = binding_material_profile(round_binding)
                 except cloud_client.CloudError as exc:
+                    from jobagent.application.round_resume_binding import (
+                        BINDING_PROFILE_INCOMPLETE_CODE,
+                        BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                    )
+
                     if exc.code == "preparation_required":
                         # The bound resume changed underneath; pause and ask
                         # for a fresh user-confirmed selection. Clear BOTH the
@@ -1612,6 +1632,17 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                             if isinstance(exc.details, dict)
                             else None,
                             "next_suggested": "jobagent round start",
+                        }
+                    if exc.code == BINDING_PROFILE_INCOMPLETE_CODE:
+                        # The binding is valid but the workbench profile is
+                        # not confirmed yet; keep the staged choice and guide
+                        # the user instead of clearing or advising a retry.
+                        return {
+                            "ok": False,
+                            "error": "resume_binding_profile_incomplete",
+                            "message": BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                            "retryable": False,
+                            "next_suggested": "jobagent round start --no-resume-binding",
                         }
                     return {
                         "ok": False,

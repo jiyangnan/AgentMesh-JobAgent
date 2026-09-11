@@ -37,6 +37,25 @@ def clear_pending_binding() -> None:
         path.unlink()
 
 
+# The server 409s with this code when the bound resume's own analysis profile
+# is empty or its revision was never explicitly confirmed. The binding itself
+# is still valid — only the workbench profile needs completing — so clients
+# keep the staged/attached binding and route the user to the workbench (or to
+# the classic local-profile path) instead of clearing state or advising retry.
+BINDING_PROFILE_INCOMPLETE_CODE = "resume_profile_invalid"
+
+BINDING_PROFILE_INCOMPLETE_ROUND_START = (
+    "绑定简历的分析档案尚未完成确认（服务端校验未通过），本轮未开始。"
+    "请到工作台补全并确认这份简历的分析后重试；或运行 "
+    "jobagent round start --no-resume-binding 改用本地档案开轮。"
+)
+
+BINDING_PROFILE_INCOMPLETE_DISCOVER = (
+    "绑定简历的分析档案已失效（未确认修订），本平台已暂停、未扣费。"
+    "请到工作台重新确认这份简历的分析后重试；或结束本轮后重新开轮。"
+)
+
+
 def binding_summary(binding: dict[str, Any] | None) -> dict[str, Any] | None:
     if not binding or not binding.get("id"):
         return None

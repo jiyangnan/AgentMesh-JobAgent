@@ -555,3 +555,44 @@ def test_signed_page_limit_continues_later_query_but_never_exceeds_limit(env, mo
     assert (third["task"]["query_index"], third["task"]["page"]) == (1, 2)
     result = submit(env, third, receipt(third, jobs=[candidate("boss", "synthetic_3003")], final=False))
     assert result["candidate_count"] == 3 and len(env.ledger.items) == 3
+
+
+def test_bound_material_profile_incomplete_pauses_and_keeps_binding(env, monkeypatch):
+    """Server 409 resume_profile_invalid: the binding is still valid, so the
+    round keeps it and the user is pointed back to the workbench."""
+    _bound_env(env, monkeypatch, material_error=existing.cloud_client.CloudError(
+        "Analyze or complete a draft profile, then explicitly confirm its revision.",
+        status=409, code="resume_profile_invalid",
+    ))
+    with pytest.raises(CollectionError) as error:
+        native.start_discovery("boss", "session-test")
+    assert error.value.code == "resume_binding_profile_incomplete"
+    details = error.value.details
+    assert details["request_preserved"] is False
+    assert details["no_charge"] is True
+    assert details["next_suggested"] == "jobagent boss discover"
+    assert "工作台" in str(error.value)
+    # Unlike preparation_required the binding stays attached: re-confirming
+    # the profile in the workbench unblocks the same discover command.
+    assert env.active.get("resume_binding", {}).get("id") == "binding-1"
+
+
+def test_bound_discovery_profile_incomplete_keeps_binding(env, monkeypatch):
+    _bound_env(env, monkeypatch)
+
+    def draft(**kwargs):
+        raise existing.cloud_client.CloudError(
+            "Analyze or complete a draft profile, then explicitly confirm its revision.",
+            status=409, code="resume_profile_invalid",
+        )
+
+    monkeypatch.setattr(existing.cloud_client, "discovery_start", draft)
+    with pytest.raises(existing.cloud_client.CloudError) as error:
+        native.start_discovery("boss", "session-test")
+    assert error.value.code == "resume_profile_invalid"
+    details = error.value.details
+    assert details["request_preserved"] is False
+    assert details["resume_binding_paused"] is True
+    assert details["next_suggested"] == "jobagent boss discover"
+    assert "工作台" in details["message"]
+    assert env.active.get("resume_binding", {}).get("id") == "binding-1"

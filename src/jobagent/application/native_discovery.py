@@ -140,6 +140,11 @@ def _binding_material_or_pause(platform: str, binding: dict) -> dict:
     try:
         return binding_material_profile(binding)["profile"]
     except existing.cloud_client.CloudError as exc:
+        from jobagent.application.round_resume_binding import (
+            BINDING_PROFILE_INCOMPLETE_CODE,
+            BINDING_PROFILE_INCOMPLETE_DISCOVER,
+        )
+
         if exc.code == "preparation_required":
             existing.rounds.clear_round_resume_binding()
             raise CollectionError(
@@ -157,6 +162,28 @@ def _binding_material_or_pause(platform: str, binding: dict) -> dict:
                     "billing_status": "not_charged",
                     "resume_binding_paused": True,
                     "next_suggested": "jobagent round start",
+                    "platform": platform,
+                },
+            ) from exc
+        if exc.code == BINDING_PROFILE_INCOMPLETE_CODE:
+            # The binding is still valid; the workbench profile lost its
+            # confirmed revision mid-round. Keep the round's binding and
+            # guide the user back to the workbench.
+            raise CollectionError(
+                "resume_binding_profile_incomplete",
+                BINDING_PROFILE_INCOMPLETE_DISCOVER,
+                user_prompt=(
+                    "绑定简历的分析档案已失效（未确认修订），本次未发起搜索、未扣费。"
+                    "请到工作台重新确认这份简历的分析后重试同一命令。"
+                ),
+                details={
+                    "retryable": False,
+                    "requires_user_action": True,
+                    "request_preserved": False,
+                    "no_charge": True,
+                    "billing_status": "not_charged",
+                    "resume_binding_paused": True,
+                    "next_suggested": f"jobagent {platform} discover",
                     "platform": platform,
                 },
             ) from exc
@@ -472,6 +499,11 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
                 context_id=str(round_binding.get("context_id")) if round_binding.get("context_id") else None,
                 round_id=str(active.get("round_id")) if round_binding.get("id") else None)
         except existing.cloud_client.CloudError as exc:
+            from jobagent.application.round_resume_binding import (
+                BINDING_PROFILE_INCOMPLETE_CODE,
+                BINDING_PROFILE_INCOMPLETE_DISCOVER,
+            )
+
             if exc.code == "preparation_required":
                 reason = str((exc.details or {}).get("reason") or "")
                 if round_binding.get("id"):
@@ -493,6 +525,20 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
                     "reason": reason,
                     "message": guidance,
                     "next_suggested": "jobagent round start",
+                })
+                raise
+            if exc.code == BINDING_PROFILE_INCOMPLETE_CODE:
+                # The round's binding is still valid; only the workbench
+                # profile needs re-confirmation. Keep the binding attached.
+                exc.details.update({
+                    "request_preserved": False,
+                    "request_id": request_id,
+                    "no_charge": True,
+                    "billing_status": "not_charged",
+                    "resume_binding_paused": True,
+                    "reason": exc.code,
+                    "message": BINDING_PROFILE_INCOMPLETE_DISCOVER,
+                    "next_suggested": f"jobagent {platform} discover",
                 })
                 raise
             exc.details.update({"request_preserved": True, "request_id": request_id,
