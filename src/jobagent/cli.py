@@ -147,6 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target city supplied for city confirmation; repeat for multiple cities",
     )
     interaction_respond.add_argument(
+        "--resume-id",
+        help="Resume id chosen for the round resume-binding confirmation",
+    )
+    interaction_respond.add_argument(
         "--exclude-index",
         action="append",
         type=int,
@@ -167,6 +171,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Explicit target role for this round; repeat for multiple roles",
+    )
+    round_start.add_argument(
+        "--resume-binding",
+        metavar="BINDING_ID",
+        help="Bind this round's deliveries to an existing workbench resume binding",
+    )
+    round_start.add_argument(
+        "--no-resume-binding",
+        action="store_true",
+        help="Skip resume binding and use the local profile for this round",
     )
     round_sub.add_parser("status")
     round_audit = round_sub.add_parser("audit")
@@ -717,6 +731,19 @@ def _resume_analyze(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def _staged_resume_binding() -> dict[str, Any] | None:
+    from jobagent.application.round_resume_binding import load_pending_binding
+
+    staged = load_pending_binding()
+    return (staged or {}).get("binding") or None
+
+
+def _consume_staged_resume_binding() -> None:
+    from jobagent.application.round_resume_binding import clear_pending_binding
+
+    clear_pending_binding()
+
+
 def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     from jobagent.application.round_intent import (
         build_round_intent_from_choice,
@@ -763,6 +790,41 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             choice=str(args.choice or pending.get("choice") or ""),
             exclude_indices=list(args.exclude_index or []),
         )
+    if pending and str(pending.get("stage") or "") == "resume_binding":
+        from jobagent.application.round_resume_binding import (
+            load_pending_binding,
+            respond_resume_selection,
+        )
+
+        if str(pending.get("interaction_id") or "") != interaction_id:
+            return {
+                "ok": False,
+                "error": "interaction_not_pending",
+                "message": "This resume selection is no longer waiting for that answer.",
+                "next_suggested": "jobagent round start",
+            }
+        resume_id = str(args.resume_id or "").strip()
+        if not resume_id:
+            return {
+                "ok": False,
+                "error": "invalid_interaction_response",
+                "message": "Pass --resume-id with one of the offered resume ids.",
+                "next_suggested": str(
+                    (pending.get("interaction") or {}).get("fallback_text") or ""
+                ),
+            }
+        result = respond_resume_selection(pending, resume_id)
+        if result.get("ok"):
+            clear_pending_interaction()
+            staged = load_pending_binding()
+            binding = (staged or {}).get("binding") or {}
+            current = load_json(current_round_path())
+            if binding.get("id") and current and current.get("status") == "active" and current.get("round_id"):
+                from jobagent.infra.rounds import attach_round_resume_binding
+
+                attach_round_resume_binding(binding)
+                result["workflow"] = round_status()
+        return result
     profile = load_json(profile_path())
     if not profile:
         return {
@@ -936,8 +998,18 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "completed_at": utc_now(),
     }
-    start_new_round(intent, interaction_receipt=receipt)
+    created = start_new_round(
+        intent,
+        interaction_receipt=receipt,
+        resume_binding=_staged_resume_binding(),
+    )
+    if not created.get("resume_binding") and _staged_resume_binding():
+        # The round already existed; attach the staged binding to it.
+        from jobagent.infra.rounds import attach_round_resume_binding
+
+        attach_round_resume_binding(_staged_resume_binding())
     clear_pending_interaction()
+    _consume_staged_resume_binding()
     return {
         "ok": True,
         "interaction_receipt": receipt,
@@ -1365,6 +1437,23 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     "message": "Analyze a resume before confirming target roles.",
                     "next_suggested": "jobagent resume analyze --file <resume>",
                 }
+            # --- user-confirmed resume binding for this round (P2) ---
+            from jobagent.application.round_resume_binding import (
+                binding_summary,
+                resolve_round_binding,
+            )
+
+            binding_stage = resolve_round_binding(
+                explicit_binding=args.resume_binding,
+                no_binding=args.no_resume_binding,
+                current_round=current,
+            )
+            if binding_stage.get("error"):
+                return binding_stage["error"]
+            if binding_stage.get("interaction"):
+                return binding_stage["interaction"]
+            round_binding = binding_stage.get("binding")
+            resume_notice = binding_stage.get("notice")
             if not confirmed_target_cities(profile):
                 confirmation = target_city_input_request(
                     profile,
@@ -1398,8 +1487,20 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 and not args.target_role
             ):
                 clear_pending_interaction()
-                start_new_round()
-                return {"ok": True, "workflow": round_status()}
+                active = start_new_round()
+                if not active.get("resume_binding") and round_binding:
+                    from jobagent.infra.rounds import attach_round_resume_binding
+
+                    attach_round_resume_binding(round_binding)
+                    _consume_staged_resume_binding()
+                return {
+                    "ok": True,
+                    "resume_binding": binding_summary(
+                        (load_json(current_round_path()) or {}).get("resume_binding")
+                    ),
+                    "resume_notice": resume_notice,
+                    "workflow": round_status(),
+                }
             if not args.accept_suggested and not args.target_role:
                 confirmation = target_role_confirmation(
                     profile,
@@ -1433,9 +1534,16 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     "message": str(exc),
                     "next_suggested": "jobagent round start",
                 }
-            start_new_round(intent)
+            created = start_new_round(intent, resume_binding=round_binding)
             clear_pending_interaction()
-            return {"ok": True, "workflow": round_status()}
+            if round_binding:
+                _consume_staged_resume_binding()
+            return {
+                "ok": True,
+                "resume_binding": binding_summary(created.get("resume_binding")),
+                "resume_notice": resume_notice,
+                "workflow": round_status(),
+            }
         if args.round_command == "status":
             return {"ok": True, "workflow": round_status()}
         if args.round_command == "audit":

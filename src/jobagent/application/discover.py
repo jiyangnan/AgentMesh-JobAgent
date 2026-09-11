@@ -424,6 +424,13 @@ def run_discover(
     require_compatible_profile(profile)
     active_round = rounds.ensure_current_round()
     round_intent = active_round.get("intent")
+    round_binding = active_round.get("resume_binding") or {}
+    binding_material = None
+    if round_binding.get("id"):
+        # Bound rounds discover with the confirmed resume's own material so
+        # the signed plan — and the workbench delivery record — name it.
+        binding_material = cloud_client.resume_binding_material(round_binding["id"])
+        profile = binding_material["profile"]
     resumed = _resume_pending_decision(
         platform,
         profile=profile,
@@ -445,8 +452,29 @@ def run_discover(
             plan = collection["plan"] if collection is not None else cloud_client.discovery_start(
                 platform=platform, profile=profile, request_id=request_id,
                 round_intent=round_intent,
+                resume_binding_id=round_binding.get("id") if round_binding.get("id") else None,
+                context_id=binding_material.get("context_id") if binding_material else None,
+                round_id=str(active_round.get("round_id")) if round_binding.get("id") else None,
             )
     except cloud_client.CloudError as exc:
+        if exc.code == "preparation_required" and round_binding.get("id"):
+            # The bound resume changed underneath this round. Pause this
+            # platform's flow and ask for a fresh user-confirmed selection.
+            rounds.clear_round_resume_binding()
+            exc.details.update(
+                {
+                    "resume_binding_paused": True,
+                    "message": (
+                        "The resume bound to this round changed and is no longer "
+                        "usable. This platform is paused; choose a resume again "
+                        "before continuing."
+                    ),
+                    "next_suggested": "jobagent round start",
+                    "no_charge": True,
+                    "billing_status": "not_charged",
+                }
+            )
+            raise
         exc.details.update(
             {
                 "request_preserved": True,

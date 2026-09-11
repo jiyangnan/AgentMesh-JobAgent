@@ -86,6 +86,7 @@ def _create_round(
     intent: dict[str, Any] | None = None,
     *,
     interaction_receipt: dict[str, Any] | None = None,
+    resume_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the persisted round state for the explicit start command."""
 
@@ -109,16 +110,41 @@ def _create_round(
         },
         "platforms": _default_platform_state(),
     }
+    if resume_binding and resume_binding.get("id"):
+        state["resume_binding"] = resume_binding
     if interaction_receipt is not None:
         state["interaction_receipt"] = interaction_receipt
     save_round(state)
     return state
 
 
+def attach_round_resume_binding(binding: dict[str, Any]) -> dict[str, Any] | None:
+    """Bind (or rebind) the active round after a user-confirmed selection."""
+    current = load_json(current_round_path())
+    if not current or current.get("status") != "active" or not current.get("round_id"):
+        return None
+    current["resume_binding"] = binding
+    current["updated_at"] = utc_now()
+    save_round(current)
+    return current
+
+
+def clear_round_resume_binding() -> dict[str, Any] | None:
+    """Drop the binding after the server reports it stale (pause + reselect)."""
+    current = load_json(current_round_path())
+    if not current or not current.get("resume_binding"):
+        return None
+    current.pop("resume_binding", None)
+    current["updated_at"] = utc_now()
+    save_round(current)
+    return current
+
+
 def start_new_round(
     intent: dict[str, Any] | None = None,
     *,
     interaction_receipt: dict[str, Any] | None = None,
+    resume_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Start a round explicitly, or return the already-active round."""
     current = load_json(current_round_path())
@@ -136,7 +162,9 @@ def start_new_round(
                 }
             )
         return active
-    return _create_round(intent, interaction_receipt=interaction_receipt)
+    return _create_round(
+        intent, interaction_receipt=interaction_receipt, resume_binding=resume_binding
+    )
 
 
 def _migrate_round(state: dict[str, Any]) -> dict[str, Any]:
@@ -620,6 +648,7 @@ def round_status() -> dict[str, Any]:
         "browser_executor": state.get("browser_executor", DEFAULT_BROWSER_EXECUTOR),
         "native_session": deepcopy(state.get("native_session")),
         "intent": state.get("intent"),
+        "resume_binding": state.get("resume_binding"),
         "profile_reconciliation": state.get("profile_reconciliation"),
         "platforms": platforms,
         "current_platform": current_platform,
