@@ -2,6 +2,24 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.4] - 2026-09-11
+
+### Fixed
+
+- When the read-only observation limit is reached while binding a platform
+  session, the error now carries the work id and the exact recovery commands:
+  a final verified observation can still close the work with its preserved
+  nonce, or the work can be cancelled explicitly. For read-only work already
+  in `reconcile_only`, the suggested next action is now that final submission
+  instead of a `begin` that would be rejected.
+- The pause prompt shown when the Chrome window cannot be uniquely confirmed
+  now tells the user exactly what to do: close the extra Chrome windows and
+  keep only the one Job Agent uses, then reply to continue.
+- Re-running a platform login after a cancelled login bind starts a fresh
+  bind instead of leaving that platform locked for the rest of the round, and
+  the cancelled-work notice now names the re-login command that restores the
+  platform.
+
 ## [0.6.3] - 2026-09-11
 
 ### Added
