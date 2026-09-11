@@ -23,6 +23,7 @@ _ACCOUNT_OWNED_PATHS = (
     "product_announcements.json",
     "current_round.json",
     "pending_interaction.json",
+    "pending_round_binding.json",
     "rounds",
     "discoveries",
     "archive",

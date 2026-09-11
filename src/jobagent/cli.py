@@ -129,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
             "accept_suggested",
             "append_roles",
             "replace_roles",
+            "rebind_resume",
             "confirm_all",
             "exclude_jobs",
             "cancel_delivery",
@@ -744,9 +745,35 @@ def _consume_staged_resume_binding() -> None:
     clear_pending_binding()
 
 
+def _bound_round_intent(
+    intent_profile: dict[str, Any],
+    round_binding: dict[str, Any] | None,
+    effective_cities: list[str],
+) -> dict[str, Any] | None:
+    """Build the binding's own material-form intent for attaching to an
+    already-active round (direction roles, explicit cities, material digest)."""
+
+    if not (round_binding and round_binding.get("id")):
+        return None
+    from jobagent.application.round_intent import build_round_intent
+
+    try:
+        return build_round_intent(
+            intent_profile,
+            accept_suggested=True,
+            target_roles=None,
+            resume_binding=round_binding,
+            target_cities=effective_cities,
+        )
+    except ValueError:
+        return None
+
+
 def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     from jobagent.application.round_intent import (
+        REBIND_RESUME_CHOICE,
         build_round_intent_from_choice,
+        confirmed_target_cities,
         target_role_input_request,
         with_target_cities,
     )
@@ -820,6 +847,23 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             binding = (staged or {}).get("binding") or {}
             current = load_json(current_round_path())
             if binding.get("id") and current and current.get("status") == "active" and current.get("round_id"):
+                from jobagent.application.round_resume_binding import (
+                    binding_direction_conflict,
+                )
+
+                # Same guard as every other attach site: a binding that
+                # contradicts the active round's confirmed intent can never
+                # discover (the server signs bound plans for the resume's
+                # direction only) and would wedge the platform on a retry
+                # loop. Drop the staged selection and guide the user.
+                conflict = binding_direction_conflict(current, binding)
+                if conflict:
+                    from jobagent.application.round_resume_binding import (
+                        clear_pending_binding,
+                    )
+
+                    clear_pending_binding()
+                    return conflict
                 from jobagent.infra.rounds import attach_round_resume_binding
 
                 attach_round_resume_binding(binding)
@@ -833,6 +877,46 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             "message": "Analyze a resume before answering the target-role interaction.",
             "next_suggested": "jobagent resume analyze --file <resume>",
         }
+    local_profile = profile
+    # A pending target-role interaction for a bound round is answered against
+    # the bound resume's own material — the same profile the suggestion and
+    # digest were built from — never the stale local snapshot.
+    respond_binding = None
+    respond_cities: list[str] | None = None
+    if (
+        pending
+        and str(pending.get("stage") or "") in {"choice", "roles"}
+        and (_staged_resume_binding() or {}).get("id")
+    ):
+        from jobagent.application.round_resume_binding import binding_material_profile
+        from jobagent.infra import cloud_client
+
+        respond_binding = _staged_resume_binding()
+        try:
+            material = binding_material_profile(respond_binding)
+        except cloud_client.CloudError as exc:
+            if exc.code == "preparation_required":
+                _consume_staged_resume_binding()
+                clear_pending_interaction()
+                return {
+                    "ok": False,
+                    "error": "resume_binding_paused",
+                    "message": (
+                        "绑定的简历已变更或不再可用。请重新选择简历后再开轮。"
+                    ),
+                    "next_suggested": "jobagent round start",
+                }
+            return {
+                "ok": False,
+                "error": "resume_binding_material_unavailable",
+                "message": (
+                    "暂时无法获取绑定简历的材料（网络或服务不可用）。请稍后重试。"
+                ),
+                "retryable": bool(exc.retryable),
+                "next_suggested": "jobagent round start",
+            }
+        profile = material["profile"]
+        respond_cities = confirmed_target_cities(profile) or confirmed_target_cities(local_profile)
 
     current = load_json(current_round_path()) or {}
     receipt = current.get("interaction_receipt") or {}
@@ -851,11 +935,20 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                 "next_suggested": "jobagent round status",
             }
         if args.target_role:
+            replay_binding = (current.get("resume_binding") if isinstance(current, dict) else None) or respond_binding
             try:
                 requested = build_round_intent_from_choice(
                     profile,
                     choice=recorded_choice,
                     target_roles=args.target_role,
+                    resume_binding=replay_binding,
+                    target_cities=(
+                        ((current.get("intent") or {}).get("target_cities"))
+                        if isinstance(current, dict)
+                        else None
+                    )
+                    or respond_cities
+                    or [],
                 )
             except ValueError as exc:
                 return {
@@ -949,6 +1042,27 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                 (pending.get("interaction") or {}).get("fallback_text") or ""
             ),
         }
+    if respond_binding and choice == REBIND_RESUME_CHOICE:
+        clear_pending_interaction()
+        _consume_staged_resume_binding()
+        return {
+            "ok": True,
+            "rebind_requested": True,
+            "message": (
+                "已取消本轮开始。请重新执行 round start，选择（或上传）目标方向的简历后再开轮。"
+            ),
+            "next_suggested": "jobagent round start",
+        }
+    if respond_binding and choice in {"append_roles", "replace_roles"}:
+        return {
+            "ok": False,
+            "error": "invalid_interaction_response",
+            "message": (
+                "本轮已绑定简历，只能投递该简历的方向。"
+                "如需投递其他方向，请换绑对应方向的简历（重新执行 round start 选择简历）。"
+            ),
+            "next_suggested": "jobagent round start",
+        }
     if choice in {"append_roles", "replace_roles"} and not args.target_role:
         follow_up = target_role_input_request(
             profile,
@@ -971,6 +1085,8 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             profile,
             choice=choice,
             target_roles=args.target_role,
+            resume_binding=respond_binding,
+            target_cities=respond_cities,
         )
     except ValueError as exc:
         return {
@@ -1004,10 +1120,16 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
         resume_binding=_staged_resume_binding(),
     )
     if not created.get("resume_binding") and _staged_resume_binding():
-        # The round already existed; attach the staged binding to it.
+        # The round already existed; attach the staged binding to it — but
+        # never a binding whose direction contradicts the active round.
+        from jobagent.application.round_resume_binding import binding_direction_conflict
         from jobagent.infra.rounds import attach_round_resume_binding
 
-        attach_round_resume_binding(_staged_resume_binding())
+        staged_binding = _staged_resume_binding()
+        conflict = binding_direction_conflict(created, staged_binding)
+        if conflict:
+            return conflict
+        attach_round_resume_binding(staged_binding)
     clear_pending_interaction()
     _consume_staged_resume_binding()
     return {
@@ -1454,7 +1576,58 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 return binding_stage["interaction"]
             round_binding = binding_stage.get("binding")
             resume_notice = binding_stage.get("notice")
-            if not confirmed_target_cities(profile):
+            # Bound rounds source the suggestion, digest and delivery profile
+            # from the bound resume's own material — never the stale local
+            # snapshot left by the last local `resume analyze`.
+            binding_material = None
+            if round_binding and round_binding.get("id"):
+                from jobagent.application.round_resume_binding import (
+                    binding_material_profile,
+                    clear_pending_binding,
+                )
+                from jobagent.infra import cloud_client
+
+                try:
+                    binding_material = binding_material_profile(round_binding)
+                except cloud_client.CloudError as exc:
+                    if exc.code == "preparation_required":
+                        # The bound resume changed underneath; pause and ask
+                        # for a fresh user-confirmed selection. Clear BOTH the
+                        # staged file and a binding already attached to the
+                        # active round — otherwise resolve_round_binding keeps
+                        # returning the stale round binding and the suggested
+                        # recovery command loops forever.
+                        from jobagent.infra.rounds import clear_round_resume_binding
+
+                        clear_pending_binding()
+                        clear_round_resume_binding()
+                        return {
+                            "ok": False,
+                            "error": "resume_binding_paused",
+                            "message": (
+                                "绑定的简历已变更或不再可用，本轮未开始。"
+                                "请重新选择简历后再开轮。"
+                            ),
+                            "reason": exc.details.get("reason")
+                            if isinstance(exc.details, dict)
+                            else None,
+                            "next_suggested": "jobagent round start",
+                        }
+                    return {
+                        "ok": False,
+                        "error": "resume_binding_material_unavailable",
+                        "message": (
+                            "暂时无法获取绑定简历的材料（网络或服务不可用），"
+                            "本轮未开始。请稍后重试。"
+                        ),
+                        "retryable": bool(exc.retryable),
+                        "next_suggested": "jobagent round start",
+                    }
+                intent_profile = binding_material["profile"]
+            else:
+                intent_profile = profile
+            effective_cities = confirmed_target_cities(intent_profile) or confirmed_target_cities(profile)
+            if not effective_cities:
                 confirmation = target_city_input_request(
                     profile,
                     previous_round_id=(
@@ -1477,7 +1650,12 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             if current and current.get("status") == "active" and current.get("round_id"):
                 from jobagent.infra.rounds import reconcile_active_round_profile
 
-                reconcile_active_round_profile(profile)
+                # A bound round's intent belongs to the bound resume's
+                # material; reconciling it against the local snapshot would
+                # rewrite the digest to the stale local one and every later
+                # discovery would 422 on intent_profile_digest_mismatch.
+                if not (round_binding and round_binding.get("id")):
+                    reconcile_active_round_profile(profile)
                 current = load_json(current_round_path())
             if (
                 current
@@ -1489,9 +1667,16 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 clear_pending_interaction()
                 active = start_new_round()
                 if not active.get("resume_binding") and round_binding:
-                    from jobagent.infra.rounds import attach_round_resume_binding
+                    from jobagent.application.round_resume_binding import (
+                        attach_bound_round,
+                    )
 
-                    attach_round_resume_binding(round_binding)
+                    bound_intent = _bound_round_intent(
+                        intent_profile, round_binding, effective_cities
+                    )
+                    conflict = attach_bound_round(round_binding, intent=bound_intent)
+                    if conflict:
+                        return conflict
                     _consume_staged_resume_binding()
                 return {
                     "ok": True,
@@ -1503,15 +1688,16 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 }
             if not args.accept_suggested and not args.target_role:
                 confirmation = target_role_confirmation(
-                    profile,
+                    intent_profile,
                     previous_round_id=(
                         str(current.get("round_id")) if current and current.get("round_id") else None
                     ),
+                    resume_binding=round_binding,
                 )
                 save_pending_interaction(
                     confirmation["interaction"],
                     stage="choice" if confirmation["suggested_roles"] else "roles",
-                    profile_digest=digest_payload(profile),
+                    profile_digest=digest_payload(intent_profile),
                     suggested_roles=confirmation["suggested_roles"],
                     previous_round_id=(
                         str(current.get("round_id"))
@@ -1523,9 +1709,11 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 return confirmation
             try:
                 intent = build_round_intent(
-                    profile,
+                    intent_profile,
                     accept_suggested=args.accept_suggested,
                     target_roles=args.target_role,
+                    resume_binding=round_binding,
+                    target_cities=effective_cities,
                 )
             except ValueError as exc:
                 return {
@@ -1537,6 +1725,18 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             created = start_new_round(intent, resume_binding=round_binding)
             clear_pending_interaction()
             if round_binding:
+                if not created.get("resume_binding"):
+                    # start_new_round returned an already-active round (its
+                    # roles-only sameness check passed): attach the binding and
+                    # upgrade that round's intent to the binding's material
+                    # form, or its pre-binding digest would 422 every discovery.
+                    from jobagent.application.round_resume_binding import (
+                        attach_bound_round,
+                    )
+
+                    conflict = attach_bound_round(round_binding, intent=intent)
+                    if conflict:
+                        return conflict
                 _consume_staged_resume_binding()
             return {
                 "ok": True,

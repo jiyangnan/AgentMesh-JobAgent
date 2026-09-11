@@ -52,6 +52,10 @@ def test_switch_preserves_and_restores_each_accounts_state(tmp_path):
         '{"interaction_id":"interaction-a"}',
         encoding="utf-8",
     )
+    (state / "pending_round_binding.json").write_text(
+        '{"binding":{"id":"binding-a"}}',
+        encoding="utf-8",
+    )
     (state / "product_announcements.json").write_text(
         '{"account_ref":"acct_account_a","delivered":{"workbench":{}}}',
         encoding="utf-8",
@@ -71,6 +75,9 @@ def test_switch_preserves_and_restores_each_accounts_state(tmp_path):
     assert switched["browser_profile_preserved"] is True
     assert not (state / "profile.json").exists()
     assert not (state / "pending_interaction.json").exists()
+    # A staged resume binding is account-owned: it must move with the switch
+    # instead of leaking the previous account's resume choice.
+    assert not (state / "pending_round_binding.json").exists()
     assert not (state / "product_announcements.json").exists()
     assert not (state / "archive").exists()
     assert not (state / "browser_session.json").exists()
@@ -84,7 +91,7 @@ def test_switch_preserves_and_restores_each_accounts_state(tmp_path):
 
     assert "profile.json" in restored["restored"]
     assert "pending_interaction.json" in restored["restored"]
-    assert "product_announcements.json" in restored["restored"]
+    assert "pending_round_binding.json" in restored["restored"]
     assert "archive" in restored["restored"]
     assert json.loads((state / "profile.json").read_text(encoding="utf-8"))["owner"] == "a"
     assert json.loads(

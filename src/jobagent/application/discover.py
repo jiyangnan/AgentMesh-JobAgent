@@ -429,7 +429,28 @@ def run_discover(
     if round_binding.get("id"):
         # Bound rounds discover with the confirmed resume's own material so
         # the signed plan — and the workbench delivery record — name it.
-        binding_material = cloud_client.resume_binding_material(round_binding["id"])
+        try:
+            binding_material = cloud_client.resume_binding_material(round_binding["id"])
+        except cloud_client.CloudError as exc:
+            if exc.code == "preparation_required":
+                # Same unwind as the native path: the bound resume changed
+                # underneath this round, so detach it and route the user back
+                # to a fresh selection instead of a raw 409 retry loop.
+                rounds.clear_round_resume_binding()
+                exc.details.update(
+                    {
+                        "request_preserved": False,
+                        "no_charge": True,
+                        "billing_status": "not_charged",
+                        "resume_binding_paused": True,
+                        "message": (
+                            "绑定的简历已变更或不再可用，本平台已暂停。"
+                            "请重新执行 jobagent round start 选择简历后再继续。"
+                        ),
+                        "next_suggested": "jobagent round start",
+                    }
+                )
+            raise
         profile = binding_material["profile"]
     resumed = _resume_pending_decision(
         platform,
@@ -453,7 +474,16 @@ def run_discover(
                 platform=platform, profile=profile, request_id=request_id,
                 round_intent=round_intent,
                 resume_binding_id=round_binding.get("id") if round_binding.get("id") else None,
-                context_id=binding_material.get("context_id") if binding_material else None,
+                context_id=(
+                    str(
+                        round_binding.get("context_id")
+                        or (binding_material.get("binding") or {}).get("context_id")
+                        or ""
+                    )
+                    or None
+                )
+                if binding_material
+                else None,
                 round_id=str(active_round.get("round_id")) if round_binding.get("id") else None,
             )
     except cloud_client.CloudError as exc:

@@ -13,12 +13,20 @@ from jobagent.infra.rounds import utc_now
 
 MAX_TARGET_ROLES = 4
 MAX_TARGET_CITIES = 5
+MAX_INTENT_TARGET_CITIES = 3
 TARGET_ROLE_POLICY_VERSION = 2
 TARGET_ROLE_CHOICES = {
     "accept_suggested",
     "append_roles",
     "replace_roles",
 }
+REBIND_RESUME_CHOICE = "rebind_resume"
+
+
+def _binding_direction(resume_binding: dict[str, Any] | None) -> str | None:
+    if not resume_binding or not resume_binding.get("id"):
+        return None
+    return str(resume_binding.get("target_role") or "").strip() or None
 
 
 def confirmed_target_cities(profile: dict[str, Any]) -> list[str]:
@@ -126,27 +134,53 @@ def build_round_intent(
     *,
     accept_suggested: bool,
     target_roles: list[str] | None,
+    resume_binding: dict[str, Any] | None = None,
+    target_cities: list[str] | None = None,
 ) -> dict[str, Any]:
+    direction = _binding_direction(resume_binding)
     suggested = suggested_target_roles(profile) if accept_suggested else []
     explicit = _normalize_roles(target_roles or [])
-    roles = _normalize_roles([*suggested, *explicit])
+    if direction is not None:
+        # Bound rounds deliver along the bound resume's confirmed direction
+        # only; the server signs plans exclusively for that single role.
+        if suggested and suggested != [direction]:
+            suggested = [direction]
+        if explicit and explicit != [direction]:
+            raise ValueError(
+                f"This round is bound to the resume "
+                f"《{resume_binding.get('resume_name') or resume_binding.get('id')}》"
+                f"（方向：{direction}），只能投递该方向的岗位。"
+                "如需投递其他方向，请重新选择（或上传）对应方向的简历后再开轮：jobagent round start。"
+            )
+        roles = [direction]
+    else:
+        roles = _normalize_roles([*suggested, *explicit])
     if not roles:
         raise ValueError("At least one target role must be confirmed before starting a round.")
     if len(roles) > MAX_TARGET_ROLES:
         raise ValueError(f"A round supports at most {MAX_TARGET_ROLES} target roles.")
-    if suggested and explicit:
+    if direction is None and suggested and explicit:
         source = "suggested_plus_explicit"
     elif explicit:
         source = "user_explicit"
     else:
         source = "suggested"
-    return {
+    intent: dict[str, Any] = {
         "status": "confirmed",
         "target_roles": roles,
         "source": source,
         "profile_digest": digest_payload(profile),
         "confirmed_at": utc_now(),
     }
+    if direction is not None:
+        cities = _normalize_cities(target_cities or [])[:MAX_INTENT_TARGET_CITIES]
+        if not cities:
+            raise ValueError(
+                "A bound round must carry explicit target cities. "
+                "Confirm target cities before starting the round."
+            )
+        intent["target_cities"] = cities
+    return intent
 
 
 def build_round_intent_from_choice(
@@ -154,9 +188,17 @@ def build_round_intent_from_choice(
     *,
     choice: str,
     target_roles: list[str] | None,
+    resume_binding: dict[str, Any] | None = None,
+    target_cities: list[str] | None = None,
 ) -> dict[str, Any]:
     if choice not in TARGET_ROLE_CHOICES:
         raise ValueError(f"Unsupported target-role choice: {choice}")
+    if _binding_direction(resume_binding) is not None and choice != "accept_suggested":
+        raise ValueError(
+            "This round is bound to a confirmed resume and can only deliver along "
+            "that resume's direction. To aim at other roles, re-select (or upload) "
+            "a resume in that direction, then start the round again: jobagent round start。"
+        )
     explicit = _normalize_roles(target_roles or [])
     if choice == "accept_suggested":
         if explicit:
@@ -165,6 +207,8 @@ def build_round_intent_from_choice(
             profile,
             accept_suggested=True,
             target_roles=[],
+            resume_binding=resume_binding,
+            target_cities=target_cities,
         )
     if not explicit:
         raise ValueError("Enter at least one target role for this choice.")
@@ -172,6 +216,8 @@ def build_round_intent_from_choice(
         profile,
         accept_suggested=choice == "append_roles",
         target_roles=explicit,
+        resume_binding=resume_binding,
+        target_cities=target_cities,
     )
 
 
@@ -179,8 +225,13 @@ def target_role_confirmation(
     profile: dict[str, Any],
     *,
     previous_round_id: str | None,
+    resume_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    suggested = suggested_target_roles(profile)
+    direction = _binding_direction(resume_binding)
+    if direction is not None:
+        suggested = [direction]
+    else:
+        suggested = suggested_target_roles(profile)
     profile_digest = digest_payload(profile)
     context = previous_round_id or "initial"
     interaction_key = digest_payload(
@@ -192,14 +243,56 @@ def target_role_confirmation(
         }
     ).split(":", 1)[1][:20]
     interaction_id = f"jobagent:target-role:{interaction_key}"
-    if suggested:
+    if direction is not None:
+        resume_name = str(resume_binding.get("resume_name") or "") or "已确认简历"
+        roles_text = direction
+        prompt = (
+            f"本轮已绑定简历《{resume_name}》（方向：{direction}），"
+            f"投递将使用这份简历。本轮投递岗位：{roles_text}。"
+            "如需投递其他方向，请换绑对应方向的简历。"
+        )
+        fallback = (
+            f"本轮已绑定简历《{resume_name}》（方向：{direction}），"
+            f"投递将使用这份简历。本轮投递岗位：{roles_text}。\n\n"
+            "请选择：\n"
+            "1. 按绑定方向开始（推荐）\n"
+            "2. 换绑其他方向的简历\n"
+        )
+        fields = [
+            {
+                "field_id": "target_role_choice",
+                "type": "single",
+                "label": "本轮目标岗位",
+                "required": True,
+                "options": [
+                    {
+                        "option_id": "accept_suggested",
+                        "label": "按绑定方向开始",
+                        "description": f"投递 {roles_text}，并继续本轮流程。",
+                    },
+                    {
+                        "option_id": REBIND_RESUME_CHOICE,
+                        "label": "换绑其他方向的简历",
+                        "description": (
+                            "本轮不开始，重新选择（或上传）目标方向的简历后再开轮。"
+                        ),
+                    },
+                ],
+                "default_option_ids": ["accept_suggested"],
+                "min_selections": 1,
+                "max_selections": 1,
+                "allow_other": False,
+                "known_values": suggested,
+            }
+        ]
+    elif suggested:
         roles_text = "、".join(suggested)
         prompt = (
-            f"根据当前简历中可验证的经历和能力，我建议本轮优先投递：{roles_text}。"
+            f"根据本机最近一次简历分析的结果，我建议本轮优先投递：{roles_text}。"
             "除此以外，你还想投递其他岗位吗？"
         )
         fallback = (
-            f"根据当前简历中可验证的经历和能力，我建议本轮优先投递：{roles_text}。\n\n"
+            f"根据本机最近一次简历分析的结果，我建议本轮优先投递：{roles_text}。\n\n"
             "请选择：\n"
             "1. 按建议岗位开始（推荐）\n"
             "2. 保留建议岗位，并追加其他岗位\n"
@@ -266,19 +359,26 @@ def target_role_confirmation(
         continuation_action="jobagent.interaction.respond",
         idempotency_key=interaction_id,
     )
+    next_suggested = (
+        f'jobagent interaction respond --interaction-id "{interaction_id}" '
+        '--choice accept_suggested'
+        if suggested
+        else f'jobagent interaction respond --interaction-id "{interaction_id}" '
+        '--target-role "<target role>"'
+    )
+    if direction is not None:
+        next_suggested += (
+            f'\n换绑简历：先取消当前选择（jobagent interaction respond '
+            f'--interaction-id "{interaction_id}" --choice {REBIND_RESUME_CHOICE}），'
+            "再执行 jobagent round start 重新选择简历。"
+        )
     return {
         "ok": False,
         "error": "interaction_required",
         "interaction": interaction,
         "host_presentations": build_host_presentations(interaction),
         "suggested_roles": suggested,
-        "next_suggested": (
-            f'jobagent interaction respond --interaction-id "{interaction_id}" '
-            "--choice accept_suggested"
-            if suggested
-            else f'jobagent interaction respond --interaction-id "{interaction_id}" '
-            '--target-role "<target role>"'
-        ),
+        "next_suggested": next_suggested,
     }
 
 

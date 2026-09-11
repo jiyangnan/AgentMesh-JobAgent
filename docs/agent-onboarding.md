@@ -216,10 +216,23 @@ city/role confirmation. The chosen resume appears as `resume_binding` in
 `round start`/`round status` output, and every delivered job records it in the
 workbench's applications view. `--resume-binding <binding-id>` adopts an
 existing binding directly; `--no-resume-binding` keeps the classic local-profile
-path. If a platform command returns `preparation_required` with
-`resume_binding_paused`, the bound resume changed: the platform is paused — ask
-the user to choose a resume again via `jobagent round start`; do not deliver
-with an unbound profile in that round.
+path.
+
+A bound round is direction-locked to the chosen resume: the suggested role and
+profile digest come from that resume's own bound material, not the local
+profile snapshot; confirmed cities prefer the material's cities and fall back
+to this machine's last confirmed cities only when the resume names none. If
+the target-role card shows a single direction with the resume's name, relay it
+as the only deliverable direction for the round. When the user deliberately
+wants a different direction, guide them to re-bind: answer the card with
+`--choice rebind_resume` (drops the staged binding, no round is created) and
+re-run `jobagent round start` to select — or upload in the workbench — a
+resume matching that direction. Direct `--target-role` values outside the
+binding direction and `append_roles`/`replace_roles` responses are refused by
+design; do not work around the refusal. If a platform command returns
+`preparation_required` with `resume_binding_paused`, the bound resume changed:
+the platform is paused — ask the user to choose a resume again via
+`jobagent round start`; do not deliver with an unbound profile in that round.
 
 <a id="resume-online-facts"></a>
 
