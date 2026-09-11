@@ -745,6 +745,30 @@ def _consume_staged_resume_binding() -> None:
     clear_pending_binding()
 
 
+def _bound_round_intent(
+    intent_profile: dict[str, Any],
+    round_binding: dict[str, Any] | None,
+    effective_cities: list[str],
+) -> dict[str, Any] | None:
+    """Build the binding's own material-form intent for attaching to an
+    already-active round (direction roles, explicit cities, material digest)."""
+
+    if not (round_binding and round_binding.get("id")):
+        return None
+    from jobagent.application.round_intent import build_round_intent
+
+    try:
+        return build_round_intent(
+            intent_profile,
+            accept_suggested=True,
+            target_roles=None,
+            resume_binding=round_binding,
+            target_cities=effective_cities,
+        )
+    except ValueError:
+        return None
+
+
 def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     from jobagent.application.round_intent import (
         REBIND_RESUME_CHOICE,
@@ -823,6 +847,23 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             binding = (staged or {}).get("binding") or {}
             current = load_json(current_round_path())
             if binding.get("id") and current and current.get("status") == "active" and current.get("round_id"):
+                from jobagent.application.round_resume_binding import (
+                    binding_direction_conflict,
+                )
+
+                # Same guard as every other attach site: a binding that
+                # contradicts the active round's confirmed intent can never
+                # discover (the server signs bound plans for the resume's
+                # direction only) and would wedge the platform on a retry
+                # loop. Drop the staged selection and guide the user.
+                conflict = binding_direction_conflict(current, binding)
+                if conflict:
+                    from jobagent.application.round_resume_binding import (
+                        clear_pending_binding,
+                    )
+
+                    clear_pending_binding()
+                    return conflict
                 from jobagent.infra.rounds import attach_round_resume_binding
 
                 attach_round_resume_binding(binding)
@@ -1551,8 +1592,15 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 except cloud_client.CloudError as exc:
                     if exc.code == "preparation_required":
                         # The bound resume changed underneath; pause and ask
-                        # for a fresh user-confirmed selection.
+                        # for a fresh user-confirmed selection. Clear BOTH the
+                        # staged file and a binding already attached to the
+                        # active round — otherwise resolve_round_binding keeps
+                        # returning the stale round binding and the suggested
+                        # recovery command loops forever.
+                        from jobagent.infra.rounds import clear_round_resume_binding
+
                         clear_pending_binding()
+                        clear_round_resume_binding()
                         return {
                             "ok": False,
                             "error": "resume_binding_paused",
@@ -1602,7 +1650,12 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             if current and current.get("status") == "active" and current.get("round_id"):
                 from jobagent.infra.rounds import reconcile_active_round_profile
 
-                reconcile_active_round_profile(profile)
+                # A bound round's intent belongs to the bound resume's
+                # material; reconciling it against the local snapshot would
+                # rewrite the digest to the stale local one and every later
+                # discovery would 422 on intent_profile_digest_mismatch.
+                if not (round_binding and round_binding.get("id")):
+                    reconcile_active_round_profile(profile)
                 current = load_json(current_round_path())
             if (
                 current
@@ -1615,14 +1668,15 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 active = start_new_round()
                 if not active.get("resume_binding") and round_binding:
                     from jobagent.application.round_resume_binding import (
-                        binding_direction_conflict,
+                        attach_bound_round,
                     )
-                    from jobagent.infra.rounds import attach_round_resume_binding
 
-                    conflict = binding_direction_conflict(active, round_binding)
+                    bound_intent = _bound_round_intent(
+                        intent_profile, round_binding, effective_cities
+                    )
+                    conflict = attach_bound_round(round_binding, intent=bound_intent)
                     if conflict:
                         return conflict
-                    attach_round_resume_binding(round_binding)
                     _consume_staged_resume_binding()
                 return {
                     "ok": True,
@@ -1671,6 +1725,18 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             created = start_new_round(intent, resume_binding=round_binding)
             clear_pending_interaction()
             if round_binding:
+                if not created.get("resume_binding"):
+                    # start_new_round returned an already-active round (its
+                    # roles-only sameness check passed): attach the binding and
+                    # upgrade that round's intent to the binding's material
+                    # form, or its pre-binding digest would 422 every discovery.
+                    from jobagent.application.round_resume_binding import (
+                        attach_bound_round,
+                    )
+
+                    conflict = attach_bound_round(round_binding, intent=intent)
+                    if conflict:
+                        return conflict
                 _consume_staged_resume_binding()
             return {
                 "ok": True,

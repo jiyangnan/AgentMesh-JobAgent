@@ -200,6 +200,41 @@ def binding_material_profile(binding: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def attach_bound_round(
+    binding: dict[str, Any] | None,
+    *,
+    intent: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Attach a user-confirmed binding to the active round, all guards applied.
+
+    Every attach site must go through here: the direction guard refuses a
+    binding that contradicts the round's confirmed intent (the server would
+    reject every later discovery), and ``intent`` upgrades a pre-existing round
+    to the binding's own material form so its digest and cities match what the
+    server validates for bound rounds. Returns a conflict error dict, or None
+    on success.
+    """
+    from jobagent.infra.rounds import attach_round_resume_binding
+
+    if not binding or not binding.get("id"):
+        return None
+    current = _load_current_round()
+    conflict = binding_direction_conflict(current, binding)
+    if conflict:
+        return conflict
+    attach_round_resume_binding(binding, intent=intent)
+    return None
+
+
+def _load_current_round() -> dict[str, Any]:
+    from jobagent.infra.state import current_round_path, load_json
+
+    try:
+        return load_json(current_round_path()) or {}
+    except Exception:
+        return {}
+
+
 def resolve_round_binding(
     *, explicit_binding: str | None, no_binding: bool, current_round: dict[str, Any] | None
 ) -> dict[str, Any]:

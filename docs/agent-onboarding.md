@@ -218,12 +218,13 @@ workbench's applications view. `--resume-binding <binding-id>` adopts an
 existing binding directly; `--no-resume-binding` keeps the classic local-profile
 path.
 
-A bound round is direction-locked to the chosen resume: the suggested role,
-confirmed cities and profile digest all come from that resume's own bound
-material, not the local profile snapshot. If the target-role card shows a
-single direction with the resume's name, relay it as the only deliverable
-direction for the round. When the user deliberately wants a different
-direction, guide them to re-bind: answer the card with
+A bound round is direction-locked to the chosen resume: the suggested role and
+profile digest come from that resume's own bound material, not the local
+profile snapshot; confirmed cities prefer the material's cities and fall back
+to this machine's last confirmed cities only when the resume names none. If
+the target-role card shows a single direction with the resume's name, relay it
+as the only deliverable direction for the round. When the user deliberately
+wants a different direction, guide them to re-bind: answer the card with
 `--choice rebind_resume` (drops the staged binding, no round is created) and
 re-run `jobagent round start` to select — or upload in the workbench — a
 resume matching that direction. Direct `--target-role` values outside the

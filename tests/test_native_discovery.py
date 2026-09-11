@@ -206,12 +206,11 @@ def _bound_env(env, monkeypatch, *, material=None, material_error=None):
                "confirmed_at": "2026-09-11T00:00:00Z"}
     env.active["resume_binding"] = binding
     env.active["intent"]["target_roles"] = ["项目经理"]
+    # The bound material must differ from the local snapshot so a regression
+    # back to the local profile fails the profile assertion below.
+    material = material or {"schema_version": 1,
+                            "professional_profile": {"summary": "Bound resume material"}}
     if material_error is None:
-        material = material or {"schema_version": 1,
-                                "professional_profile": {"summary": "Bound resume material"}}
-        env.profile.clear()
-        env.profile.update(material)
-
         def fetch(binding_id):
             return {"ok": True, "account_ref": "account-test", "binding": binding,
                     "profile": material, "profile_digest": protocol.digest_payload(material),
@@ -224,11 +223,25 @@ def _bound_env(env, monkeypatch, *, material=None, material_error=None):
     # The real clearer reads the user's live state dir; keep the test hermetic.
     monkeypatch.setattr(existing.rounds, "clear_round_resume_binding",
                         lambda: env.active.pop("resume_binding", None))
-    return binding
+    return binding, material
 
 
 def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypatch):
-    binding = _bound_env(env, monkeypatch)
+    binding, material = _bound_env(env, monkeypatch)
+
+    # Sign the plan against the MATERIAL profile, not the local snapshot the
+    # fixture's make_plan would use — otherwise this test cannot tell them apart.
+    def start(**kwargs):
+        env.starts.append(kwargs)
+        return env.sign({"manifest_type": "search_plan", "protocol_version": 1,
+            "platform": kwargs["platform"], "request_id": kwargs["request_id"],
+            "discover_id": f"dis-{kwargs['platform']}",
+            "profile_digest": protocol.digest_payload(material), "round_intent": env.active["intent"],
+            "intent_digest": protocol.digest_payload(env.active["intent"]), "candidate_limit": 100,
+            "queries": [{"keyword": "项目经理", "city": "郑州", "page_limit": 2}],
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()})
+
+    monkeypatch.setattr(existing.cloud_client, "discovery_start", start)
     response = native.start_discovery("boss", "session-test")
     assert response["ok"] is True
     captured = env.starts[0]
@@ -237,7 +250,10 @@ def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypat
     assert captured["resume_binding_id"] == "binding-1"
     assert captured["context_id"] == "ctx-1"
     assert captured["round_id"] == "round-test"
-    assert captured["profile"] == env.profile  # the bound resume's own material
+    # Identity check: the sent profile must BE the fetched material, not the
+    # stale local snapshot (which differs in content).
+    assert captured["profile"] == material
+    assert captured["profile"] != env.profile
 
 
 def test_bound_discovery_preparation_required_unwinds_binding(env, monkeypatch):

@@ -428,3 +428,155 @@ def test_unbound_round_keeps_local_suggestion_copy(monkeypatch):
     assert "本机最近一次简历分析" in prompt
     assert "当前简历中可验证" not in prompt
     assert result["suggested_roles"] == ["Engineer"]
+
+
+def test_bound_intent_caps_cities_at_server_limit(monkeypatch):
+    binding = _binding(resume_id="resume-b")
+    wide = _material_profile("项目经理")
+    wide["preferences"]["targetCities"] = [
+        {"city": city, "preference": "must"}
+        for city in ["郑州", "杭州", "北京", "上海", "深圳"]
+    ]
+    material = _material(binding, profile=wide)
+    _stage_binding(monkeypatch, binding, material)
+    result = _dispatch(_args("round start --accept-suggested"))
+    assert result["ok"] is True
+    # The server's RoundIntent schema rejects more than 3 cities with a 422
+    # before any charge; the intent must carry at most the first three.
+    assert _current_round()["intent"]["target_cities"] == ["郑州", "杭州", "北京"]
+
+
+def test_stale_attached_binding_unwinds_and_reselects(monkeypatch):
+    # A bound active round whose resume went stale server-side must not loop:
+    # round start detaches the round's own binding, so the documented recovery
+    # command reaches a fresh selection instead of the same 409 forever.
+    classic = _dispatch(_args("round start --no-resume-binding --target-role 数据产品经理"))
+    assert classic["ok"] is True
+    from jobagent.infra.rounds import attach_round_resume_binding
+
+    attach_round_resume_binding(_binding())
+    assert _current_round().get("resume_binding", {}).get("id") == "binding-1"
+
+    def stale(binding_id):
+        raise CloudError(
+            "Confirm resume preparation and explicitly select material for this task.",
+            status=409, code="preparation_required",
+        )
+
+    monkeypatch.setattr(cloud_client, "resume_binding_material", stale)
+    result = _dispatch(_args("round start"))
+    assert result["error"] == "resume_binding_paused"
+    assert _current_round().get("resume_binding") is None
+    monkeypatch.setattr(cloud_client, "resume_center_preparation", lambda: _preparation())
+    monkeypatch.setattr(cloud_client, "resume_selection", lambda context_id, revision: _selection())
+    again = _dispatch(_args("round start"))
+    assert again["error"] == "interaction_required"
+    assert again["interaction"]["kind"] == "resume_selection"
+
+
+def test_rebind_after_unwind_upgrades_intent_to_material_form(monkeypatch):
+    # An older same-direction round keeps its pre-binding digest and no
+    # cities; attaching a binding must upgrade the intent to the binding's
+    # material form or every later discovery 422s on the digest mismatch.
+    classic = _dispatch(_args("round start --no-resume-binding --target-role 数据产品经理"))
+    assert classic["ok"] is True
+    import jobagent.infra.state as state_mod
+
+    state = _current_round()
+    old_intent = dict(state["intent"])
+    old_intent.pop("target_cities", None)
+    old_intent["profile_digest"] = digest_payload(_profile())  # local snapshot digest
+    state["intent"] = old_intent
+    (state_mod.STATE_DIR / "current_round.json").write_text(
+        json.dumps(state, ensure_ascii=False), encoding="utf-8"
+    )
+
+    binding = _binding()  # 数据产品经理 direction
+    material = _material(binding)
+    _stage_binding(monkeypatch, binding, material)
+    result = _dispatch(_args("round start --accept-suggested"))
+    assert result["ok"] is True
+    upgraded = _current_round()
+    assert upgraded["resume_binding"]["id"] == "binding-1"
+    intent = upgraded["intent"]
+    assert intent["profile_digest"] == material["profile_digest"]
+    assert intent["target_cities"] == ["郑州"]
+    assert intent["target_roles"] == ["数据产品经理"]
+
+    # The reuse branch (no flags) upgrades the same way.
+    (state_mod.STATE_DIR / "current_round.json").write_text(
+        json.dumps({**upgraded, "intent": old_intent, "resume_binding": None}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    from jobagent.application.round_resume_binding import save_pending_binding
+
+    save_pending_binding({"binding": binding})  # staged again for this variant
+    result = _dispatch(_args("round start"))
+    assert result["ok"] is True
+    replayed = _current_round()
+    assert replayed["resume_binding"]["id"] == "binding-1"
+    assert replayed["intent"]["profile_digest"] == material["profile_digest"]
+    assert replayed["intent"]["target_cities"] == ["郑州"]
+
+
+def test_respond_attach_refuses_direction_mismatch(monkeypatch):
+    # The selection respond is the third attach site: it must apply the same
+    # direction guard, or a classic Engineer round + 项目经理 resume wedges
+    # every platform on a server-side role-mismatch retry loop.
+    classic = _dispatch(_args("round start --no-resume-binding --accept-suggested"))
+    assert classic["ok"] is True
+    monkeypatch.setattr(cloud_client, "resume_center_preparation", lambda: _preparation())
+    monkeypatch.setattr(cloud_client, "resume_selection", lambda context_id, revision: _selection())
+    _dispatch(_args("round start"))
+    monkeypatch.setattr(
+        cloud_client, "resume_selection_respond",
+        lambda selection_id, response_id, resume_id: {"ok": True, "binding": _binding(resume_id=resume_id)},
+    )
+    result = _dispatch(_args("interaction respond --interaction-id selection-1 --resume-id resume-b"))
+    assert result["error"] == "resume_binding_direction_mismatch"
+    assert _current_round().get("resume_binding") is None
+    import jobagent.infra.state as state_mod
+
+    assert not (state_mod.STATE_DIR / "pending_round_binding.json").exists()
+    # The round itself is untouched: its confirmed intent still stands.
+    assert _current_round()["intent"]["target_roles"] == ["Engineer"]
+
+
+def test_respond_material_preparation_required_unwinds(monkeypatch):
+    binding = _binding(resume_id="resume-b")
+    _stage_binding(monkeypatch, binding)
+    card = _dispatch(_args("round start"))
+    interaction_id = card["interaction"]["interaction_id"]
+
+    def stale(binding_id):
+        raise CloudError(
+            "Confirm resume preparation and explicitly select material for this task.",
+            status=409, code="preparation_required",
+        )
+
+    monkeypatch.setattr(cloud_client, "resume_binding_material", stale)
+    result = _dispatch(
+        _args(f"interaction respond --interaction-id {interaction_id} --choice accept_suggested")
+    )
+    assert result["error"] == "resume_binding_paused"
+    assert not load_pending_interaction()
+    import jobagent.infra.state as state_mod
+
+    assert not (state_mod.STATE_DIR / "pending_round_binding.json").exists()
+    assert _current_round() is None
+
+
+def test_rebind_then_round_start_reaches_selection_again(monkeypatch):
+    binding = _binding(resume_id="resume-b")
+    _stage_binding(monkeypatch, binding)
+    card = _dispatch(_args("round start"))
+    interaction_id = card["interaction"]["interaction_id"]
+    answer = _dispatch(
+        _args(f"interaction respond --interaction-id {interaction_id} --choice rebind_resume")
+    )
+    assert answer["rebind_requested"] is True
+    monkeypatch.setattr(cloud_client, "resume_center_preparation", lambda: _preparation())
+    monkeypatch.setattr(cloud_client, "resume_selection", lambda context_id, revision: _selection())
+    again = _dispatch(_args("round start"))
+    assert again["error"] == "interaction_required"
+    assert again["interaction"]["kind"] == "resume_selection"

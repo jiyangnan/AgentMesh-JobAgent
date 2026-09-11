@@ -118,12 +118,24 @@ def _create_round(
     return state
 
 
-def attach_round_resume_binding(binding: dict[str, Any]) -> dict[str, Any] | None:
-    """Bind (or rebind) the active round after a user-confirmed selection."""
+def attach_round_resume_binding(
+    binding: dict[str, Any],
+    *,
+    intent: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Bind (or rebind) the active round after a user-confirmed selection.
+
+    ``intent`` upgrades an already-active round to the binding's own material
+    form (direction roles, explicit cities, material digest): without it a
+    round created before the binding keeps its old digest and the server
+    rejects every later discovery with an unrecoverable digest mismatch.
+    """
     current = load_json(current_round_path())
     if not current or current.get("status") != "active" or not current.get("round_id"):
         return None
     current["resume_binding"] = binding
+    if intent is not None:
+        current["intent"] = intent
     current["updated_at"] = utc_now()
     save_round(current)
     return current
