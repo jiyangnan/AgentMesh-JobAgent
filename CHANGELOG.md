@@ -2,6 +2,38 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.5] - 2026-09-11
+
+### Fixed
+
+- Rounds bound to a workbench resume now derive their suggested role, target
+  cities and profile digest from that resume's own bound material instead of
+  the stale local snapshot left by the last local `resume analyze`; the
+  suggestion card for unbound rounds says so honestly.
+- Native discovery sends the resume binding, context and round identifiers
+  with every start, so adopted accounts no longer dead-end on a
+  `preparation_required` retry loop that cannot succeed.
+- A stale or released binding is now detached on every path (round start,
+  selection respond, material fetch in both discovery paths), including one
+  already attached to the active round — the suggested recovery command now
+  reaches a fresh resume selection instead of looping on the same 409.
+- Attaching a binding to an already-active round upgrades that round's intent
+  to the binding's material form (direction roles, explicit cities, material
+  digest), and bound rounds no longer reconcile against the local snapshot,
+  so pre-binding digests cannot cause unrecoverable digest-mismatch rejections.
+- The resume-selection response now applies the same direction guard as every
+  other attach: a binding contradicting the active round's confirmed intent is
+  refused with guidance instead of wedging every platform on a role-mismatch
+  retry loop.
+- Bound-round intents carry at most the server-supported three target cities.
+
+### Added
+
+- Users who deliberately want a direction other than the bound resume's can
+  answer the target-role card with `--choice rebind_resume` to drop the staged
+  binding (no round is created) and re-run `jobagent round start` to select —
+  or upload in the workbench — a resume matching that direction.
+
 ## [0.6.4] - 2026-09-11
 
 ### Fixed
