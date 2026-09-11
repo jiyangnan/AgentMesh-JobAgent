@@ -208,6 +208,19 @@ If `resume analyze` returns `target_cities_required`, ask for the cities and rer
 
 Then execute the returned `jobagent round start`. If it returns `interaction_required`, render its card or fallback text and wait for the target-role answer. Continue through `jobagent interaction respond`; only an accepted structured response or an already-explicit direct `round start` creates the four-platform round. Final delivery authorization is still collected separately after each platform preview.
 
+When the account has confirmed workbench resumes, `round start` first returns a
+`resume_selection` interaction: render its card (or numbered fallback) and let
+the user pick the resume for this round's deliveries — even when only one
+resume is confirmed. Continue with `jobagent interaction respond --interaction-id <id> --resume-id <resume-id>`, then run `jobagent round start` again to finish
+city/role confirmation. The chosen resume appears as `resume_binding` in
+`round start`/`round status` output, and every delivered job records it in the
+workbench's applications view. `--resume-binding <binding-id>` adopts an
+existing binding directly; `--no-resume-binding` keeps the classic local-profile
+path. If a platform command returns `preparation_required` with
+`resume_binding_paused`, the bound resume changed: the platform is paused — ask
+the user to choose a resume again via `jobagent round start`; do not deliver
+with an unbound profile in that round.
+
 <a id="resume-online-facts"></a>
 
 ### Reading the user's online resumes (workbench facts)

@@ -324,6 +324,45 @@ def resume_center_preparation() -> dict[str, Any]:
     )
 
 
+def resume_selection(context_id: str, expected_state_revision: int) -> dict[str, Any]:
+    """Ask the user which confirmed resume this round delivers with."""
+    return _request(
+        "POST",
+        "/v1/resume-center/selections",
+        {
+            "context_id": context_id,
+            "expected_state_revision": expected_state_revision,
+            "idempotency_key": f"cli-selection:{context_id}",
+        },
+        timeout=20,
+        operation="resume_selection",
+    )
+
+
+def resume_selection_respond(
+    selection_id: str, response_id: str, resume_id: str
+) -> dict[str, Any]:
+    """Submit the user's resume choice; returns the bound resume binding."""
+    return _request(
+        "POST",
+        f"/v1/resume-center/selections/{selection_id}/respond",
+        {"response_id": response_id, "resume_id": resume_id},
+        timeout=20,
+        operation="resume_selection_respond",
+    )
+
+
+def resume_binding_material(binding_id: str) -> dict[str, Any]:
+    """Confirmed material snapshot for a binding: profile, digest, identity."""
+    return _request(
+        "GET",
+        f"/v1/resume-center/bindings/{binding_id}/material",
+        timeout=20,
+        max_attempts=2,
+        operation="resume_binding_material",
+    )
+
+
 def me(*, api_key: str | None = None) -> dict[str, Any]:
     return _request(
         "GET",
@@ -384,10 +423,13 @@ def discovery_start(
     profile: dict[str, Any],
     request_id: str,
     round_intent: dict[str, Any] | None = None,
+    resume_binding_id: str | None = None,
+    context_id: str | None = None,
+    round_id: str | None = None,
 ) -> dict[str, Any]:
     from jobagent.infra.protocol import digest_payload
 
-    body = {
+    body: dict[str, Any] = {
         "platform": platform,
         "profile": profile,
         "profile_digest": digest_payload(profile),
@@ -398,6 +440,12 @@ def discovery_start(
     if round_intent and round_intent.get("status") == "confirmed":
         body["round_intent"] = round_intent
         body["intent_digest"] = digest_payload(round_intent)
+    if resume_binding_id:
+        body["resume_binding_id"] = resume_binding_id
+        if context_id:
+            body["context_id"] = context_id
+        if round_id:
+            body["round_id"] = round_id
     return _request(
         "POST",
         "/v1/discovery/start",
