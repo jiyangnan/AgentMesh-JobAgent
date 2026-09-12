@@ -11,6 +11,10 @@ from jobagent.infra.state import current_round_path, rounds_dir, save_json, load
 
 DEFAULT_PLATFORM_ORDER = ["boss", "liepin", "zhilian", "51job"]
 TERMINAL_PLATFORM_STATUSES = {"completed", "skipped_this_round"}
+# A platform paused by the pre-delivery resume freshness gate. It is not
+# terminal (the round is not complete while it is held) but it must not be
+# picked as the current platform: the agent continues later platforms.
+FRESHNESS_HOLD_STATUS = "resume_freshness_hold"
 ROUND_SCHEMA_VERSION = 4
 DEFAULT_BROWSER_EXECUTOR = "codex_native"
 UNBOUND_BROWSER_SESSION = "native-unbound"
@@ -338,9 +342,47 @@ def _round_current_platform(state: dict[str, Any]) -> str | None:
     platforms = state.get("platforms") or {}
     for platform in state.get("platform_order") or DEFAULT_PLATFORM_ORDER:
         status = str((platforms.get(platform) or {}).get("status") or "pending")
+        if status == FRESHNESS_HOLD_STATUS:
+            continue
         if status not in TERMINAL_PLATFORM_STATUSES:
             return platform
     return None
+
+
+def _freshness_view(state: dict[str, Any], platforms: dict[str, Any], order: list[str]) -> dict[str, Any]:
+    """Summarize resume-freshness holds for round_status/assert_platform_turn."""
+    held = [
+        platform
+        for platform in order
+        if str((platforms.get(platform) or {}).get("status") or "pending") == FRESHNESS_HOLD_STATUS
+    ]
+    round_hold = state.get("resume_freshness_round_hold")
+    return {
+        "round_hold": round_hold if isinstance(round_hold, dict) else None,
+        "held_platforms": held,
+    }
+
+
+def _freshness_next_suggested(view: dict[str, Any], platforms: dict[str, Any]) -> str | None:
+    """Point the user at the pending freshness respond command, if any."""
+    record = None
+    platform = None
+    hold = view.get("round_hold") or {}
+    if hold.get("platform"):
+        platform = str(hold["platform"])
+        record = ((platforms.get(platform) or {}).get("resume_freshness") or {})
+    if not record:
+        for candidate in view.get("held_platforms") or []:
+            record = (platforms.get(candidate) or {}).get("resume_freshness") or {}
+            if record.get("interaction_id"):
+                platform = candidate
+                break
+    interaction_id = str((record or {}).get("interaction_id") or "")
+    if not interaction_id:
+        return None
+    return (
+        f'jobagent interaction respond --interaction-id "{interaction_id}" --choice synced'
+    )
 
 
 def _login_receipt_is_recent(
@@ -631,7 +673,15 @@ def round_status() -> dict[str, Any]:
         state["status"] = "completed"
         if not migration_deferred:
             save_round(state)
-    current_platform = remaining[0] if remaining else None
+    freshness = _freshness_view(state, platforms, order)
+    current_platform = next(
+        (
+            platform
+            for platform in remaining
+            if str(platforms.get(platform, {}).get("status") or "pending") != FRESHNESS_HOLD_STATUS
+        ),
+        None,
+    )
     next_suggested = None
     if current_platform:
         item = platforms.get(current_platform, {})
@@ -645,6 +695,12 @@ def round_status() -> dict[str, Any]:
             current_platform,
             str(item.get("status") or "pending"),
         )
+    if freshness.get("round_hold"):
+        # The whole round is held: the respond command is the only forward
+        # path, so it outranks the current platform's own next command.
+        next_suggested = _freshness_next_suggested(freshness, platforms) or next_suggested
+    if next_suggested is None:
+        next_suggested = _freshness_next_suggested(freshness, platforms)
     return {
         "round_id": state.get("round_id"),
         "status": "completed" if workflow_complete else "active",
@@ -662,6 +718,7 @@ def round_status() -> dict[str, Any]:
         "intent": state.get("intent"),
         "resume_binding": state.get("resume_binding"),
         "profile_reconciliation": state.get("profile_reconciliation"),
+        "resume_freshness": freshness,
         "platforms": platforms,
         "current_platform": current_platform,
         "remaining_platforms": remaining,
@@ -709,6 +766,37 @@ def assert_platform_turn(platform: str) -> dict[str, Any]:
                 "message": "The previous round is complete. Start a new round explicitly.",
                 "requested_platform": platform,
                 "next_suggested": "jobagent round start",
+                "workflow": workflow,
+            }
+        )
+    freshness = workflow.get("resume_freshness") or {}
+    round_hold = freshness.get("round_hold") or None
+    if round_hold:
+        raise RoundOrderError(
+            {
+                "ok": False,
+                "error": "round_resume_freshness_hold",
+                "message": (
+                    "本轮因平台简历新鲜度确认整轮挂起：请先把最新简历同步上传到对应平台后台，"
+                    "完成后应答 synced 恢复，再按原顺序继续本轮。"
+                ),
+                "requested_platform": platform,
+                "held_platform": round_hold.get("platform"),
+                "next_suggested": _freshness_next_suggested(freshness, workflow["platforms"]),
+                "workflow": workflow,
+            }
+        )
+    if platform in (freshness.get("held_platforms") or []):
+        raise RoundOrderError(
+            {
+                "ok": False,
+                "error": "platform_resume_freshness_hold",
+                "message": (
+                    "该平台因简历新鲜度确认挂起：请先把最新简历同步上传到该平台后台，"
+                    "完成后应答 synced 恢复投递。"
+                ),
+                "requested_platform": platform,
+                "next_suggested": _freshness_next_suggested(freshness, workflow["platforms"]),
                 "workflow": workflow,
             }
         )
