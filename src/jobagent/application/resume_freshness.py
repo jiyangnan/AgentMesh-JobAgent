@@ -31,7 +31,13 @@ from jobagent.infra.interaction_state import (
     load_pending_interaction,
     save_pending_interaction,
 )
-from jobagent.infra.rounds import FRESHNESS_HOLD_STATUS, round_status, set_platform_status, utc_now
+from jobagent.infra.rounds import (
+    FRESHNESS_HOLD_STATUS,
+    TERMINAL_PLATFORM_STATUSES,
+    round_status,
+    set_platform_status,
+    utc_now,
+)
 from jobagent.infra.state import current_round_path, load_json, resume_freshness_path, save_json
 
 INTERACTION_KIND = "resume_freshness"
@@ -167,10 +173,13 @@ def _send_command(platform: str, source: dict[str, Any]) -> str:
         if platform == "boss"
         else f"jobagent {platform} apply send --input {quoted}"
     )
-    return (
+    command = (
         f"{base} --preview-id {source.get('preview_id')} "
         f"--authorization-id {source.get('authorization_id')} --limit {int(source.get('limit') or 100)}"
     )
+    if source.get("stop_on_failure") is False:
+        command += " --continue-on-failure"
+    return command
 
 
 # --------------------------------------------------------------- round help
@@ -355,6 +364,16 @@ def _respond_initial(pending: dict[str, Any], interaction_id: str, choice: str) 
         return _invalid_response(pending, "The delivery round is no longer active.")
     context = pending.get("context") or {}
     platform = str(context.get("platform") or "")
+    platform_status = str(((active.get("platforms") or {}).get(platform) or {}).get("status") or "")
+    terminal = platform_status in TERMINAL_PLATFORM_STATUSES
+    if terminal:
+        # The round already skipped or completed this platform while the card
+        # was still awaiting (e.g. round skip); a stale answer must not
+        # resurrect it or write a baseline. The dispatch guaranteed the
+        # pending slot holds this card, so clearing it is safe.
+        _save_record(platform, None)
+        clear_pending_interaction()
+        return _invalid_response(pending, "本轮该平台已结束（跳过或完成），无需再应答。")
     record = _platform_record(active, platform) if platform else None
     if not record or str(record.get("interaction_id") or "") != interaction_id \
             or str(record.get("round_id") or "") != str(active.get("round_id") or ""):
@@ -399,25 +418,41 @@ def _respond_initial(pending: dict[str, Any], interaction_id: str, choice: str) 
 
 def _respond_hold(platform: str, record: dict[str, Any], choice: str) -> dict[str, Any]:
     if choice != CHOICE_SYNCED:
-        return _invalid_response(record, "This platform is already held; answer synced after uploading.")
+        return _invalid_response(record, "本平台正处于挂起中；上传完成后请应答 synced。")
     try:
         material = cloud_client.resume_binding_material(str(record.get("resume_binding_id") or ""))
     except cloud_client.CloudError as exc:
-        if exc.code == "preparation_required":
-            # The bound resume changed underneath; same unwind as discover.
+        if exc.code in ("preparation_required", "resume_binding_not_found"):
+            # The bound resume changed underneath or the binding is gone; the
+            # same unwind discover.py performs. If the round was re-bound to a
+            # different resume while this hold lived, keep that new binding
+            # and release only the hold.
             from jobagent.infra.rounds import clear_round_resume_binding
 
-            clear_round_resume_binding()
+            active = _active_round() or {}
+            current_binding = active.get("resume_binding") or {}
+            still_bound = str(current_binding.get("id") or "") == str(record.get("resume_binding_id") or "")
+            if still_bound:
+                clear_round_resume_binding()
             _save_record(platform, None)
+            next_suggested = (
+                "jobagent round start"
+                if still_bound
+                else _send_command(platform, record.get("source") or {})
+            )
             _set_status(platform, str(record.get("pre_hold_status") or "reviewed"),
-                        next_suggested="jobagent round start",
+                        next_suggested=next_suggested,
                         evidence_extra={"resume_freshness_hold": False})
             return {
                 "ok": False,
                 "error": "resume_binding_paused",
                 "platform": platform,
-                "message": "绑定的简历已变更或不再可用，本平台挂起已解除。请重新执行 jobagent round start 选择简历后再继续。",
-                "next_suggested": "jobagent round start",
+                "message": (
+                    "绑定的简历已变更或不再可用，本平台挂起已解除。请重新执行 jobagent round start 选择简历后再继续。"
+                    if still_bound
+                    else "挂起期间本轮已改绑其他简历版本，挂起已解除；下次投递前会按新版本重新检查。"
+                ),
+                "next_suggested": next_suggested,
             }
         return {
             "ok": False,
@@ -430,33 +465,21 @@ def _respond_hold(platform: str, record: dict[str, Any], choice: str) -> dict[st
             "next_suggested": _respond_command(str(record.get("interaction_id") or "")),
         }
     snapshot = material.get("binding") or material.get("resume_binding") or {}
-    if _same_revision(snapshot, record.get("revision") or {}):
-        return _resolve_synced(platform, record, verified=snapshot)
-    # The user confirmed yet another revision while paused: keep the hold and
-    # re-anchor the comparison to the newest revision. No baseline update —
-    # the sync claim must match the CURRENT workbench revision to count.
-    record["revision"] = _fingerprint(snapshot)
-    record["resume_name"] = str(snapshot.get("resume_name") or record.get("resume_name") or "")
-    record["interaction"] = _build_card(platform, round_id=str(record.get("round_id") or ""),
-                                        fingerprint={**_fingerprint(snapshot),
-                                                     "resume_name": record["resume_name"]},
-                                        first_delivery=False)
-    record["interaction_id"] = record["interaction"]["interaction_id"]
-    record["reanchored_at"] = utc_now()
-    _save_record(platform, record)
-    date = _month_day((record.get("revision") or {}).get("confirmed_at"))
-    return {
-        "ok": False,
-        "error": "resume_freshness_changed_again",
-        "platform": platform,
-        "requires_user_action": True,
-        "request_preserved": True,
-        "message": (
-            f"复查发现你在 {date} 又确认了新版本简历《{record['resume_name']}》。"
-            "请把这份最新版本同步上传到平台后台后，再应答 synced 恢复投递。"
-        ),
-        "next_suggested": _respond_command(str(record.get("interaction_id") or "")),
-    }
+    if not _same_revision(snapshot, record.get("revision") or {}):
+        # A binding id is a frozen snapshot, so the server returning a
+        # different revision for the same id can only mean its semantics
+        # changed. Refuse to write a baseline for a revision this round's
+        # delivery was never based on; keep the hold for human review.
+        return {
+            "ok": False,
+            "error": "resume_freshness_revision_mismatch",
+            "platform": platform,
+            "requires_user_action": True,
+            "request_preserved": True,
+            "message": "复查返回的简历版本与本轮投递依据不一致，挂起保留。请执行 jobagent round status 核对绑定，或重新 jobagent round start。",
+            "next_suggested": "jobagent round status",
+        }
+    return _resolve_synced(platform, record, verified=snapshot)
 
 
 def _resolve_synced(platform: str, record: dict[str, Any], *, verified: dict[str, Any] | None) -> dict[str, Any]:
@@ -473,7 +496,10 @@ def _resolve_synced(platform: str, record: dict[str, Any], *, verified: dict[str
                     "resume_revision_id": fingerprint.get("resume_revision_id"),
                 })
     pending = load_pending_interaction()
-    if pending and str(pending.get("kind") or "") == INTERACTION_KIND:
+    if pending and str(pending.get("kind") or "") == INTERACTION_KIND \
+            and str(pending.get("interaction_id") or "") == str(record.get("interaction_id") or ""):
+        # Only our own card: another platform's awaiting freshness card may
+        # legitimately hold the single pending slot while this hold resolves.
         clear_pending_interaction()
     return {
         "ok": True,

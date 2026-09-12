@@ -15,9 +15,10 @@ PLATFORMS = ["boss", "liepin", "zhilian", "51job"]
 
 
 def binding_fixture(revision="rev-1", digest="sha256:aaa", name="后端简历",
-                    confirmed_at="2026-09-08T10:00:00+00:00", resume_id="res-1"):
+                    confirmed_at="2026-09-08T10:00:00+00:00", resume_id="res-1",
+                    binding_id="bind-1"):
     return {
-        "id": "bind-1",
+        "id": binding_id,
         "context_id": "ctx-1",
         "resume_id": resume_id,
         "resume_revision_id": revision,
@@ -273,14 +274,40 @@ def test_round_hold_resumes_in_original_order(fresh_env, monkeypatch):
 # ------------------------------------------------- B/C respond re-checks
 
 
-def test_hold_respond_rechecks_workbench_and_reanchors(fresh_env, monkeypatch):
+@pytest.mark.parametrize("hold_choice", ["pause_platform", "pause_round"])
+def test_held_platform_rejects_non_synced_answers(fresh_env, monkeypatch, hold_choice):
+    platforms = {p: {"status": "pending"} for p in PLATFORMS}
+    platforms["boss"] = {"status": "reviewed"}
+    write_round(binding_fixture(), platforms=platforms)
+    card = freshness.gate_delivery("boss", source=source_fixture())
+    interaction_id = card["interaction"]["interaction_id"]
+    freshness.respond(interaction_id, choice=hold_choice)
+    # Any leak past the guard would hit the cloud recheck and fail loudly.
+    monkeypatch.setattr(
+        freshness.cloud_client, "resume_binding_material",
+        lambda binding_id: pytest.fail("non-synced answers must not reach the recheck"),
+    )
+    result = freshness.respond(interaction_id, choice=hold_choice)
+    assert result["ok"] is False and result["error"] == "invalid_interaction_response"
+    assert "boss" not in freshness.load_baselines()["platforms"]
+    workflow = rounds_mod.round_status()
+    assert workflow["platforms"]["boss"]["status"] == rounds_mod.FRESHNESS_HOLD_STATUS
+    round_hold = workflow["resume_freshness"]["round_hold"]
+    if hold_choice == "pause_round":
+        assert round_hold is not None
+    else:
+        assert round_hold is None
+
+
+def test_hold_respond_revision_mismatch_refuses_without_baseline(fresh_env, monkeypatch):
     platforms = {p: {"status": "pending"} for p in PLATFORMS}
     platforms["boss"] = {"status": "reviewed"}
     write_round(binding_fixture())
     card = freshness.gate_delivery("boss", source=source_fixture())
     interaction_id = card["interaction"]["interaction_id"]
     freshness.respond(interaction_id, choice="pause_platform")
-    # The user confirmed yet another revision while uploading.
+    # Binding ids are frozen snapshots; a different revision for the same id
+    # can only mean server semantics changed. The gate must refuse.
     monkeypatch.setattr(
         freshness.cloud_client,
         "resume_binding_material",
@@ -292,19 +319,9 @@ def test_hold_respond_rechecks_workbench_and_reanchors(fresh_env, monkeypatch):
         },
     )
     result = freshness.respond(interaction_id, choice="synced")
-    assert result["ok"] is False and result["error"] == "resume_freshness_changed_again"
-    assert "9 月 11 日" in result["message"]
-    # No baseline was written and the platform stays held, re-anchored.
+    assert result["ok"] is False and result["error"] == "resume_freshness_revision_mismatch"
     assert "boss" not in freshness.load_baselines()["platforms"]
-    workflow = rounds_mod.round_status()
-    assert workflow["platforms"]["boss"]["status"] == rounds_mod.FRESHNESS_HOLD_STATUS
-    record = workflow["platforms"]["boss"]["resume_freshness"]
-    assert record["revision"]["resume_revision_id"] == "rev-9"
-    assert record["interaction_id"] != interaction_id
-    # Answering the re-anchored id against the same revision resolves.
-    result = freshness.respond(record["interaction_id"], choice="synced")
-    assert result["ok"] is True
-    assert freshness.load_baselines()["platforms"]["boss"]["resume_revision_id"] == "rev-9"
+    assert rounds_mod.round_status()["platforms"]["boss"]["status"] == rounds_mod.FRESHNESS_HOLD_STATUS
 
 
 def test_hold_respond_material_unavailable_keeps_hold(fresh_env, monkeypatch):
@@ -495,3 +512,133 @@ def test_cli_interaction_respond_dispatches_freshness(fresh_env):
     result = _dispatch(args)
     assert result["ok"] is True and result["event"] == "resume_freshness_synced"
     assert freshness.load_baselines()["platforms"]["boss"]["resume_revision_id"] == "rev-1"
+
+
+def test_send_command_preserves_continue_on_failure(fresh_env, monkeypatch):
+    from jobagent.application.resume_freshness import _send_command
+
+    source = source_fixture()
+    assert "--continue-on-failure" not in _send_command("boss", source)
+    source["stop_on_failure"] = False
+    assert _send_command("boss", source).endswith("--continue-on-failure")
+
+
+def test_hold_respond_unwind_keeps_rebound_binding(fresh_env, monkeypatch):
+    from jobagent.infra.cloud_client import CloudError
+
+    platforms = {p: {"status": "pending"} for p in PLATFORMS}
+    platforms["boss"] = {"status": "reviewed"}
+    write_round(binding_fixture(), platforms=platforms)
+    card = freshness.gate_delivery("boss", source=source_fixture())
+    interaction_id = card["interaction"]["interaction_id"]
+    freshness.respond(interaction_id, choice="pause_platform")
+    # While the hold lived, the round re-bound to a different resume binding.
+    rebound = binding_fixture(revision="rev-8", digest="sha256:other", binding_id="bind-2")
+    active = state_mod.load_json(state_mod.current_round_path())
+    active["resume_binding"] = rebound
+    state_mod.save_json(state_mod.current_round_path(), active)
+    monkeypatch.setattr(
+        freshness.cloud_client, "resume_binding_material",
+        lambda binding_id: (_ for _ in ()).throw(
+            CloudError("preparation required", status=409, code="preparation_required")),
+    )
+    result = freshness.respond(interaction_id, choice="synced")
+    assert result["ok"] is False and result["error"] == "resume_binding_paused"
+    active = state_mod.load_json(state_mod.current_round_path())
+    assert active.get("resume_binding") == rebound  # new binding intact
+    assert "resume_freshness" not in active["platforms"]["boss"]
+    assert "--preview-id preview-1" in result["next_suggested"]
+
+
+def test_hold_respond_binding_not_found_unwinds(fresh_env, monkeypatch):
+    from jobagent.infra.cloud_client import CloudError
+
+    platforms = {p: {"status": "pending"} for p in PLATFORMS}
+    platforms["boss"] = {"status": "reviewed"}
+    write_round(binding_fixture(), platforms=platforms)
+    card = freshness.gate_delivery("boss", source=source_fixture())
+    interaction_id = card["interaction"]["interaction_id"]
+    freshness.respond(interaction_id, choice="pause_platform")
+    monkeypatch.setattr(
+        freshness.cloud_client, "resume_binding_material",
+        lambda binding_id: (_ for _ in ()).throw(
+            CloudError("binding gone", status=404, code="resume_binding_not_found")),
+    )
+    result = freshness.respond(interaction_id, choice="synced")
+    assert result["ok"] is False and result["error"] == "resume_binding_paused"
+    active = state_mod.load_json(state_mod.current_round_path())
+    assert not active.get("resume_binding")
+
+
+def test_resolving_one_hold_preserves_another_awaiting_card(fresh_env, monkeypatch):
+    platforms = {p: {"status": "pending"} for p in PLATFORMS}
+    platforms["boss"] = {"status": "reviewed"}
+    platforms["liepin"] = {"status": "reviewed"}
+    write_round(binding_fixture(), platforms=platforms)
+    boss_card = freshness.gate_delivery("boss", source=source_fixture())
+    boss_id = boss_card["interaction"]["interaction_id"]
+    freshness.respond(boss_id, choice="pause_platform")
+    # The agent continues; liepin's gate takes the single pending slot.
+    liepin_card = freshness.gate_delivery("liepin", source=source_fixture())
+    liepin_id = liepin_card["interaction"]["interaction_id"]
+    pending = load_pending_interaction()
+    assert pending is not None and pending["interaction_id"] == liepin_id
+    # Resolving boss's hold by id must not evict liepin's awaiting card.
+    monkeypatch.setattr(
+        freshness.cloud_client,
+        "resume_binding_material",
+        lambda binding_id: {"binding": binding_fixture(), "profile": {}, "profile_digest": "d"},
+    )
+    result = freshness.respond(boss_id, choice="synced")
+    assert result["ok"] is True
+    pending = load_pending_interaction()
+    assert pending is not None and pending["interaction_id"] == liepin_id
+    # Liepin's card still answers normally afterwards.
+    result = freshness.respond(liepin_id, choice="synced")
+    assert result["ok"] is True and result["event"] == "resume_freshness_synced"
+
+
+def test_round_skip_clears_awaiting_card_and_stale_answer_is_rejected(fresh_env):
+    platforms = {p: {"status": "pending"} for p in PLATFORMS}
+    platforms["boss"] = {"status": "reviewed"}
+    write_round(binding_fixture(), platforms=platforms)
+    card = freshness.gate_delivery("boss", source=source_fixture())
+    interaction_id = card["interaction"]["interaction_id"]
+    # The CLI skip path: clear the awaiting record, then mark the platform skipped.
+    freshness.clear_hold("boss")
+    rounds_mod.set_platform_status("boss", "skipped_this_round", command="jobagent round skip")
+    assert load_pending_interaction() is None
+    # No freshness handler claims the stale id anymore.
+    assert freshness.respond(interaction_id, choice="synced") is None
+    assert "boss" not in freshness.load_baselines()["platforms"]
+    # Defense in depth: a stale card that somehow still occupies the slot on a
+    # terminal platform is rejected instead of resurrecting the platform.
+    from jobagent.infra.interaction_state import save_pending_interaction
+
+    save_pending_interaction(card["interaction"], stage=freshness.INTERACTION_KIND,
+                             context={"platform": "boss", "round_id": "r-1"})
+    result = freshness.respond(interaction_id, choice="synced")
+    assert result["ok"] is False and result["error"] == "invalid_interaction_response"
+    assert load_pending_interaction() is None
+    active = state_mod.load_json(state_mod.current_round_path())
+    assert active["platforms"]["boss"]["status"] == "skipped_this_round"
+    assert "resume_freshness" not in active["platforms"]["boss"]
+    assert "boss" not in freshness.load_baselines()["platforms"]
+
+
+def test_cli_round_skip_dispatch_clears_awaiting_card(fresh_env):
+    from jobagent.cli import _dispatch, build_parser
+
+    platforms = {p: {"status": "pending"} for p in PLATFORMS}
+    platforms["boss"] = {"status": "reviewed"}
+    write_round(binding_fixture(), platforms=platforms)
+    card = freshness.gate_delivery("boss", source=source_fixture())
+    interaction_id = card["interaction"]["interaction_id"]
+    parser = build_parser()
+    args = parser.parse_args(["round", "skip", "--platform", "boss", "--confirm-skip"])
+    result = _dispatch(args)
+    assert result["ok"] is True
+    active = state_mod.load_json(state_mod.current_round_path())
+    assert active["platforms"]["boss"]["status"] == "skipped_this_round"
+    assert "resume_freshness" not in active["platforms"]["boss"]
+    assert load_pending_interaction() is None

@@ -1805,8 +1805,9 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 "message": "Explicitly confirm skipping this platform for the current round.",
             }
         # An explicitly skipped platform is the escape hatch out of a resume
-        # freshness hold: drop its hold instead of asserting the turn (which
-        # the hold itself would reject).
+        # freshness card or hold: drop its record instead of asserting the
+        # turn (which the hold itself would reject) — otherwise a stale
+        # awaiting card could resurrect the skipped platform when answered.
         from jobagent.infra.rounds import FRESHNESS_HOLD_STATUS
         from jobagent.infra.state import current_round_path, load_json
 
@@ -1815,7 +1816,9 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
         owns_round_hold = (skip_state.get("resume_freshness_round_hold") or {}).get(
             "platform"
         ) == args.platform
-        if str(skip_item.get("status") or "") == FRESHNESS_HOLD_STATUS or owns_round_hold:
+        has_freshness_record = isinstance(skip_item.get("resume_freshness"), dict)
+        if str(skip_item.get("status") or "") == FRESHNESS_HOLD_STATUS or owns_round_hold \
+                or has_freshness_record:
             from jobagent.application.resume_freshness import clear_hold
 
             clear_hold(args.platform)
