@@ -2,6 +2,22 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.7] - 2026-09-12
+
+### Added
+
+- Pre-delivery resume freshness gate. Platforms send the resume stored in
+  their own backend, so before triggering a send the client now compares the
+  round's bound resume revision against a per-platform last-delivery baseline
+  (account-owned state, isolated per account). A first delivery or a changed
+  revision shows one three-choice card anchored to the confirmation date:
+  synced updates the baseline and proceeds; pause_platform holds only that
+  platform while the agent keeps working the others; pause_round holds the
+  whole round and resumes in the original order after the answer. Holds
+  answer by interaction id, re-check the workbench binding on release, and
+  `jobagent round skip` remains the escape hatch. Unchanged resumes and
+  `--no-resume-binding` rounds stay silent.
+
 ## [0.6.6] - 2026-09-12
 
 ### Fixed
