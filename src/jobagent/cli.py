@@ -133,6 +133,9 @@ def build_parser() -> argparse.ArgumentParser:
             "confirm_all",
             "exclude_jobs",
             "cancel_delivery",
+            "synced",
+            "pause_platform",
+            "pause_round",
         ],
     )
     interaction_respond.add_argument(
@@ -798,6 +801,14 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
 
     interaction_id = str(args.interaction_id or "").strip()
     pending = load_pending_interaction()
+    # 投递前平台简历新鲜度门禁的应答（含挂起后按 id 应答的最终 synced）。
+    # 该门禁的挂起态记在轮次里，即使 pending 槽位已被其他平台的卡占用，
+    # 也必须能按 interaction-id 应答，所以这里无条件先走一次。
+    from jobagent.application.resume_freshness import respond as respond_freshness
+
+    freshness = respond_freshness(interaction_id, choice=str(args.choice or ""))
+    if freshness is not None:
+        return freshness
     if pending and str(pending.get("kind") or "").startswith("delivery_"):
         if str(pending.get("interaction_id") or "") != interaction_id:
             return {
@@ -1793,7 +1804,23 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 "platform": args.platform,
                 "message": "Explicitly confirm skipping this platform for the current round.",
             }
-        assert_platform_turn(args.platform)
+        # An explicitly skipped platform is the escape hatch out of a resume
+        # freshness hold: drop its hold instead of asserting the turn (which
+        # the hold itself would reject).
+        from jobagent.infra.rounds import FRESHNESS_HOLD_STATUS
+        from jobagent.infra.state import current_round_path, load_json
+
+        skip_state = load_json(current_round_path()) or {}
+        skip_item = (skip_state.get("platforms") or {}).get(args.platform) or {}
+        owns_round_hold = (skip_state.get("resume_freshness_round_hold") or {}).get(
+            "platform"
+        ) == args.platform
+        if str(skip_item.get("status") or "") == FRESHNESS_HOLD_STATUS or owns_round_hold:
+            from jobagent.application.resume_freshness import clear_hold
+
+            clear_hold(args.platform)
+        else:
+            assert_platform_turn(args.platform)
         set_platform_status(args.platform, "skipped_this_round", command="jobagent round skip")
         return {"ok": True, "platform": args.platform, "workflow": round_status()}
 

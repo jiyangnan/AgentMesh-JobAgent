@@ -508,6 +508,14 @@ def next_work() -> dict[str, Any]:
     if workflow.get("workflow_complete") or not workflow.get("round_id"):
         return {"ok": True, "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
     platform = workflow["current_platform"]
+    if platform is None:
+        # Every remaining platform is held by the resume freshness gate: the
+        # only forward path is answering its interaction, not issuing work.
+        return {"ok": True, "event": "browser_work_paused", "requires_user_action": True,
+                "request_preserved": True,
+                "message": "所有剩余平台都因简历新鲜度确认挂起；请先同步简历并应答恢复。",
+                "next_suggested": workflow.get("next_suggested") or "jobagent round status",
+                "workflow": workflow}
     active = rounds.ensure_current_round()
     cancelled = active.get("native_cancelled_work", {})
     if cancelled.get("platform") == platform:
@@ -556,6 +564,14 @@ def start_delivery(platform: str, *, input_path: str | None, preview_id: str | N
     if dry_run:
         return {"ok": True, "executor": EXECUTOR, "dry_run": True, "attempted": 0,
                 "reviewed_count": len(reviewed["send_candidates"]), "next_suggested": "jobagent work next"}
+    # Pre-delivery resume freshness gate: the platform sends the resume the
+    # user keeps in ITS backend, so a workbench update the user forgot to
+    # upload would be silently delivered as the old platform copy.
+    from jobagent.application.resume_freshness import gate_delivery
+
+    gate = gate_delivery(platform, source=source, dry_run=dry_run)
+    if gate is not None:
+        return gate
     active = rounds.ensure_current_round()
     existing = active["platforms"][platform].get("native_delivery")
     if existing and existing != source and store.pending_work(_binding(platform)):

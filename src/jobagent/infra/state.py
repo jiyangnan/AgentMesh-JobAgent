@@ -74,6 +74,11 @@ def pending_interaction_path() -> Path:
     return STATE_DIR / "pending_interaction.json"
 
 
+def resume_freshness_path() -> Path:
+    ensure_dirs()
+    return STATE_DIR / "resume_freshness_baselines.json"
+
+
 def rounds_dir() -> Path:
     ensure_dirs()
     ROUNDS_DIR.mkdir(parents=True, exist_ok=True)

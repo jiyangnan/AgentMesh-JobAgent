@@ -383,6 +383,22 @@ def send_reviewed(
             "next_suggested": next_suggested,
             "workflow": rounds.round_status(),
         }
+    # Pre-delivery resume freshness gate, mirroring the native send path.
+    from jobagent.application.resume_freshness import gate_delivery
+
+    gate = gate_delivery(
+        platform,
+        source={
+            "input_path": str(reviewed.get("source_path") or input_path or ""),
+            "preview_id": preview_id,
+            "authorization_id": authorization_id,
+            "limit": len(jobs),
+            "stop_on_failure": stop_on_failure,
+        },
+        dry_run=dry_run,
+    )
+    if gate is not None:
+        return gate
     emit_stage("delivery_started", platform=platform, total=len(jobs), dry_run=dry_run)
 
     def on_attempt(attempt, index: int, total: int) -> None:
