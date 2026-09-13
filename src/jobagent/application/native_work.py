@@ -141,6 +141,17 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
 def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     from jobagent.infra.codex_skill import skill_contract
     work = dict(work)
+    if work.get("state") == "closed" and (work.get("result") or {}).get("outcome") == "cancelled":
+        # A cancelled work is settled: begin is a no-op on a closed row and no
+        # new receipt can ever land on it, so presenting task contracts or
+        # suggesting begin/submit would only trap the host in a dead loop.
+        # Route to the platform gate; recovery is an explicit re-login (which
+        # re-issues the page under a fresh generation key) or a round skip.
+        return {"ok": True, "event": "browser_work_cancelled", "requires_user_action": True,
+                "request_preserved": True, "work_id": work["work_id"],
+                "user_prompt": (f"本平台的浏览器任务已按你的确认取消，未执行后续投递。若要结束本平台，请明确确认跳过；"
+                                f"若要恢复本平台，可重新运行 jobagent {work['binding']['platform']} login。已有回执与本轮进度会保留。"),
+                "workflow": rounds.round_status(), "next_suggested": "jobagent round status"}
     task = dict(work.get("task") or {})
     task["rules"] = list(RULES)
     _delivery_contract(work, task)
@@ -305,6 +316,16 @@ def request_discovery(platform: str) -> dict[str, Any]:
     session = _session()
     if platform not in session.get("accounts", {}):
         return request_login(platform)
+    cancelled = rounds.ensure_current_round().get("native_cancelled_work", {})
+    if cancelled.get("platform") == platform:
+        # An explicit discover must honor a user-confirmed cancellation exactly
+        # like `work next` does; without this gate discovery walked straight
+        # into the cancelled collect row and could only loop on a dead task.
+        return {"ok": True, "event": "browser_work_cancelled", "requires_user_action": True,
+                "request_preserved": True, "work_id": cancelled["work_id"],
+                "user_prompt": (f"本平台的浏览器任务已按你的确认取消，未执行后续投递。若要结束本平台，请明确确认跳过；"
+                                f"若要恢复本平台，可重新运行 jobagent {platform} login。已有回执与本轮进度会保留。"),
+                "workflow": rounds.round_status(), "next_suggested": "jobagent round status"}
     from jobagent.application.native_discovery import start_discovery
     response = start_discovery(platform, session["id"])
     return present(response["work"]) if response.get("work") else response
@@ -431,8 +452,9 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         if result.get("reason") not in {"login_required", "verification_required", "challenge", "permission_required", "session_unknown"}:
             _error("native_pause_reason_invalid", "Use a declared user-intervention reason.")
         result["outcome"] = "uncertain"
-    # Closed replay is checked by the ledger before current-time validation. This
-    # also repairs a crash between ledger commit and workflow/checkpoint advancement.
+    # Only an identical-receipt replay passes the ledger's closed check (a new
+    # receipt raises browser_work_closed); replay skips current-time validation
+    # on purpose and repairs a crash between ledger commit and checkpoint advance.
     if work["state"] == "closed":
         closed = store.submit_work(work_id, binding, result)
         return _continue(closed)
@@ -497,6 +519,10 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
         active["browser_executor"] = EXECUTOR
     elif action == "inspect_session":
         active["native_session"].setdefault("accounts", {})[platform] = result["evidence"]["account_label"]
+        if active.get("native_cancelled_work", {}).get("platform") == platform:
+            # A verified re-login is the explicit user-driven recovery the
+            # cancel gate promises; it must actually clear that gate.
+            del active["native_cancelled_work"]
         item = active["platforms"][platform]
         if item["status"] in {"pending", "active", "blocked", "login_verified"}:
             item.update(status="login_verified", next_suggested=f"jobagent {platform} discover")
