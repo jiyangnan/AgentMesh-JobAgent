@@ -2,6 +2,24 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.9] - 2026-09-13
+
+### Fixed
+
+- Cancelled collection work deadlocking discovery. Cancelling a browser
+  collection task (`jobagent work cancel --confirm-cancel`) closed its
+  ledger row, but discovery kept routing back into that dead task — or,
+  after a crash between the ledger commit and the round save, silently
+  issued fresh collection work as if the user had never cancelled. A
+  cancelled platform now stops at an explicit gate: finish it with a
+  confirmed round skip, or recover it by re-running login, which clears
+  the gate and re-issues the page as fresh work with attempts reset.
+  Closed work rejects every new receipt, so committed evidence can no
+  longer be replaced after close, while the identical-receipt replay
+  that repairs a crash between ledger commit and checkpoint advance
+  still lands. Cancel bookkeeping lost to a crash is rebuilt from the
+  ledger itself at the login, discovery and next-work entries.
+
 ## [0.6.8] - 2026-09-13
 
 ### Fixed
