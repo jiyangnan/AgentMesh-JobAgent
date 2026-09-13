@@ -380,6 +380,13 @@ def submit_work(work_id, binding, result: dict) -> dict:
             work["receipt_replayed"] = True
             return work
         if work["state"] == "closed":
+            # A closed work is settled: only the identical-receipt replay above
+            # is accepted. Any NEW receipt — even a plausible "success" or
+            # "page_collected" — is refused so committed evidence can never be
+            # replaced after close. Exhausted-but-uncancelled read-only work
+            # settles while still open (state reconcile_only) through the
+            # application's validated submit path; cancelled work is recovered
+            # through the platform gate (re-login or skip), never a new receipt.
             raise _error("browser_work_closed",
                          "This browser work is already closed; its result is preserved.")
         if work["state"] == "ready":

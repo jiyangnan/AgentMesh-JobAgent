@@ -613,6 +613,183 @@ def test_closed_replay_submit_after_expiry_renews_and_advances(env, monkeypatch)
     assert len(env.renewals) == 1 and len(env.starts) == 1
 
 
+def test_cancelled_collect_work_gates_discovery_until_relogin_or_skip(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-cancel-gate")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    # Exhaust the three observation attempts, then the user cancels through the
+    # product path (round bookkeeping included, like the real incident).
+    ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    cancelled = native_work.cancel(first["work_id"], confirmed=True)
+    assert cancelled["event"] == "browser_work_cancelled"
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    # An explicit discover must honor the cancellation gate BEFORE touching the
+    # expired plan: no renewal, no dead collect row re-presented for begin/submit.
+    response = native_work.request_discovery("boss")
+    assert response["event"] == "browser_work_cancelled" and response["requires_user_action"] is True
+    assert "明确确认跳过" in response["user_prompt"] and "jobagent boss login" in response["user_prompt"]
+    assert response.get("work") is None and response["next_suggested"] == "jobagent round status"
+    assert env.renewals == [] and len(env.starts) == 1
+    row = ledger.get_work(first["work_id"], first["binding"])
+    assert row["state"] == "closed" and row["result"]["outcome"] == "cancelled"
+
+
+def test_relogin_recovers_cancelled_page_with_fresh_generation_row(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-relogin")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    native_work.cancel(first["work_id"], confirmed=True)
+    assert native_work.request_discovery("boss")["event"] == "browser_work_cancelled"
+    env.active["platforms"]["boss"] = {"status": "active"}
+    # Serial pacing is exercised by its own tests; this one walks gate recovery.
+    monkeypatch.setattr(native_work, "MIN_ACTION_INTERVAL_SECONDS", 0)
+    # The gate's promised recovery: a verified re-login clears the platform
+    # gate, and the cancelled page re-issues under a fresh generation key.
+    monkeypatch.setattr(existing.rounds, "round_status",
+        lambda: {"round_id": "round-test", "current_platform": "boss",
+                 "platforms": {"boss": {"status": "login_verified"}}})
+    login = native_work.request_login("boss")
+    inspected = native_work.begin(login["work"]["work_id"])["work"]
+    assert inspected["action"] == "inspect_session" and inspected["state"] == "intent_recorded"
+    verified = {"receipt_id": "receipt-login-verified", "nonce": inspected["nonce"],
+        "binding": copy.deepcopy(inspected["binding"]), "outcome": "success",
+        "evidence": {"source": "host_ui_observation",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observation": "Synthetic account area with resume activity",
+            "page_url": "https://www.zhipin.com/user/profile", "login_state": "authenticated",
+            "account_label": "Synthetic user", "account_navigation": True, "resume_or_activity": True,
+            "window_reference": "chrome-window-1", "profile_label": "Test profile"}}
+    path = env.tmp_path / "result-login.json"
+    path.write_text(json.dumps(verified), encoding="utf-8")
+    native_work.submit(inspected["work_id"], str(path))
+    assert "native_cancelled_work" not in env.active
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    response = native_work.request_discovery("boss")
+    fresh = response["work"]
+    assert fresh["work_id"] != first["work_id"] and fresh["state"] == "ready"
+    assert fresh["observation_attempts"] == 0 and fresh["nonce"] is None
+    assert (fresh["task"]["query_index"], fresh["task"]["page"]) == (0, 1)
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+
+
+def test_cancel_before_begin_gates_discovery_without_dead_row_loop(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-cancel-ready")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    # The user cancels before any begin: the closed row keeps nonce NULL and
+    # could never take a receipt, so presenting begin/submit would loop forever.
+    native_work.cancel(first["work_id"], confirmed=True)
+    row = ledger.get_work(first["work_id"], first["binding"])
+    assert row["state"] == "closed" and row["nonce"] is None and row["observation_attempts"] == 0
+    response = native_work.request_discovery("boss")
+    assert response["event"] == "browser_work_cancelled" and response.get("work") is None
+    # Defense in depth: presenting the dead row itself routes to the gate.
+    direct = native_work.present(ledger.get_work(first["work_id"], first["binding"]))
+    assert direct["event"] == "browser_work_cancelled" and direct.get("work") is None
+    assert direct["next_suggested"] == "jobagent round status"
+
+
+@pytest.mark.parametrize("entry", ["discover", "next", "login"])
+def test_crash_between_cancel_commit_and_round_save_rebuilds_gate(env, monkeypatch, entry):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-cancel-crash")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    before = copy.deepcopy(env.active)
+    def crash(value):
+        raise OSError("simulated crash after the ledger commit")
+    monkeypatch.setattr(existing.rounds, "save_round", crash)
+    with pytest.raises(OSError):
+        native_work.cancel(first["work_id"], confirmed=True)
+    # The ledger commit is durable but the process died before the round
+    # mutation did: roll the in-memory round back to its pre-cancel state.
+    env.active.clear()
+    env.active.update(copy.deepcopy(before))
+    monkeypatch.setattr(existing.rounds, "save_round", lambda value: None)
+    if entry != "login":
+        monkeypatch.setattr(existing.rounds, "round_status",
+            lambda: {"round_id": "round-test", "current_platform": "boss",
+                     "platforms": {"boss": {"status": "login_verified"}}})
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    response = (native_work.request_discovery("boss") if entry == "discover"
+        else native_work.next_work() if entry == "next" else native_work.request_login("boss"))
+    # The gate is rebuilt from the authoritative ledger: a lost round save can
+    # no longer be bypassed by a fresh generation key without a verified re-login.
+    assert env.active["native_cancelled_work"] == {"work_id": first["work_id"], "platform": "boss"}
+    assert first["work_id"] in env.active["native_processed_work"]
+    assert env.renewals == []
+    if entry == "login":
+        # An explicit login IS the gate's promised recovery path: it proceeds to
+        # the inspect_session work instead of re-presenting the dead collect row.
+        assert response["event"] == "browser_work_required"
+        assert response["work"]["action"] == "inspect_session"
+    else:
+        assert response["event"] == "browser_work_cancelled" and response["requires_user_action"] is True
+        assert response["work_id"] == first["work_id"] and response.get("work") is None
+    fresh = [w for w in ledger.list_work(first["binding"])
+             if w["action"] == "collect_search_page" and w["work_id"] != first["work_id"]]
+    assert fresh == []
+
+
+def test_closed_work_rejects_all_new_receipts_and_keeps_replay(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-closed-guard")
+    _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    cancelled = ledger.cancel_unexecuted(first["work_id"], first["binding"])
+    # A closed row never takes a NEW receipt — no outcome, not even a plausible
+    # duplicate "page_collected" or "success".
+    for index, outcome in enumerate(("success", "page_collected", "uncertain")):
+        attempt = {"receipt_id": f"receipt-after-close-{index}", "nonce": begun["nonce"],
+                   "binding": copy.deepcopy(cancelled["binding"]), "outcome": outcome,
+                   "evidence": {"source": "host_ui_observation",
+                                "observed_at": datetime.now(timezone.utc).isoformat(),
+                                "observation": "Synthetic late observation"}}
+        with pytest.raises(ledger.BrowserWorkError) as error:
+            ledger.submit_work(cancelled["work_id"], cancelled["binding"], attempt)
+        assert error.value.payload["error"] == "browser_work_closed"
+    # Committed evidence on a closed read-only work can never be overwritten.
+    inspect = ledger.ensure_work(action="inspect_session", task={"probe": 1},
+        binding=copy.deepcopy(cancelled["binding"]), side_effect=False, key="inspect:probe")
+    begun_inspect = ledger.begin_work(inspect["work_id"], inspect["binding"])
+    settled = {"receipt_id": "receipt-inspect-1", "nonce": begun_inspect["nonce"],
+               "binding": copy.deepcopy(inspect["binding"]), "outcome": "success",
+               "evidence": {"resume_state": "sent"}}
+    closed = ledger.submit_work(inspect["work_id"], inspect["binding"], settled)
+    assert closed["state"] == "closed" and closed["result"]["evidence"]["resume_state"] == "sent"
+    with pytest.raises(ledger.BrowserWorkError) as error:
+        ledger.submit_work(inspect["work_id"], inspect["binding"],
+            {**settled, "receipt_id": "receipt-inspect-2",
+             "evidence": {"resume_state": "not_sent"}})
+    assert error.value.payload["error"] == "browser_work_closed"
+    # The identical-receipt replay that repairs a crash between ledger commit
+    # and checkpoint advance still lands on the closed row.
+    replayed = ledger.submit_work(inspect["work_id"], inspect["binding"], settled)
+    assert replayed.get("receipt_replayed") is True
+    assert replayed["result"]["evidence"]["resume_state"] == "sent"
+    # A settled side-effect work is equally closed to later receipts.
+    side = ledger.ensure_work(action="send_greeting", task={"job_id": "job-1"},
+        binding=copy.deepcopy(cancelled["binding"]), side_effect=True, key="greet:job-1")
+    begun_side = ledger.begin_work(side["work_id"], side["binding"])
+    ledger.submit_work(side["work_id"], side["binding"],
+        {"receipt_id": "receipt-side-1", "nonce": begun_side["nonce"],
+         "binding": copy.deepcopy(side["binding"]), "outcome": "success"})
+    with pytest.raises(ledger.BrowserWorkError) as error:
+        ledger.submit_work(side["work_id"], side["binding"],
+            {"receipt_id": "receipt-side-2", "nonce": begun_side["nonce"],
+             "binding": copy.deepcopy(side["binding"]), "outcome": "success"})
+    assert error.value.payload["error"] == "browser_work_closed"
+
+
 def test_pending_decision_resume_renews_after_ttl_expiry(env, monkeypatch):
     first = native.start_discovery("zhilian", "session-test")["work"]
     original = existing.cloud_client.discovery_decide
@@ -811,3 +988,4 @@ def test_bound_discovery_profile_incomplete_keeps_binding(env, monkeypatch):
     assert details["next_suggested"] == "jobagent boss discover"
     assert "工作台" in details["message"]
     assert env.active.get("resume_binding", {}).get("id") == "binding-1"
+

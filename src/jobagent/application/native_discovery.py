@@ -428,8 +428,19 @@ def _advance(platform: str, session_id: str, plan: dict, progress: dict, binding
     page = _next_page(plan, progress)
     if page is not None:
         task = _task(plan, progress, *page)
+        # A user-cancelled page leaves its closed row under the generation-0
+        # key; only a fresh-generation key can re-issue that page after the
+        # cancel gate is cleared by a verified re-login. Settled pages never
+        # return here because the checkpoint advances past them.
+        generation = sum(
+            1 for prior in browser_work.list_work(binding)
+            if prior.get("action") == "collect_search_page" and prior.get("state") == "closed"
+            and (prior.get("result") or {}).get("outcome") == "cancelled"
+            and (prior.get("task") or {}).get("query_index") == page[0]
+            and (prior.get("task") or {}).get("page") == page[1])
+        key = f"collect:{page[0]}:{page[1]}" + (f":{generation}" if generation else "")
         return _response(browser_work.ensure_work(action="collect_search_page", task=task, binding=binding, side_effect=False,
-                          key=f"collect:{page[0]}:{page[1]}"))
+                          key=key))
     if not progress["candidates"]:
         return {"ok": False, "error": "no_candidates", "platform": platform,
                 "request_id": binding["request_id"], "discover_id": binding["discover_id"],
@@ -568,9 +579,16 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
     plan, progress, binding = _verify_checkpoint(platform, profile=profile, active=active, context=context, session_id=session_id, renew=True)
     # A process may die after ledger submission but before checkpointing. Replay
     # only an already-closed exact-binding work, never repeat its browser action.
+    # A cancelled observation leaves a placeholder result that is not a
+    # collectable page and is never replayed; that page re-issues only after the
+    # platform's cancel gate is cleared by a verified re-login, under a fresh
+    # generation key.
     for work in browser_work.list_work(binding):
-        if work.get("action") == "collect_search_page" and work.get("state") == "closed" and work.get("result") and work["work_id"] not in progress["native"]["receipts"]:
-            return accept_page(work, work["result"])
+        result = work.get("result")
+        if (work.get("action") == "collect_search_page" and work.get("state") == "closed"
+                and isinstance(result, dict) and result.get("outcome") == "page_collected"
+                and work["work_id"] not in progress["native"]["receipts"]):
+            return accept_page(work, result)
     return _advance(platform, session_id, plan, progress, binding, profile, active)
 
 
