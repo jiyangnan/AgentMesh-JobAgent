@@ -593,10 +593,11 @@ def _source_evidence(items: Any, value: str, sources: set[str], *, city: bool, p
 def refresh_collection(work: dict) -> None:
     """Renew a preserved expired SearchPlan before validation re-checks it.
 
-    ``validate_page`` and ``accept_page`` never renew on their own, so without
-    this refresh a mid-collection TTL expiry deadlocks submit against
-    discovery. Renewal is free and scope-preserving; this changes no ledger
-    state and only persists the verified renewed checkpoint.
+    ``validate_page`` stays renewal-free; ``accept_page`` and the submit path
+    delegate their pre-validation renewal to this helper so a mid-collection
+    TTL expiry never deadlocks submit against discovery. Renewal is free and
+    scope-preserving; this changes no ledger state and only persists the
+    verified renewed checkpoint.
     """
     binding = work.get("binding") or {}
     platform, session_id = binding.get("platform"), binding.get("session_id")
