@@ -191,6 +191,10 @@ def test_expired_checkpoint_renews_same_plan_without_replaying_completed_pages(a
     def renew(**kwargs):
         new = signed_plan(request_id)
         new.pop("signature")
+        # The real server bumps these signed bookkeeping counters on renewal;
+        # only the scope digest may ignore them.
+        new["reissued"] = 1
+        new["plan_revision"] = 2
         new["renewal"] = {"reason": "search_plan_expired", "request_id": request_id, "discover_id": "dis-test",
             "request_preserved": True, "same_request_id": True, "same_discover_id": True, "additional_charge_on_renewal": False}
         if change_scope:

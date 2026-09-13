@@ -281,10 +281,23 @@ def request_login(platform: str, *, diagnose: bool = False) -> dict[str, Any]:
     return present(work)
 
 
+def _renewable_collection(work: dict[str, Any]) -> bool:
+    """Whether re-entering discovery should renew instead of re-presenting work.
+
+    Open, unpaused collection work rides the discovery resume path so an
+    expired SearchPlan renews (same request, no charge). Paused or uncertain
+    work must stay presented for the user; other actions never re-enter.
+    """
+    result = work.get("result") or {}
+    return (work.get("action") == "collect_search_page"
+            and not result.get("requires_user_action")
+            and result.get("outcome") != "uncertain")
+
+
 def request_discovery(platform: str) -> dict[str, Any]:
     binding = _binding(platform)
     pending = store.pending_work(binding)
-    if pending:
+    if pending and not _renewable_collection(pending):
         return present(pending)
     session_request = ensure_session(platform)
     if session_request:
@@ -442,7 +455,10 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         if result["outcome"] == "success" and (e.get("login_state") != "authenticated" or not e.get("account_label") or e.get("account_navigation") is not True or e.get("resume_or_activity") is not True):
             _error("native_login_unverified", "Independent account navigation and resume/activity evidence must agree.")
     elif work["action"] == "collect_search_page":
-        from jobagent.application.native_discovery import validate_page
+        from jobagent.application.native_discovery import refresh_collection, validate_page
+        # Renew an expired preserved plan inline so submit never deadlocks
+        # against `discover` (which used to just re-present this same work).
+        refresh_collection(work)
         validate_page(work, result)
     elif work["action"] == "repair_detail":
         from jobagent.application.native_repair import validate_detail
