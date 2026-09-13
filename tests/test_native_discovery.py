@@ -694,6 +694,50 @@ def test_cancel_before_begin_gates_discovery_without_dead_row_loop(env, monkeypa
     assert direct["next_suggested"] == "jobagent round status"
 
 
+@pytest.mark.parametrize("entry", ["discover", "next", "login"])
+def test_crash_between_cancel_commit_and_round_save_rebuilds_gate(env, monkeypatch, entry):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-cancel-crash")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    before = copy.deepcopy(env.active)
+    def crash(value):
+        raise OSError("simulated crash after the ledger commit")
+    monkeypatch.setattr(existing.rounds, "save_round", crash)
+    with pytest.raises(OSError):
+        native_work.cancel(first["work_id"], confirmed=True)
+    # The ledger commit is durable but the process died before the round
+    # mutation did: roll the in-memory round back to its pre-cancel state.
+    env.active.clear()
+    env.active.update(copy.deepcopy(before))
+    monkeypatch.setattr(existing.rounds, "save_round", lambda value: None)
+    if entry != "login":
+        monkeypatch.setattr(existing.rounds, "round_status",
+            lambda: {"round_id": "round-test", "current_platform": "boss",
+                     "platforms": {"boss": {"status": "login_verified"}}})
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    response = (native_work.request_discovery("boss") if entry == "discover"
+        else native_work.next_work() if entry == "next" else native_work.request_login("boss"))
+    # The gate is rebuilt from the authoritative ledger: a lost round save can
+    # no longer be bypassed by a fresh generation key without a verified re-login.
+    assert env.active["native_cancelled_work"] == {"work_id": first["work_id"], "platform": "boss"}
+    assert first["work_id"] in env.active["native_processed_work"]
+    assert env.renewals == []
+    if entry == "login":
+        # An explicit login IS the gate's promised recovery path: it proceeds to
+        # the inspect_session work instead of re-presenting the dead collect row.
+        assert response["event"] == "browser_work_required"
+        assert response["work"]["action"] == "inspect_session"
+    else:
+        assert response["event"] == "browser_work_cancelled" and response["requires_user_action"] is True
+        assert response["work_id"] == first["work_id"] and response.get("work") is None
+    fresh = [w for w in ledger.list_work(first["binding"])
+             if w["action"] == "collect_search_page" and w["work_id"] != first["work_id"]]
+    assert fresh == []
+
+
 def test_closed_work_rejects_all_new_receipts_and_keeps_replay(env, monkeypatch):
     ledger = _real_ledger(env, monkeypatch, "isolated-ledger-closed-guard")
     _wire_native_work(env, monkeypatch, ledger)

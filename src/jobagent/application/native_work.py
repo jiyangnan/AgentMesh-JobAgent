@@ -269,8 +269,40 @@ def ensure_session(platform: str) -> dict[str, Any] | None:
     return present(work)
 
 
+def _recover_collection_cancellations(binding: dict[str, Any]) -> None:
+    """Finish round bookkeeping after a committed cancellation.
+
+    ``cancel`` closes the ledger row first and persists the round gate second;
+    a crash between them would leave an authoritative cancelled row that
+    discovery's generation keys would silently bypass with fresh work. The
+    ledger is the source of truth: rebuild the gate from it. Rows already in
+    ``native_processed_work`` are settled bookkeeping (possibly cleared by a
+    verified re-login) and must not re-arm a gate.
+    """
+    active = rounds.ensure_current_round()
+    processed = active.get("native_processed_work", [])
+    cancelled = [
+        work for work in store.list_work(binding)
+        if work["work_id"] not in processed
+        and work.get("action") == "collect_search_page"
+        and work.get("state") == "closed"
+        and (work.get("result") or {}).get("outcome") == "cancelled"
+    ]
+    if not cancelled:
+        return
+    active.setdefault("native_processed_work", []).extend(
+        work["work_id"] for work in cancelled)
+    last = cancelled[-1]
+    active["native_cancelled_work"] = {
+        "work_id": last["work_id"],
+        "platform": last["binding"]["platform"],
+    }
+    rounds.save_round(active)
+
+
 def request_login(platform: str, *, diagnose: bool = False) -> dict[str, Any]:
     binding = _binding(platform)
+    _recover_collection_cancellations(binding)
     pending = store.pending_work(binding)
     if pending:
         return present(pending)
@@ -307,6 +339,7 @@ def _renewable_collection(work: dict[str, Any]) -> bool:
 
 def request_discovery(platform: str) -> dict[str, Any]:
     binding = _binding(platform)
+    _recover_collection_cancellations(binding)
     pending = store.pending_work(binding)
     if pending and not _renewable_collection(pending):
         return present(pending)
@@ -558,6 +591,7 @@ def next_work() -> dict[str, Any]:
                 "message": "所有剩余平台都因简历新鲜度确认挂起；请先同步简历并应答恢复。",
                 "next_suggested": workflow.get("next_suggested") or "jobagent round status",
                 "workflow": workflow}
+    _recover_collection_cancellations(_binding(platform))
     active = rounds.ensure_current_round()
     cancelled = active.get("native_cancelled_work", {})
     if cancelled.get("platform") == platform:
