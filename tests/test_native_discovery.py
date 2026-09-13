@@ -613,6 +613,86 @@ def test_closed_replay_submit_after_expiry_renews_and_advances(env, monkeypatch)
     assert len(env.renewals) == 1 and len(env.starts) == 1
 
 
+def test_cancelled_collect_work_is_represented_for_a_final_receipt(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-cancelled")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    # Exhaust the three observation attempts, then the user cancels the work;
+    # the ledger keeps the placeholder cancelled result and the preserved nonce.
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    cancelled = ledger.cancel_unexecuted(first["work_id"], first["binding"])
+    assert cancelled["state"] == "closed" and cancelled["result"]["outcome"] == "cancelled"
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    response = native_work.request_discovery("boss")
+    assert response["work"]["work_id"] == first["work_id"]
+    assert response["work"]["allowed_mode"] == "reconcile_only"
+    assert response["next_suggested"].startswith("jobagent work submit")
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+
+
+def test_final_receipt_reconciles_cancelled_collect_and_advances(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-final-receipt")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    cancelled = ledger.cancel_unexecuted(first["work_id"], first["binding"])
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    # The host performs one final verified observation with the preserved nonce.
+    final = receipt(cancelled, final=False)
+    final["receipt_id"] = "receipt-final-" + cancelled["work_id"]
+    final["evidence"].update(observed_at=datetime.now(timezone.utc).isoformat(),
+        observation="Synthetic visible search results page", account_label="Synthetic user",
+        window_reference="chrome-window-1", profile_label="Test profile")
+    path = env.tmp_path / "result-final.json"
+    path.write_text(json.dumps(final), encoding="utf-8")
+    response = native_work.submit(cancelled["work_id"], str(path))
+    assert response["work"]["task"]["page"] == 2
+    assert response["work"]["work_id"] != cancelled["work_id"]
+    assert response["work"]["state"] == "ready" and response["work"]["observation_attempts"] == 0
+    checkpoint = storage.load_collection_checkpoint("boss")["progress"]
+    assert checkpoint["completed_pages"] == [[0, 1]]
+    assert cancelled["work_id"] in checkpoint["native"]["receipts"]
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+
+
+def test_closed_work_rejects_non_final_receipts(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-closed-guard")
+    _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    for _ in range(2):
+        ledger.begin_work(first["work_id"], first["binding"])
+    cancelled = ledger.cancel_unexecuted(first["work_id"], first["binding"])
+    uncertain = {"receipt_id": "receipt-uncertain", "nonce": begun["nonce"],
+                 "binding": copy.deepcopy(cancelled["binding"]), "outcome": "uncertain",
+                 "requires_user_action": True, "reason": "login_required",
+                 "evidence": {"source": "host_ui_observation",
+                              "observed_at": datetime.now(timezone.utc).isoformat(),
+                              "observation": "A login page blocked the search page",
+                              "window_reference": "chrome-window-1", "profile_label": "Test profile"}}
+    with pytest.raises(ledger.BrowserWorkError) as error:
+        ledger.submit_work(cancelled["work_id"], cancelled["binding"], uncertain)
+    assert error.value.payload["error"] == "browser_work_closed"
+    # A settled side-effect work never accepts a later success receipt, even
+    # with a valid nonce: only read-only work may take a final observation.
+    side = ledger.ensure_work(action="send_greeting", task={"job_id": "job-1"},
+        binding=copy.deepcopy(cancelled["binding"]), side_effect=True, key="greet:job-1")
+    begun_side = ledger.begin_work(side["work_id"], side["binding"])
+    settled = ledger.submit_work(side["work_id"], side["binding"],
+        {"receipt_id": "receipt-side-1", "nonce": begun_side["nonce"],
+         "binding": copy.deepcopy(side["binding"]), "outcome": "success"})
+    assert settled["state"] == "closed"
+    with pytest.raises(ledger.BrowserWorkError) as error:
+        ledger.submit_work(side["work_id"], side["binding"],
+            {"receipt_id": "receipt-side-2", "nonce": begun_side["nonce"],
+             "binding": copy.deepcopy(side["binding"]), "outcome": "success"})
+    assert error.value.payload["error"] == "browser_work_closed"
+
+
 def test_pending_decision_resume_renews_after_ttl_expiry(env, monkeypatch):
     first = native.start_discovery("zhilian", "session-test")["work"]
     original = existing.cloud_client.discovery_decide

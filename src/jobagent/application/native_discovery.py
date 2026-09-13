@@ -568,9 +568,15 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
     plan, progress, binding = _verify_checkpoint(platform, profile=profile, active=active, context=context, session_id=session_id, renew=True)
     # A process may die after ledger submission but before checkpointing. Replay
     # only an already-closed exact-binding work, never repeat its browser action.
+    # A cancelled observation leaves a placeholder result that is not a
+    # collectable page; skipping it lets discovery re-present that closed row
+    # for a final reconciling receipt instead of failing validation forever.
     for work in browser_work.list_work(binding):
-        if work.get("action") == "collect_search_page" and work.get("state") == "closed" and work.get("result") and work["work_id"] not in progress["native"]["receipts"]:
-            return accept_page(work, work["result"])
+        result = work.get("result")
+        if (work.get("action") == "collect_search_page" and work.get("state") == "closed"
+                and isinstance(result, dict) and result.get("outcome") == "page_collected"
+                and work["work_id"] not in progress["native"]["receipts"]):
+            return accept_page(work, result)
     return _advance(platform, session_id, plan, progress, binding, profile, active)
 
 

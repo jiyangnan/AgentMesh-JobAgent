@@ -380,8 +380,12 @@ def submit_work(work_id, binding, result: dict) -> dict:
             work["receipt_replayed"] = True
             return work
         if work["state"] == "closed":
-            raise _error("browser_work_closed",
-                         "This browser work is already closed; its result is preserved.")
+            # A read-only work keeps its preserved nonce after cancellation so a
+            # final VERIFIED observation receipt can still settle it; anything
+            # else stays closed with its recorded result preserved.
+            if work["side_effect"] or outcome not in {"success", "page_collected"}:
+                raise _error("browser_work_closed",
+                             "This browser work is already closed; its result is preserved.")
         if work["state"] == "ready":
             raise _error("browser_work_intent_required",
                          "Record execution intent before submitting a browser work receipt.")
