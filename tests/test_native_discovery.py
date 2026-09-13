@@ -592,6 +592,102 @@ def test_closed_receipt_replay_after_expiry_renews_and_advances(env, monkeypatch
     assert len(env.renewals) == 1 and len(env.starts) == 1
 
 
+def test_closed_replay_submit_after_expiry_renews_and_advances(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-closed-submit")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    observed = receipt(begun, final=False)
+    observed["evidence"].update(observed_at=datetime.now(timezone.utc).isoformat(),
+        observation="Synthetic visible search results page", account_label="Synthetic user",
+        window_reference="chrome-window-1", profile_label="Test profile")
+    native.validate_page(begun, observed)
+    # Crash after the ledger commit; later `work submit` takes the closed-replay
+    # shortcut, so ONLY accept_page's refresh can renew the expired plan.
+    ledger.submit_work(begun["work_id"], begun["binding"], observed)
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    path = env.tmp_path / "result-closed-submit.json"
+    path.write_text(json.dumps(observed), encoding="utf-8")
+    response = native_work.submit(begun["work_id"], str(path))
+    assert response["work"]["task"]["page"] == 2
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+
+
+def test_pending_decision_resume_renews_after_ttl_expiry(env, monkeypatch):
+    first = native.start_discovery("zhilian", "session-test")["work"]
+    original = existing.cloud_client.discovery_decide
+    def failure(**kwargs):
+        raise existing.cloud_client.CloudError("Synthetic decision failure", code="network_timeout", retryable=True)
+    monkeypatch.setattr(existing.cloud_client, "discovery_decide", failure)
+    observed = receipt(first)
+    with pytest.raises(existing.cloud_client.CloudError):
+        submit(env, first, observed)
+    assert storage.load_pending_decision("zhilian") is not None
+    # The decide failure is reconciled only after the plan TTL already lapsed;
+    # the checkpoint renewal bumps bookkeeping, so only the scope digest lets
+    # the preserved pending decision resume against the renewed plan.
+    _expire_preserved_plan(env, "zhilian", first["binding"]["request_id"])
+    monkeypatch.setattr(existing.cloud_client, "discovery_decide", original)
+    result = native.accept_page(first, observed)
+    assert result["discover_id"] == first["binding"]["discover_id"]
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+    assert storage.load_pending_decision("zhilian") is None
+    assert len(env.decisions) == 1
+
+
+def test_renewal_with_rotated_top_level_discover_id_is_rejected(env, monkeypatch):
+    first = native.start_discovery("boss", "session-test")["work"]
+    original = existing.cloud_client.discovery_renew
+    def rotating(**kwargs):
+        plan = original(**kwargs)
+        plan.pop("signature")
+        plan["discover_id"] = "dis-rotated"  # renewal block still self-declares the old id
+        return env.sign(plan)
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    monkeypatch.setattr(existing.cloud_client, "discovery_renew", rotating)
+    with pytest.raises(existing.cloud_client.CloudError) as error:
+        native.start_discovery("boss", "session-test")
+    assert error.value.code == "search_plan_expired_recovery_required"
+    assert error.value.details["renewal_failure_code"] == "renewed_plan_verification_failed"
+
+
+def test_already_expired_fresh_plan_renews_before_first_checkpoint(env, monkeypatch):
+    captured = []
+    def expired_start(**kwargs):
+        captured.append(kwargs["request_id"])
+        return env.make_plan(kwargs["platform"], kwargs["request_id"], expired=True)
+    monkeypatch.setattr(existing.cloud_client, "discovery_start", expired_start)
+    def renew(**kwargs):
+        env.renewals.append(kwargs)
+        request_id = captured[0]
+        plan = env.make_plan("boss", request_id)
+        plan.pop("signature")
+        plan["reissued"] = 1
+        plan["plan_revision"] = 1
+        plan["renewal"] = {"reason": "search_plan_expired", "request_id": request_id,
+            "discover_id": "dis-boss", "request_preserved": True, "same_request_id": True,
+            "same_discover_id": True, "additional_charge_on_renewal": False}
+        return env.sign(plan)
+    monkeypatch.setattr(existing.cloud_client, "discovery_renew", renew)
+    work = native.start_discovery("boss", "session-test")["work"]
+    assert work["action"] == "collect_search_page" and work["task"]["page"] == 1
+    assert len(env.renewals) == 1 and len(captured) == 1
+    renewed = storage.load_collection_checkpoint("boss")["plan"]
+    assert renewed["reissued"] == 1 and "renewal" in renewed
+
+
+def test_corrupted_anchor_digest_fails_closed(env):
+    first = native.start_discovery("boss", "session-test")["work"]
+    checkpoint = storage.load_collection_checkpoint("boss")
+    progress = checkpoint["progress"]
+    progress["native"]["plan_digest"] = "garbage-not-a-digest"
+    storage.save_collection_checkpoint("boss", request_id=first["binding"]["request_id"],
+        plan=checkpoint["plan"], progress=progress)
+    with pytest.raises(CollectionError) as error:
+        native.start_discovery("boss", "session-test")
+    assert error.value.code == "native_checkpoint_invalid"
+
+
 def test_cloud_start_failure_preserves_request_without_ledger_or_charge(env, monkeypatch):
     requests = []
     def failure(**kwargs):
