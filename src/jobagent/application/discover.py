@@ -16,7 +16,7 @@ from jobagent.infra.discovery_state import (
     load_pending_decision,
     load_pending_start,
     load_collection_checkpoint,
-    collection_plan_digest,
+    collection_scope_digest,
     record_collection_recovery,
     save_manifest,
     save_pending_decision,
@@ -275,6 +275,7 @@ def _renew_expired_plan(
             or renewal.get("reason") != "search_plan_expired"
             or renewal.get("request_id") != verified.get("request_id")
             or renewal.get("discover_id") != discover_id
+            or verified.get("discover_id") != discover_id
             or renewal.get("request_preserved") is not True
             or renewal.get("same_request_id") is not True
             or renewal.get("same_discover_id") is not True
@@ -581,7 +582,7 @@ def run_discover(
             request_id=request_id,
             require_request_id=True,
         )
-    if collection is not None and collection_plan_digest(plan) != collection["plan_digest"]:
+    if collection is not None and collection_scope_digest(plan) != collection_scope_digest(collection["plan"]):
         raise CollectionError(
             "collection_checkpoint_plan_mismatch",
             "Renewed SearchPlan changed collection scope; saved progress was not replayed",

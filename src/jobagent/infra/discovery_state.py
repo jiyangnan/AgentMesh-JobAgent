@@ -103,6 +103,20 @@ def collection_plan_digest(plan: dict[str, Any]) -> str:
     })
 
 
+def collection_scope_digest(plan: dict[str, Any]) -> str:
+    """Compare collection scope across renewals; the server bumps only bookkeeping.
+
+    Renewal re-signs the plan and bumps ``reissued``/``plan_revision`` without
+    changing scope. Persisted ``collection_plan_digest`` values must keep their
+    original algorithm (load-time validation), so renewal comparisons use this
+    view instead of widening the persisted exclusion set.
+    """
+    return collection_plan_digest({
+        key: value for key, value in plan.items()
+        if key not in {"reissued", "plan_revision"}
+    })
+
+
 def load_collection_checkpoint(platform: str) -> dict[str, Any] | None:
     pending = load_pending_start(platform)
     checkpoint = pending.get("collection") if pending else None

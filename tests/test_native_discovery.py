@@ -105,6 +105,10 @@ def env(tmp_path, monkeypatch):
         platform = kwargs["platform"]
         old = storage.load_collection_checkpoint(platform)["plan"]
         plan = make_plan(platform, old["request_id"], queries=old["queries"])
+        plan.pop("signature")
+        # The real server bumps these bookkeeping counters on every renewal.
+        plan["reissued"] = int(old.get("reissued") or 0) + 1
+        plan["plan_revision"] = int(old.get("plan_revision") or 0) + 1
         plan["renewal"] = {"reason": "search_plan_expired", "request_id": old["request_id"],
             "discover_id": old["discover_id"], "request_preserved": True, "same_request_id": True,
             "same_discover_id": True, "additional_charge_on_renewal": False}
@@ -396,8 +400,14 @@ def test_expired_plan_renews_same_request_and_scope_without_recollect(env, monke
     else:
         resumed = native.start_discovery("liepin", "session-test")["work"]
         assert resumed["work_id"] == second["work_id"]
+        assert resumed["binding"]["plan_digest"] == first["binding"]["plan_digest"]
         assert resumed["task"]["page"] == 2
         assert len(env.renewals) == 1 and len(env.starts) == 1
+        # Renewal bumped server-managed bookkeeping; the scope guard passed and
+        # the work binding stays anchored to the ORIGINAL plan digest.
+        renewed_plan = storage.load_collection_checkpoint("liepin")["plan"]
+        assert renewed_plan.get("reissued") == 1 and renewed_plan.get("plan_revision") == 1
+        assert resumed["binding"]["plan_digest"] != storage.collection_plan_digest(renewed_plan)
 
 
 def test_old_liepin_checkpoint_reuses_completed_pages_and_candidates(env):
@@ -471,6 +481,115 @@ def test_real_sqlite_ledger_requires_begin_and_replays_after_submit(env, monkeyp
     assert replayed["receipt_replayed"] is True
     assert len(ledger.list_work(first["binding"])) == 2
     assert len(env.starts) == 1 and not env.decisions
+
+
+def _real_ledger(env, monkeypatch, name):
+    import jobagent.infra
+    from jobagent.infra import state
+    path = Path(native.__file__).parents[1] / "infra" / "browser_work.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    ledger = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ledger)
+    monkeypatch.setattr(state, "STATE_DIR", env.tmp_path / name)
+    monkeypatch.setitem(sys.modules, "jobagent.infra.browser_work", ledger)
+    monkeypatch.setattr(jobagent.infra, "browser_work", ledger)
+    return ledger
+
+
+def _wire_native_work(env, monkeypatch, ledger):
+    from jobagent.application import native_work
+    monkeypatch.setattr(native_work, "store", ledger)
+    monkeypatch.setattr(native_work, "current_account_ref", lambda: "account-test")
+    monkeypatch.setattr(existing.rounds, "save_round", lambda value: None)
+    env.active["native_session"].update(window_reference="chrome-window-1",
+        profile_label="Test profile", group_reference="Job Agent",
+        accounts={"boss": "Synthetic user"})
+    return native_work
+
+
+def _expire_preserved_plan(env, platform, request_id):
+    checkpoint = storage.load_collection_checkpoint(platform)
+    expired = env.make_plan(platform, request_id, expired=True)
+    storage.save_collection_checkpoint(platform, request_id=expired["request_id"],
+                                       plan=expired, progress=checkpoint["progress"])
+
+
+def test_preflight_checkpoint_without_anchor_renews_and_keeps_binding(env):
+    first = native.start_discovery("boss", "session-test")["work"]
+    second = submit(env, first, receipt(first, final=False))["work"]
+    legacy_progress = storage.load_collection_checkpoint("boss")["progress"]
+    legacy_progress["native"].pop("plan_digest")  # pre-0.6.8 on-disk shape
+    expired = env.make_plan("boss", first["binding"]["request_id"], expired=True)
+    storage.save_collection_checkpoint("boss", request_id=expired["request_id"],
+                                       plan=expired, progress=legacy_progress)
+    resumed = native.start_discovery("boss", "session-test")["work"]
+    assert resumed["work_id"] == second["work_id"]
+    assert resumed["binding"]["plan_digest"] == first["binding"]["plan_digest"]
+    assert storage.load_collection_checkpoint("boss")["progress"]["native"]["plan_digest"] == first["binding"]["plan_digest"]
+    result = submit(env, resumed, receipt(resumed))
+    assert result["ok"] is True and len(env.renewals) == 1
+
+
+def test_request_discovery_renews_instead_of_representing_expired_collection(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-routing")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    response = native_work.request_discovery("boss")
+    assert response["work"]["work_id"] == first["work_id"]
+    assert response["work"]["binding"]["plan_digest"] == first["binding"]["plan_digest"]
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+
+
+def test_request_discovery_still_presents_paused_collection_work(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-paused")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    paused = {"receipt_id": "receipt-" + begun["work_id"], "nonce": begun["nonce"],
+              "binding": copy.deepcopy(begun["binding"]), "outcome": "uncertain",
+              "requires_user_action": True, "reason": "login_required",
+              "evidence": {"source": "host_ui_observation",
+                           "observed_at": datetime.now(timezone.utc).isoformat(),
+                           "observation": "A login page blocked the search page",
+                           "window_reference": "chrome-window-1", "profile_label": "Test profile"}}
+    ledger.submit_work(begun["work_id"], begun["binding"], paused)
+    response = native_work.request_discovery("boss")
+    assert response["work"]["work_id"] == first["work_id"]
+    assert env.renewals == [] and len(env.starts) == 1
+
+
+def test_submit_renews_expired_plan_inline_and_continues(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-submit")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    observed = receipt(begun, final=False)
+    observed["evidence"].update(observed_at=datetime.now(timezone.utc).isoformat(),
+        observation="Synthetic visible search results page", account_label="Synthetic user",
+        window_reference="chrome-window-1", profile_label="Test profile")
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    path = env.tmp_path / "result-submit.json"
+    path.write_text(json.dumps(observed), encoding="utf-8")
+    response = native_work.submit(begun["work_id"], str(path))
+    assert response["work"]["task"]["page"] == 2
+    assert len(env.renewals) == 1 and len(env.starts) == 1
+
+
+def test_closed_receipt_replay_after_expiry_renews_and_advances(env, monkeypatch):
+    ledger = _real_ledger(env, monkeypatch, "isolated-ledger-replay")
+    native_work = _wire_native_work(env, monkeypatch, ledger)
+    first = native.start_discovery("boss", "session-test")["work"]
+    begun = ledger.begin_work(first["work_id"], first["binding"])
+    observed = receipt(begun, final=False)
+    native.validate_page(begun, observed)
+    # Crash after the ledger commit but before checkpoint advancement.
+    ledger.submit_work(begun["work_id"], begun["binding"], observed)
+    _expire_preserved_plan(env, "boss", first["binding"]["request_id"])
+    response = native_work.request_discovery("boss")
+    assert response["work"]["task"]["page"] == 2
+    assert response["work"]["work_id"] != first["work_id"]
+    assert len(env.renewals) == 1 and len(env.starts) == 1
 
 
 def test_cloud_start_failure_preserves_request_without_ledger_or_charge(env, monkeypatch):

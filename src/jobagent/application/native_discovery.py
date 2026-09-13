@@ -251,6 +251,12 @@ def _progress(platform: str, checkpoint: dict, session_id: str) -> dict:
                 or not isinstance(receipt.get("digest"), str)
                 or tuple(receipt.get("page", [])) not in pages):
             _fail("native_checkpoint_invalid", "Saved native receipt is invalid", platform=platform)
+    # Anchor the ORIGINAL plan digest: renewals bump reissued/plan_revision and
+    # would otherwise change every re-derived binding. Checkpoints saved before
+    # this anchor existed fall back to the checkpoint's own (never-renewed) digest.
+    anchor = native.setdefault("plan_digest", checkpoint["plan_digest"])
+    if not isinstance(anchor, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", anchor):
+        _fail("native_checkpoint_invalid", "Saved native plan binding is invalid", platform=platform)
     return {"candidates": candidates, "completed_pages": [list(p) for p in sorted(pages)],
             "exhausted_queries": sorted(exhausted), "native": native}
 
@@ -274,12 +280,15 @@ def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: d
         plan = existing._renew_expired_plan(platform, expired_plan=exc.signed_plan, profile=profile,
                     round_intent=active.get("intent"), request_id=pending["request_id"])
         verified = verify_search_plan(plan, **kwargs)
-        if storage.collection_plan_digest(plan) != checkpoint["plan_digest"]:
+        if storage.collection_scope_digest(plan) != storage.collection_scope_digest(checkpoint["plan"]):
             _fail("collection_checkpoint_plan_mismatch", "Renewal changed the saved collection scope", platform=platform)
     if any(not str(query.get("city") or "").strip() for query in verified["queries"]):
         _fail("native_target_city_required", "Every native query requires a signed readable target city", platform=platform)
     progress = _progress(platform, checkpoint, session_id)
     binding = _binding(context, session_id, pending["request_id"], plan)
+    # Bind work to the ORIGINAL scope digest so a renewal never invalidates
+    # in-flight work receipts (validate_page compares bindings for equality).
+    binding["plan_digest"] = progress["native"]["plan_digest"]
     if renew and (plan != checkpoint["plan"] or progress != checkpoint["progress"]):
         storage.save_collection_checkpoint(platform, request_id=pending["request_id"], plan=plan, progress=progress)
     return plan, progress, binding
@@ -454,7 +463,7 @@ def _resume_decision(platform: str, session_id: str, profile: dict, active: dict
         saved_plan, progress, binding = _verify_checkpoint(platform, profile=profile, active=active,
             context=context, session_id=session_id, renew=True)
         if (binding["request_id"] != request_id or binding["discover_id"] != pending["discover_id"]
-                or storage.collection_plan_digest(saved_plan) != storage.collection_plan_digest(plan)
+                or storage.collection_scope_digest(saved_plan) != storage.collection_scope_digest(plan)
                 or jobs != progress["candidates"]):
             _fail("native_pending_decision_mismatch", "The pending decision differs from the preserved collection", platform=platform,
                   no_charge=False, billing_status="response_pending_reconciliation")
@@ -467,7 +476,7 @@ def _resume_decision(platform: str, session_id: str, profile: dict, active: dict
         plan = existing._renew_expired_plan(platform, expired_plan=exc.signed_plan, profile=profile,
                     round_intent=active.get("intent"), request_id=request_id)
         verified = verify_search_plan(plan, **kwargs)
-        if storage.collection_plan_digest(plan) != storage.collection_plan_digest(pending["plan"]):
+        if storage.collection_scope_digest(plan) != storage.collection_scope_digest(pending["plan"]):
             _fail("collection_checkpoint_plan_mismatch", "Renewal changed the collected decision scope", platform=platform,
                   no_charge=False, billing_status="response_pending_reconciliation")
     if plan != pending["plan"] or jobs != pending["jobs"]:
@@ -551,7 +560,7 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
             plan = existing._renew_expired_plan(platform, expired_plan=exc.signed_plan, profile=profile,
                 round_intent=active.get("intent"), request_id=request_id)
             verify_search_plan(plan, platform=platform, profile=profile, round_intent=active.get("intent"), request_id=request_id, require_request_id=True)
-            if storage.collection_plan_digest(plan) != storage.collection_plan_digest(original):
+            if storage.collection_scope_digest(plan) != storage.collection_scope_digest(original):
                 _fail("collection_checkpoint_plan_mismatch", "Renewal changed the initial signed scope", platform=platform)
         storage.save_collection_checkpoint(platform, request_id=request_id, plan=plan,
             progress={"candidates": [], "completed_pages": [], "exhausted_queries": [],
@@ -579,6 +588,25 @@ def _source_evidence(items: Any, value: str, sources: set[str], *, city: bool, p
         seen.add(item["source"])
     if len(seen) < 2 or (not city and "search_input" not in seen):
         _fail("native_search_evidence_missing", "Evidence sources are not independent", platform=platform)
+
+
+def refresh_collection(work: dict) -> None:
+    """Renew a preserved expired SearchPlan before validation re-checks it.
+
+    ``validate_page`` and ``accept_page`` never renew on their own, so without
+    this refresh a mid-collection TTL expiry deadlocks submit against
+    discovery. Renewal is free and scope-preserving; this changes no ledger
+    state and only persists the verified renewed checkpoint.
+    """
+    binding = work.get("binding") or {}
+    platform, session_id = binding.get("platform"), binding.get("session_id")
+    if work.get("action") != "collect_search_page":
+        _fail("native_page_binding_mismatch", "Work differs from the preserved collection", platform=platform)
+    profile, active, context = _context(platform, session_id)
+    _, _, expected = _verify_checkpoint(platform, profile=profile, active=active, context=context,
+                                        session_id=session_id, renew=True)
+    if binding != expected:
+        _fail("native_page_binding_mismatch", "Work differs from the preserved collection", platform=platform)
 
 
 def validate_page(work: dict, result: dict) -> dict[str, Any]:
@@ -670,6 +698,9 @@ def accept_page(work: dict, result: dict) -> dict[str, Any]:
         if pending.get("discover_id") != binding.get("discover_id") or pending.get("request_id") != binding.get("request_id"):
             _fail("native_page_binding_mismatch", "Closed page differs from the pending decision", platform=platform)
         return _resume_decision(platform, session_id, profile, active)
+    # A closed work may be replayed long after its plan expired (crash between
+    # ledger commit and checkpoint advance); renew before re-validating it.
+    refresh_collection(work)
     normalized = validate_page(work, result)
     plan, progress, expected = _verify_checkpoint(platform, profile=profile, active=active, context=context, session_id=session_id, renew=False)
     if not normalized["duplicate"]:
