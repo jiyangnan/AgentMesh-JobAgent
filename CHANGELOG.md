@@ -2,6 +2,22 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.8] - 2026-09-13
+
+### Fixed
+
+- Collection renewal deadlock. A long-running search collection can outlive
+  the signed plan's 30-minute TTL; renewal used to shift the persisted plan
+  digest, so the checkpoint guard rejected the renewed plan and the client
+  looped between re-presenting the expired plan and failing to submit it —
+  without charge, but also without progress. Renewal comparison now uses a
+  scope digest that ignores only the bookkeeping counters the server bumps on
+  renewal (`reissued`, `plan_revision`), native work bindings stay anchored to
+  the original plan digest across renewals, and expired pending collection
+  work renews in place (same request and discover id, no additional charge, no
+  page recollection) instead of being re-presented. Checkpoints saved by
+  earlier versions load unchanged.
+
 ## [0.6.7] - 2026-09-12
 
 ### Added
