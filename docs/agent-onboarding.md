@@ -12,6 +12,20 @@ invent tool APIs. Use one approved Chrome session throughout login, search,
 details, confirmed delivery and receipt verification, normally reusing a list tab
 and a detail/conversation tab. All real browser work is serial.
 
+Finish each CLI process before advancing: retain a running host process handle,
+collect its output until exit, and parse the complete final response rather than
+empty/partial chunks or progress events. Do not run another work command while
+the first is still running. If its result cannot be recovered, use read-only
+status/reconciliation; a timeout alone is not a terminal delivery outcome.
+
+Technical page or job-identity inconsistencies use the task's
+`blocked_result_schema` (`requires_technical_recovery=true`), not a login or
+window-reset prompt. Stop normal delivery and preserve the work/request for
+diagnosis. A split-pane heading and its detail link must identify the same job;
+never combine stale links with newly selected descriptions. Resume only through
+the returned recovery command and its current permissions. Existing side-effect
+intents remain read-only; no recovery may reopen terminal outcomes.
+
 For each task, run `jobagent work begin --work-id ID` before performing the
 permitted browser action, then submit observed facts with
 `jobagent work submit --work-id ID --result FILE`. Copy the returned binding and

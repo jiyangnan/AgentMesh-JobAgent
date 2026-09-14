@@ -368,7 +368,7 @@ def test_observation_limit_recovery_still_accepts_final_receipt(env):
     status = native.request_login("boss")
     assert status["next_suggested"].startswith("jobagent work submit")
     assert status["work"]["allowed_mode"] == "reconcile_only"
-    assert "关闭多余的 Chrome 窗口" in status["user_prompt"]
+    assert "无需关闭其他窗口" in status["user_prompt"]
     submit(env, status["work"], _bind_receipt(status["work"]))
     assert rounds.ensure_current_round()["native_session"]["window_reference"] == "chrome-window-9"
 
@@ -384,3 +384,109 @@ def test_explicit_login_clears_cancelled_bind_marker(env):
     assert resumed["event"] == "browser_work_required"
     assert resumed["work"]["action"] == "bind_session"
     assert native.next_work()["event"] == "browser_work_required"
+
+
+@pytest.mark.parametrize("reason", native.TECHNICAL_BLOCK_REASONS)
+def test_technical_block_preserves_work_without_false_user_handoff(env, reason):
+    env.choose("zhilian")
+    work = native.begin(env.start("zhilian")["work"]["work_id"])["work"]
+    result = copy.deepcopy(work["task"]["blocked_result_example"])
+    result.update(receipt_id="technical-block", reason=reason)
+    result["evidence"].update(observed_at=datetime.now(timezone.utc).isoformat(),
+        observation="Selected synthetic job title and visible detail link disagree")
+    paused = submit(env, work, result)
+    assert paused["requires_technical_recovery"] is True
+    assert paused["requires_user_action"] is False
+    assert paused["error"] == f"native_{reason}"
+    assert "user_prompt" not in paused
+    assert paused["retryable"] is False
+    assert paused["next_suggested"] == "jobagent work status"
+    assert paused["work"]["state"] == "reconcile_only"
+    assert paused["work"]["binding"] == work["binding"]
+    assert native.next_work()["requires_technical_recovery"] is True
+    before = store.get_work(work["work_id"], work["binding"])
+    assert native.status()["requires_technical_recovery"] is True
+    assert store.get_work(work["work_id"], work["binding"]) == before
+    # A read-only task can resume under the existing bounded observation budget.
+    resumed = native.begin(work["work_id"])
+    assert resumed["work"]["allowed_mode"] == "observe"
+    assert resumed["work"]["nonce"] == work["nonce"]
+    assert resumed["work"]["execution_permitted"] is True
+    assert not resumed.get("requires_technical_recovery")
+
+
+def test_technical_recovery_never_reissues_delivery_permission(env):
+    env.choose("zhilian")
+    inspected = native.begin(env.start("zhilian")["work"]["work_id"])["work"]
+    pending = submit(env, inspected)
+    work = native.begin(pending["work"]["work_id"])["work"]
+    assert work["action"] == "submit_resume"
+    assert work["allowed_mode"] == "execute_once"
+    result = copy.deepcopy(work["task"]["blocked_result_example"])
+    result["receipt_id"] = "identity-block"
+    result["evidence"].update(observed_at=datetime.now(timezone.utc).isoformat(),
+        observation="Synthetic detail changed; no verified application receipt")
+    submit(env, work, result)
+    resumed = native.begin(work["work_id"])["work"]
+    assert resumed["allowed_mode"] == "reconcile_only"
+    assert not resumed["execution_permitted"]
+    assert native.audit("zhilian", complete=False)["summary"]["resume_submitted"] == 0
+
+
+@pytest.mark.parametrize("updates", [
+    {"reason": "login_required"}, {"requires_user_action": True},
+    {"requires_technical_recovery": "true"}, {"reason": "invented"},
+])
+def test_technical_block_rejects_ambiguous_or_user_challenge_claims(env, updates):
+    env.choose("boss", session=False)
+    work = native.begin(env.start("boss")["work"]["work_id"])["work"]
+    result = copy.deepcopy(work["task"]["blocked_result_example"])
+    result.update(updates)
+    with pytest.raises(store.BrowserWorkError) as caught:
+        submit(env, work, result)
+    assert caught.value.payload["error"] == "native_block_reason_invalid"
+
+
+def test_pause_prompt_does_not_forward_untrusted_url(env):
+    env.choose("boss", session=False)
+    work = native.begin(env.start("boss")["work"]["work_id"])["work"]
+    result = _pause_receipt(work, reason="login_required")
+    result["evidence"]["page_url"] = "https://untrusted.invalid/login"
+    response = submit(env, work, result)
+    assert "untrusted.invalid" not in response["user_prompt"]
+    assert native.ENTRY_URLS["boss"] in response["user_prompt"]
+
+
+def test_host_contract_requires_complete_command_before_advancing(env):
+    env.choose("boss")
+    response = env.start("boss")
+    contract = response["work"]["task"]["command_execution"]
+    assert contract["completion_required"] is True
+    assert "process/session handle" in contract["running_response"]
+    assert "Do not run work next, work begin" in contract["while_running"]
+    assert "read-only reconciliation" in contract["lost_response"]
+    assert "poll that same process until it exits" in response["host_contract"]["instructions"]
+
+
+def test_collection_identity_block_does_not_advance_or_decide(env, monkeypatch):
+    env.choose("zhilian")
+    from jobagent.application import native_discovery
+    monkeypatch.setattr(native_discovery, "accept_page", lambda *a: pytest.fail("unverified page accepted"))
+    binding = {"account_ref": "account-test", "round_id": "round-test", "platform": "zhilian",
+               "session_id": "native-test", "request_id": "preserved-request", "discover_id": "preserved-discover"}
+    pending = store.ensure_work(action="collect_search_page", binding=binding,
+        key="synthetic-page", task={"query": "数据分析师", "city": "郑州", "page": 1})
+    before = rounds.ensure_current_round()
+    for attempt in range(store.MAX_OBSERVATION_ATTEMPTS):
+        work = native.begin(pending["work_id"])["work"]
+        result = copy.deepcopy(work["task"]["blocked_result_example"])
+        result.update(receipt_id=f"blocked-{attempt}")
+        result["evidence"].update(observed_at=datetime.now(timezone.utc).isoformat(),
+            observation="Synthetic selected card differs from pending detail link")
+        paused = submit(env, work, result)
+        assert paused["work"]["binding"] == binding
+        assert paused["requires_technical_recovery"]
+    assert rounds.ensure_current_round() == before
+    assert paused["work"]["allowed_mode"] == "reconcile_only"
+    assert paused["recovery_command"].startswith("jobagent work submit")
+    assert native.status()["recovery_command"] == paused["recovery_command"]
