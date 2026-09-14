@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.11] - 2026-09-14
+
+### Fixed
+
+- Native discovery now converts observed skill lists to the cloud request format before decision submission and verifies the signed response against that exact submitted representation.
+- Preserved discoveries resume with the same request and collected candidates after this upgrade, without repeating browser searches or changing existing receipts. Legacy string-valued skills remain unchanged.
+
 ## [0.6.10] - 2026-09-14
 
 ### Fixed
