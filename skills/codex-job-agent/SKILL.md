@@ -39,6 +39,18 @@ responsibility; do not replace them with locally invented decisions or greetings
 
 ## Native work loop
 
+### Complete the CLI command before advancing
+
+If a host command tool returns a running process/session handle, preserve it and
+poll that same process until it exits, collecting all output chunks. Empty or
+partial output while running is not an error and must not be parsed as the final
+JSON response. Progress events are not the final result. Do not run another
+workflow command (especially work next or a second work begin), or perform UI
+actions, while the original command is still running. Only a complete successful
+begin response grants its declared permission. If the original result genuinely
+cannot be recovered, use work status and read-only reconciliation; never restore
+execute_once by assumption. A command timeout alone is not a terminal job outcome.
+
 1. Read the complete response from `jobagent work next`, including the current
    instructions, task, binding, allowed actions, evidence requirements,
    `result_schema` and any sample. A sample is a format example, not evidence.
@@ -95,6 +107,15 @@ The protocol cannot guarantee exactly-once actions on an external website.
 - Read details before returning candidates. Scroll truncated descriptions and
   use screenshots to resolve unreadable accessibility text, including salaries.
   Preserve the site's raw salary text; do not guess missing units or fields.
+- On split-pane search pages, a changed heading does not prove that a detail
+  link changed with it. Cross-check the selected card, actual detail route, title
+  and company. Within the current task's allowed read-only inspection, obtain a
+  fresh snapshot and inspect a visible official detail control in the reusable
+  detail tab; never combine one job's ID/link with another job's description.
+  If evidence still conflicts, use blocked_result_schema with
+  reason=job_identity_unknown. Inconclusive loading or page structure uses
+  page_state_unknown, not session_unknown or login_required. Do not invent empty
+  results or ask the user to diagnose a link/selector problem.
 - Read back entered URLs and text before activating them. If typing or pasting
   produced different text, correct and verify it before submission. A successful
   input-tool response is not evidence that the page received the intended value.
@@ -137,6 +158,15 @@ remain uncertain. Being read does not mean acceptance. Sending to a recruiter
 does not prove referral to an undisclosed employer.
 
 ## Pause and report
+
+For requires_technical_recovery=true, stop normal recruiting actions and report
+the technical blocker accurately. Preserve the same work, request and browser.
+Do not automatically loop on recovery, request login, close windows, or claim
+the user must repair the page. Technical diagnosis is separate from customer
+delivery. When recovery is appropriate, run the returned recovery_command and
+obey its current allowed_mode; side-effect work remains reconcile_only. A newer
+client's blocked_result_schema is authoritative; never fabricate unsupported
+receipt fields for an older client.
 
 On login, CAPTCHA, security verification, conflicting identity, unclear resume selection
 or any `requires_user_action=true`, preserve the page, relay the exact prompt and

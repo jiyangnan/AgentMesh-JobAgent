@@ -75,6 +75,12 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 
 ## 验收标准
 
+### 原生技术暂停分类（同协议扩展）
+
+- **preserve**：现有 BrowserWork schema、nonce、绑定、观察次数、账户、轮次、请求、候选、预览授权和审计均不迁移、不清理。旧用户暂停回执仍可读取，不自动改写其原因。
+- **additive**：新回执可声明 `requires_technical_recovery=true`，原因限定为 `job_identity_unknown` 或 `page_state_unknown`；结果仍为既有 `uncertain`，账本仍处于 `reconcile_only`。读取状态必须明确技术暂停，不能改报需要登录或关闭窗口。
+- **block**：已有副作用意图永不重新获得 `execute_once`；只读任务仍受原观察次数上限约束，终结任务不重新开放。技术暂停不产生成功记录、不推进采集、不发起决策或重复计费。宿主只能提交当前客户端明确声明的回执合同。
+
 ### 0.5.44 → 0.6.0 原生执行器迁移
 
 - **migrate**：状态迁移 v8、round schema v4。活动轮次新增 `browser_executor=codex_native`；旧 `browser_session_id` 记为 `legacy_browser_session_id`，当前会话标为 `native-unbound`、`native_session=null`，随后由宿主只读确认实际窗口并绑定。旧登录证据保留但不自动证明新会话已登录。新轮次同样从原生未绑定状态开始。

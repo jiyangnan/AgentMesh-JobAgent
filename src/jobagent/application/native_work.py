@@ -13,6 +13,13 @@ from jobagent.infra.account_state import current_account_ref
 from jobagent.infra.protocol import digest_payload
 
 EXECUTOR = "codex_native"
+TECHNICAL_BLOCK_REASONS = ("job_identity_unknown", "page_state_unknown")
+COMMAND_EXECUTION = {
+    "completion_required": True,
+    "running_response": "Preserve the host process/session handle and collect output until that same command exits. Empty or partial output while running is not a failure or a JSON response.",
+    "while_running": "Do not run work next, work begin, or another workflow command while the original command is still running. Do not perform browser actions before its complete permission response.",
+    "lost_response": "Only if the original process/result cannot be recovered, use work status and read-only reconciliation. Never reissue a side-effect permission or click again.",
+}
 MIN_ACTION_INTERVAL_SECONDS = 2.0
 PLATFORMS = ("boss", "liepin", "zhilian", "51job")
 ENTRY_URLS = {
@@ -154,6 +161,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                 "workflow": rounds.round_status(), "next_suggested": "jobagent round status"}
     task = dict(work.get("task") or {})
     task["rules"] = list(RULES)
+    task["command_execution"] = dict(COMMAND_EXECUTION)
     _delivery_contract(work, task)
     example = {**_example(work), **task.get("result_example", {})}
     example.update(nonce=work.get("nonce"), binding=work["binding"])
@@ -177,7 +185,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         "outcome": schema.get("outcome", "success"), "evidence": "object of actual UI observations"}
     schema["evidence_common"] = common
     schema["evidence"] = {**common, **schema.get("evidence", {})}
-    schema["branch_selection"] = "Success evidence requirements apply only to normal completion. For requires_user_action=true, use pause_result_schema and omit all unobserved action-specific fields."
+    schema["branch_selection"] = "Success evidence requirements apply only to normal completion. For requires_user_action=true, use pause_result_schema. For technical page/identity failures, use blocked_result_schema. Omit all unobserved action-specific fields."
     task["result_schema"] = schema
     task["result_example"] = example
     if "result_examples" in task:
@@ -204,6 +212,14 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         "evidence_required": list(pause_evidence), "evidence_optional": ["page_url", "account_label"],
         "action_specific_success_fields_required": False,
         "instructions": "Copy current nonce/binding. Fill fresh observed_at and actual observation; use exact bound window/profile after binding. Omit unobserved optional fields; do not invent query/city, results, candidates, job identity or receipts. Before binding, missing capability requires only source/observed_at/observation. A pause grants no new action permission."}
+    task["blocked_result_example"] = {**task["pause_result_example"],
+        "requires_user_action": False, "requires_technical_recovery": True,
+        "reason": "job_identity_unknown"}
+    task["blocked_result_schema"] = {**task["pause_result_schema"],
+        "required": ["receipt_id", "nonce", "binding", "outcome", "requires_technical_recovery", "reason", "evidence"],
+        "requires_user_action": False, "requires_technical_recovery": True,
+        "reason": list(TECHNICAL_BLOCK_REASONS),
+        "instructions": "Use for inconsistent job identity or inconclusive page state, not login, verification or window ambiguity. Preserve actual observations and omit unverified success fields. Stop normal workflow for technical diagnosis; do not ask the user to log in, close windows or fix a selector. Recovery grants no side-effect permission."}
     if "unresolved_result_example" in task:
         unresolved = task["unresolved_result_example"]
         unresolved["evidence"] = {**_example(work)["evidence"],
@@ -223,14 +239,24 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         work["allowed_mode"] = "reconcile_only" if observation_locked else "observe"
     result = work.get("result") or {}
     paused = bool(result.get("requires_user_action")) and not execution
+    blocked = bool(result.get("requires_technical_recovery")) and not execution
+    page_url = result.get("evidence", {}).get("page_url")
+    platform = work["binding"]["platform"]
+    safe_url = page_url if _official(platform, page_url) else ENTRY_URLS[platform]
     return {"ok": True, "event": "browser_work_required", "executor": EXECUTOR,
             "protocol": "jobagent.browser_work", "protocol_version": 1,
             "host_contract": skill_contract(),
             "work": work, "requires_user_action": paused,
-            **({"user_prompt": _pause_prompt(result.get("reason"), result.get("evidence", {}).get("page_url") or ENTRY_URLS[work["binding"]["platform"]])} if paused else {}),
+            **({"user_prompt": _pause_prompt(result.get("reason"), safe_url)} if paused else {}),
+            **({"requires_technical_recovery": True, "error": f"native_{result['reason']}",
+                "message": "页面或岗位身份的证据不一致，正常流程已暂停并保留进度；需要技术排查，不代表登录失效或窗口冲突。",
+                "recovery_command": (f"jobagent work submit --work-id {work['work_id']} --result <result.json>"
+                                     if observation_locked else f"jobagent work begin --work-id {work['work_id']}"),
+                "retryable": False} if blocked else {}),
             "request_preserved": True,
             "next_suggested": (f"jobagent work submit --work-id {work['work_id']} --result <result.json>"
-                               if execution or observation_locked else f"jobagent work begin --work-id {work['work_id']}"),
+                               if execution or observation_locked else "jobagent work status" if blocked
+                               else f"jobagent work begin --work-id {work['work_id']}"),
             "workflow": rounds.round_status()}
 
 
@@ -240,8 +266,8 @@ def _pause_prompt(reason: Any, url: str) -> str:
     if reason in {"verification_required", "challenge"}:
         return f"当前平台要求安全验证，已暂停。请在同一 Chrome 页面 {url} 亲自完成验证后回复“验证好了”。"
     if reason == "session_unknown":
-        return (f"无法唯一确认 Job Agent 应使用的 Chrome 窗口，已暂停。请关闭多余的 Chrome 窗口，"
-                f"只保留助手使用的这一个（相关页面 {url}），或让助手新开一个专用窗口；完成后回复“好了”。")
+        return (f"当前浏览器会话或账户身份无法确认，已暂停并保留页面 {url}。"
+                "请确认助手应使用的现有 Chrome 窗口和账户；无需关闭其他窗口、清理登录状态或新建浏览器。")
     return f"当前界面或宿主权限无法确认，已保留进度并暂停；请检查当前 Chrome 页面 {url} 或 Computer Use 权限，完成后回复“好了”。"
 
 
@@ -334,6 +360,7 @@ def _renewable_collection(work: dict[str, Any]) -> bool:
     result = work.get("result") or {}
     return (work.get("action") == "collect_search_page"
             and not result.get("requires_user_action")
+            and not result.get("requires_technical_recovery")
             and result.get("outcome") != "uncertain")
 
 
@@ -385,10 +412,11 @@ def _common_evidence(work: dict[str, Any], result: dict[str, Any]) -> dict[str, 
     if evidence.get("window_reference") != session["window_reference"] or evidence.get("profile_label") != session["profile_label"]:
         _error("native_browser_changed", "The observed browser window/profile changed. Do not act on a different window.")
     platform = work["binding"]["platform"]
-    if not _official(platform, evidence.get("page_url")) and not result.get("requires_user_action"):
+    halted = result.get("requires_user_action") or result.get("requires_technical_recovery")
+    if not _official(platform, evidence.get("page_url")) and not halted:
         _error("native_page_untrusted", "Observation must come from this platform's official HTTPS page.")
     expected_account = session.get("accounts", {}).get(platform)
-    if expected_account and evidence.get("account_label") != expected_account and not result.get("requires_user_action"):
+    if expected_account and evidence.get("account_label") != expected_account and not halted:
         _error("native_platform_account_changed", "The visible platform account changed or is unverified.")
     return evidence
 
@@ -478,6 +506,12 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         _error("native_result_file_invalid", "Cannot read a JSON observation result.")
     if not isinstance(result, dict):
         _error("native_result_file_invalid", "Observation result must be an object.")
+    if result.get("requires_technical_recovery"):
+        if (result.get("requires_technical_recovery") is not True
+                or result.get("requires_user_action") not in (None, False)
+                or result.get("reason") not in TECHNICAL_BLOCK_REASONS):
+            _error("native_block_reason_invalid", "Use a declared technical-recovery reason without a user-action claim.")
+        result["outcome"] = "uncertain"
     binding = _binding()
     work = store.get_work(work_id, binding)
     rounds.assert_platform_turn(work["binding"]["platform"])
@@ -492,7 +526,7 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         closed = store.submit_work(work_id, binding, result)
         return _continue(closed)
     e = _common_evidence(work, result)
-    if result.get("requires_user_action"):
+    if result.get("requires_user_action") or result.get("requires_technical_recovery"):
         pass
     elif result.get("outcome") not in {"success", "page_collected", "uncertain", "unresolved", "unavailable"}:
         _error("native_outcome_invalid", "Unsupported observation outcome.")
@@ -895,6 +929,12 @@ def status() -> dict[str, Any]:
         return {"ok": True, "executor": EXECUTOR, "workflow": workflow}
     works = store.list_work({"account_ref": current_account_ref(), "round_id": workflow["round_id"]})
     active = state.load_json(state.current_round_path()) or {}
+    blocked = next((w for w in works if w["state"] != "closed"
+                    and (w.get("result") or {}).get("requires_technical_recovery")), None)
+    if blocked:
+        # Pure presentation: status must expose the technical stop, not send
+        # the host back around next -> status without explaining the boundary.
+        return present(blocked)
     return {"ok": True, "executor": EXECUTOR, "protocol_version": 1, "workflow": workflow,
             "session": active.get("native_session"), "work_counts": {s: sum(w["state"] == s for w in works) for s in ("ready", "intent_recorded", "reconcile_only", "closed")},
             "next_suggested": "jobagent work next"}

@@ -51,6 +51,11 @@ site APIs. If this host lacks native Computer Use, pause rather than switching
 drivers. Browser permissions and real UI observations still belong to the host;
 the task protocol cannot intercept actions taken outside it.
 
+Wait for each CLI process to exit before parsing its complete response or
+starting the next command. Technical page/identity failures have a separate
+preserved-work recovery branch; they must not be presented as a need to log in
+again or close Chrome windows. Recovery never reauthorizes an uncertain send.
+
 The official installer also installs the product-managed `codex-job-agent` skill
 under `$CODEX_HOME/skills` (or `~/.codex/skills`). A same-name custom skill or a
 locally modified managed file produces an explicit conflict and is not

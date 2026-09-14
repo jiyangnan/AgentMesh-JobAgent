@@ -387,7 +387,7 @@ def _task(plan: dict, progress: dict, index: int, page: int) -> dict:
                     "last_page": "page_state=results, at least one actual candidate, has_next_page=false, exhaustion.kind=last_page with actual visible evidence.",
                     "no_results": "page_state=no_results, candidates=[], has_next_page=false, exhaustion.kind=explicit_no_results with actual visible notice.",
                     "signed_limit": "page_limit is only an upper bound, not final-page evidence. Report the actual next-page state; the CLI enforces the signed bound.",
-                    "inconclusive": "Missing cards, loading, missing required identity or incomplete evidence is not exhaustion; use the declared pause branch without inventing success."},
+                    "inconclusive": "Missing cards, loading, missing required identity or incomplete evidence is not exhaustion. Use blocked_result_schema for technical page/identity failures; use pause_result_schema only for an actual user challenge. Never invent success."},
                 "exhaustion": {"kind": "explicit_no_results | last_page", "text": "non-empty visible evidence"},
                 "empty_candidates": "Requires explicit_no_results and has_next_page=false; an empty parser result is not exhaustion."},
             "result_example": example,
