@@ -174,6 +174,75 @@ def test_four_platform_discovery_uses_host_tasks_and_existing_cloud(env, platfor
     assert len(env.starts) == 1
 
 
+@pytest.mark.parametrize("platform", ["boss", "liepin", "zhilian", "51job"])
+@pytest.mark.parametrize("skills", [["软件实施", "MES系统"], [], None])
+def test_native_skills_use_cloud_string_contract_without_mutating_receipts(env, monkeypatch, platform, skills):
+    original_decide = existing.cloud_client.discovery_decide
+
+    def strict_decide(*, discover_id, jobs):
+        # The deployed DiscoveryDecideRequest accepts string skills, not the
+        # native BrowserWork array. Exercise that boundary before signing.
+        for job in jobs:
+            assert "skills" not in job or isinstance(job["skills"], str)
+        assert storage.load_collection_checkpoint(platform)["progress"]["candidates"][0] == raw
+        return original_decide(discover_id=discover_id, jobs=jobs)
+
+    monkeypatch.setattr(existing.cloud_client, "discovery_decide", strict_decide)
+    work = native.start_discovery(platform, "session-test")["work"]
+    raw = candidate(platform)
+    if skills is None:
+        raw.pop("skills")
+    else:
+        raw["skills"] = skills
+    observed = receipt(work, jobs=[raw])
+    snapshot = copy.deepcopy(observed)
+    result = submit(env, work, observed)
+    assert result["ok"] is True
+    assert observed == snapshot
+    sent = env.decisions[0][0]
+    if skills is None:
+        assert "skills" not in sent
+    else:
+        assert sent["skills"] == "、".join(skills)
+    # A completed retry reuses the signed decision, with no recollection/charge.
+    assert native.start_discovery(platform, "session-test")["discover_id"] == result["discover_id"]
+    assert len(env.starts) == len(env.decisions) == 1
+
+
+def test_skills_conversion_preserves_legacy_strings_and_rejects_invalid_arrays():
+    jobs = [{"id": "a", "skills": " Python, SQL "}, {"id": "b", "skills": ["AI", "AI", "C++"]}]
+    before = copy.deepcopy(jobs)
+    converted = existing._decision_candidates(jobs)
+    assert jobs == before
+    assert converted[0]["skills"] == " Python, SQL "
+    assert converted[1]["skills"] == "AI、AI、C++"
+    with pytest.raises(protocol.ProtocolError, match="skills"):
+        existing._decision_candidates([{"id": "bad", "skills": [42]}])
+
+
+@pytest.mark.parametrize("platform", ["boss", "liepin", "zhilian", "51job"])
+def test_preserved_native_decision_retries_same_transport_without_recollection(env, monkeypatch, platform):
+    original = existing.cloud_client.discovery_decide
+    calls = []
+
+    def fail_once(*, discover_id, jobs):
+        calls.append((discover_id, copy.deepcopy(jobs)))
+        assert jobs[0]["skills"] == "产品规划"
+        if len(calls) == 1:
+            raise existing.cloud_client.CloudError("temporarily unavailable", status=503)
+        return original(discover_id=discover_id, jobs=jobs)
+
+    monkeypatch.setattr(existing.cloud_client, "discovery_decide", fail_once)
+    work = native.start_discovery(platform, "session-test")["work"]
+    with pytest.raises(existing.cloud_client.CloudError):
+        submit(env, work, receipt(work))
+    pending = storage.load_pending_decision(platform)
+    assert pending["jobs"][0]["skills"] == ["产品规划"]
+    assert native.start_discovery(platform, "session-test")["ok"] is True
+    assert calls[0] == calls[1]
+    assert len(env.starts) == len(env.decisions) == 1
+
+
 def test_duplicate_page_does_not_accumulate_and_conflicting_receipt_fails(env):
     work = native.start_discovery("liepin", "session-test")["work"]
     observed = receipt(work, final=False)
@@ -988,4 +1057,3 @@ def test_bound_discovery_profile_incomplete_keeps_binding(env, monkeypatch):
     assert details["next_suggested"] == "jobagent boss discover"
     assert "工作台" in details["message"]
     assert env.active.get("resume_binding", {}).get("id") == "binding-1"
-

@@ -26,6 +26,7 @@ from jobagent.infra.discovery_state import (
 from jobagent.infra.platform_lock import PlatformSessionLock
 from jobagent.infra.profile_contract import require_compatible_profile
 from jobagent.infra.protocol import (
+    ProtocolError,
     SearchPlanExpiredError,
     digest_payload,
     verify_decision_manifest,
@@ -49,6 +50,23 @@ _ZHILIAN_SEARCH_NAVIGATION_RECOVERY_TERMINAL = (
 )
 
 
+def _decision_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Adapt observed skill arrays to the cloud string field without state edits.
+
+    Keep the original receipts/checkpoint for recovery. The request and its
+    signed candidate digest must both use this same transport representation.
+    Already-string legacy values are passed through unchanged.
+    """
+    jobs = [dict(candidate) for candidate in candidates]
+    for job in jobs:
+        skills = job.get("skills")
+        if isinstance(skills, list):
+            if not all(isinstance(skill, str) for skill in skills):
+                raise ProtocolError("candidate skills must contain only strings")
+            job["skills"] = "、".join(skills)
+    return jobs
+
+
 def _decision_result(
     platform: str,
     *,
@@ -61,6 +79,7 @@ def _decision_result(
     expiry_recovery_attempted: bool = False,
 ) -> dict[str, Any]:
     discover_id = str(plan["discover_id"])
+    decision_jobs = _decision_candidates(candidates)
     emit_stage(
         "cloud_decision_resumed" if resumed else "cloud_decision_requested",
         platform=platform,
@@ -76,7 +95,7 @@ def _decision_result(
         ):
             manifest = cloud_client.discovery_decide(
                 discover_id=discover_id,
-                jobs=candidates,
+                jobs=decision_jobs,
             )
     except cloud_client.CloudError as exc:
         if (
@@ -129,7 +148,7 @@ def _decision_result(
         manifest,
         platform=platform,
         discover_id=discover_id,
-        jobs=candidates,
+        jobs=decision_jobs,
         intent_digest=plan.get("intent_digest"),
     )
     path = save_manifest(manifest)
