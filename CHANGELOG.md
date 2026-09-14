@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.10] - 2026-09-14
+
+### Fixed
+
+- Native browser tasks now distinguish inconclusive page or job identity from login and verification handoffs, preserving the current request for technical recovery without asking users to repeat login.
+- Codex execution guidance now waits for each command's completed response before continuing and verifies complete job identity when list and detail panes update separately.
+- Technical recovery preserves account binding, signed search scope, delivery authorization and uncertain outcomes; it never repeats a pending application or charges for a replacement discovery.
+
 ## [0.6.9] - 2026-09-13
 
 ### Fixed
