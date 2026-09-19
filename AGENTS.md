@@ -107,3 +107,13 @@ This repository should remain a clean public distribution surface: installable C
 - `pytest` or a focused CLI smoke check was run, or the final answer explains why not.
 - README, onboarding, Skills, and CLI output agree on platform order, user-confirmed delivery, review overrides, upgrade recovery, and user-intervention points.
 - The final handoff lists changed files, verification, and whether any real platform/session data was touched.
+
+## Reflow Duty (owner decision 2026-09-19)
+
+Any change merged or released from this repo must be reflowed into the
+internal R&D layer (`~/Job Agent`, client side `src/jobagent/`) in the same
+working session: apply the code there and commit it. A `docs: record`
+progress entry in the internal ledger is not the reflow. After reflowing,
+run `scripts/reflow_check.py` inside the internal repo and include its
+exit status in the handoff. Version constants in the internal layer follow
+this repo's release tag.
