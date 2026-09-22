@@ -173,6 +173,15 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             window_reference=native_window.REFERENCE,
             window_reference_kind="|".join(native_window.KINDS),
             window_context={"required_for": native_window.APP_SCOPED, **native_window.CONTEXT_SCHEMA})
+        variants = native_window.binding_task()["result_examples"]
+        for variant in variants.values():
+            variant["evidence"].pop("reuse_status")
+            variant["evidence"].update(
+                profile_label=task["expected_profile_label"], account_label=task["expected_account_label"],
+                page_url="Replace with the currently observed official HTTPS page URL",
+                login_state="authenticated", account_navigation=True, resume_or_activity=True)
+        task["result_example"] = variants["native_window"]
+        task["result_examples"] = variants
     task["rules"] = list(RULES)
     task["window_context_contract"] = {
         "before_every_ui_action": True,
@@ -223,7 +232,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             variant["evidence"] = {**_example(work)["evidence"], **variant.get("evidence", {})}
             for field in ("window_reference", "profile_label", "account_label"):
                 if field in example["evidence"]:
-                    if work["action"] != "bind_session":
+                    if work["action"] != "bind_session" and not (work["action"] == "recover_session" and field == "window_reference"):
                         variant["evidence"][field] = example["evidence"][field]
             if session.get("window_reference_kind") == native_window.APP_SCOPED and work["action"] != "recover_session":
                 variant["evidence"].update(window_reference_kind=native_window.APP_SCOPED,

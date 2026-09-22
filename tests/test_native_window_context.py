@@ -404,3 +404,56 @@ def test_confirmed_readonly_recovery_can_change_scope_and_preserve_logical_sessi
         assert result["evidence"]["window_reference_kind"] == APP_KIND
         assert result["evidence"]["window_context"]["app_reference"] == APP_REFERENCE
     assert "window_context" not in page["task"]["pause_result_example"]["evidence"]
+
+
+@pytest.mark.parametrize("variant", [None, "native_window", APP_KIND])
+def test_recovery_presentation_has_complete_typed_success_examples(app_recovery_env, variant):
+    r = app_recovery_env
+    work = r.native.recover(r.source["work_id"], confirmed=True)["work"]
+    work = r.native.begin(work["work_id"])["work"]
+    before = r.ledger.get_work(work["work_id"], work["binding"])
+    presented = r.native.present(before)["work"]
+    task = presented["task"]
+    if variant is None:
+        example = copy.deepcopy(task["result_example"])
+    else:
+        assert set(task.get("result_examples", {})) == {"native_window", APP_KIND}
+        example = copy.deepcopy(task["result_examples"][variant])
+    evidence = example["evidence"]
+    required = {
+        "source", "observed_at", "observation", "native_computer_use_available", "browser",
+        "window_reference", "window_reference_kind", "profile_label", "account_label",
+        "group_reference", "login_state", "account_navigation", "resume_or_activity", "page_url",
+    }
+    assert required <= evidence.keys()
+    assert required <= task["result_schema"]["evidence"].keys()
+    assert example["nonce"] == work["nonce"] and example["binding"] == work["binding"]
+    assert example["outcome"] == "success"
+    assert evidence["native_computer_use_available"] is True
+    assert evidence["browser"] == "chrome" and evidence["login_state"] == "authenticated"
+    assert evidence["account_navigation"] is True and evidence["resume_or_activity"] is True
+    assert evidence["profile_label"] == task["expected_profile_label"]
+    assert evidence["account_label"] == task["expected_account_label"]
+    assert evidence["window_reference_kind"] == (APP_KIND if variant == APP_KIND else "native_window_id")
+    assert all(isinstance(evidence[key], str) and evidence[key].strip()
+               for key in ("window_reference", "group_reference", "page_url"))
+    if variant == APP_KIND:
+        assert evidence["window_context"]["app_reference"] == evidence["window_reference"]
+        assert evidence["window_context"]["selection_verified"] is True
+        assert {"app_reference", "window_title", "selection_verified", "selection_evidence"} <= (
+            task["result_schema"]["evidence"]["window_context"].keys())
+        evidence.update(window_reference=APP_REFERENCE, window_context=context())
+    else:
+        assert "window_context" not in evidence
+        evidence["window_reference"] = "synthetic-recovered-window-42"
+
+    # Replace only observation placeholders with synthetic facts. Required
+    # capability, identity and login proof must already exist in the example.
+    evidence.update(observed_at=datetime.now(timezone.utc).isoformat(),
+                    observation="Synthetic current native account verification",
+                    group_reference="synthetic-recovered-task-tab",
+                    page_url="https://www.zhipin.com/web/geek/job")
+    checked = r.native._common_evidence(before, example)
+    r.native._validate_session_recovery(before, example, checked)
+    assert r.ledger.get_work(work["work_id"], work["binding"]) == before
+    assert "window_context" not in task["pause_result_example"]["evidence"]
