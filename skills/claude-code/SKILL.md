@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching and recruiter greetings.
-version: 0.6.12
+version: 0.6.13
 ---
 
 # Job Agent
@@ -36,11 +36,55 @@ stable window ID/handle where available, never a copied old title. Successful
 recovery may update actual window/group references while retaining the logical
 session, round, request, Discover, completed pages and candidates. It creates no
 new paid request; normal later cloud decision billing still applies. Delivery
-work cannot use this recovery. Pause only for actual unavailable access, unresolved
-session/account ambiguity or a user login/verification challenge; do not loop or
+work cannot use this recovery. During browser inspection, pause for actual
+unavailable access, unresolved session/account ambiguity or a user
+login/verification challenge; do not loop or
 ask the customer to reconstruct missing historical calls. Use fresh receipt IDs
 for new observations and reuse an ID only for an identical receipt replay.
 
+Recovery preflight preserves the bound resume, round, pending request and
+checkpoint on failure. Report the returned error and `recovery_cause` accurately:
+`resume_binding_material_unavailable` is not proof that the source page is no
+longer current. Honor `retryable`; a non-retryable material error needs its stated
+prerequisite resolved before using the offered command for the original work.
+Do not replace that command with a platform Discover or repeatedly cancel work.
+
+If `0.6.12` previously cleared a local resume binding during failed recovery, the
+updated CLI may recover only the original binding from the verified signed
+SearchPlan. It must match the account, round, request, Discover, session and
+confirmed intent, and pass a fresh check of the same server material. Preflight
+does not write the binding; successful recovery continuation checks it again
+before restoring it. No signed binding means no binding can be reconstructed.
+Never substitute a local profile, current selection or new resume revision.
+
+On `recovery_requires_new_round=true` for a stale or released binding, stop
+retrying the original request. Explain that its frozen material is no longer
+usable and obtain one explicit business confirmation to end the old round's
+remaining platforms, preserve its history and start a new round with the user's
+chosen current resume, role and cities. Existing approval of this exact scope
+remains valid; technical recovery approval alone does not cover it. First run
+`jobagent round status` and `jobagent work status`. If the original read-only
+source remains open, use only the returned `cancel_command` for that same
+`collect_search_page` task with `side_effect=false` and no `delivery_source`,
+covered by the confirmed old-round closure. Require `ok=true` and
+`event=browser_work_cancelled`, then check work status again. Do not cancel other
+pending work or uncertain delivery to unlock the round; if no safe cancellation
+is offered, follow the returned reconciliation flow. Once the original source
+is closed and no other open work remains, use the existing
+`jobagent round skip --platform <current_platform> --confirm-skip` serially for
+the returned current platform, checking each successful result. Only after
+`workflow.workflow_complete=true`, run `jobagent round start` and answer its
+resume/role/city interactions with the user's choices. Let the CLI archive old
+pending state; never delete history or reuse old signatures/candidates as new
+results. Do not rerun resume analysis merely for this handoff or promise that
+the new round is free; its cloud operations follow their normal billing contract.
+
+If an error reports `recovery_receipt_saved=true` and
+`browser_replay_permitted=false`, the successful UI receipt is already saved,
+but continuation remains blocked. Do not claim no state changed, repeat the
+browser action or submit a new observation to replace it. After the prerequisite
+is resolved, use the offered original recovery command, or the explicit new-round
+path when required; do not repeat `work begin` for that saved recovery receipt.
 
 ## Required Behavior
 

@@ -62,6 +62,16 @@ candidates. Older clients must first complete the cancellation and signed-update
 sequence in the [canonical recovery instructions](docs/agent-onboarding.md#codex-native-execution-first)
 before using the new command; the agent handles window and page diagnosis.
 
+Recovery keeps the original resume binding when material validation fails and
+reports the specific cause. A binding lost by an older client can be restored
+only when its original signed snapshot, currently valid material and successful
+browser evidence agree. A changed or released resume requires explicit consent
+to finish the old round and select current material for a new one; it cannot
+replace the material in the old signed request. If a browser receipt was already
+saved, follow the returned continuation or confirmed new-round path without
+repeating the browser action. See [material recovery](docs/agent-onboarding.md#native-recovery-material)
+for the exact sequence and billing boundaries.
+
 The official installer also installs the product-managed `codex-job-agent` skill
 under `$CODEX_HOME/skills` (or `~/.codex/skills`). A same-name custom skill or a
 locally modified managed file produces an explicit conflict and is not

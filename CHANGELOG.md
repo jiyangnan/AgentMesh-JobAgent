@@ -2,6 +2,15 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.13] - 2026-09-22
+
+### Fixed
+
+- Browser recovery now reports material availability and network errors directly, without clearing the round's resume binding or misreporting every failure as an unfinished-page mismatch.
+- A missing local resume binding can be restored only after the original signed plan, current resume material and successful browser recovery evidence all match. Changed or released bindings remain blocked.
+- When an older round's resume has been replaced, recovery explains how to preserve its history, confirm ending the remaining platforms, and select current materials for a new round.
+- Recovery errors distinguish checks that changed no state from failures after a browser receipt was saved, so agents do not repeat an already recorded browser observation.
+
 ## [0.6.12] - 2026-09-22
 
 ### Fixed
