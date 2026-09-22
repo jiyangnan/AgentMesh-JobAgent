@@ -64,6 +64,7 @@ def assert_error(code, function, *args, **kwargs):
         "error": code,
         "message": str(caught.value),
         "request_preserved": True,
+        **({"next_suggested": "jobagent work status"} if code == "browser_work_receipt_conflict" else {}),
     }
     return caught.value.payload
 

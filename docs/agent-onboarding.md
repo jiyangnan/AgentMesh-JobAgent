@@ -26,10 +26,67 @@ never combine stale links with newly selected descriptions. Resume only through
 the returned recovery command and its current permissions. Existing side-effect
 intents remain read-only; no recovery may reopen terminal outcomes.
 
+For a paused read-only `collect_search_page` task without a `delivery_source`,
+the CLI may offer `jobagent work recover --work-id ID --confirm-recover`.
+Explain the scope once and obtain the user's explicit recovery confirmation:
+close this failed collection task, verify the existing Chrome profile and the
+same platform account, then continue the preserved request. An existing explicit
+confirmation of that scope remains valid; do not ask the user to diagnose windows
+or links. Recovery preserves the round, request, Discover, completed pages and
+candidates. It creates no new paid request; later cloud decisions still follow
+their normal billing contract.
+
+For a client such as `0.6.11` that does not yet recognize `work recover`, the same
+single recovery confirmation also covers cancelling the failed read-only task
+before the signed update. Use this sequence with the original source work ID:
+
+```bash
+jobagent work cancel --work-id ID --confirm-cancel
+jobagent update check
+jobagent work status
+jobagent --version
+jobagent work recover --work-id ID --confirm-recover
+```
+
+Continue only after cancellation returns `ok=true` and
+`event=browser_work_cancelled`. `update check` refreshes the signed release
+policy; verify that it offers an official release supporting recovery
+(`0.6.12` or later) and that the installation is managed. It does not install the
+update itself. `work status` is recognized by the old client and triggers the
+managed update; wait for the complete update and resumed command output, then
+confirm the installed version before using `work recover`. Do not send the new
+command to the old parser or use `--version` to trigger an update. Stop on an
+update failure and follow its returned recovery. A cancellation response may
+still report an update deferred before cancellation; the next command checks the
+current state again. Do not run login, discovery or a new round between these
+steps.
+
+An explicitly cancelled source collection is recoverable only while it still
+represents the next unfinished page of the same preserved request/checkpoint.
+Completed collection or decision work is not reopened. Repeating `work recover`
+uses the existing recovery task; it does not reset observation attempts or reopen
+a cancelled recovery task.
+
+Follow the returned `recover_session` task and its `work begin` permission before
+browser inspection. The agent locates the actual current Chrome window and
+official platform page and verifies the existing profile and bound platform
+account. A foreground Gmail page or changed tab title does not prove that the
+window was lost. Prefer a stable window ID or handle actually provided by the
+host; never copy an old page title into fresh evidence to manufacture a match.
+Only a successful recovery receipt updates the actual window/group references
+and allows collection to continue; the logical session ID remains unchanged.
+Pause for the user only when native access is unavailable, the intended session
+or account remains ambiguous, or login/verification needs the user. Preserve the
+actual technical failure and do not loop on recovery or claim it fixes an unknown
+host error such as `noWindowsAvailable`.
+
 For each task, run `jobagent work begin --work-id ID` before performing the
 permitted browser action, then submit observed facts with
 `jobagent work submit --work-id ID --result FILE`. Copy the returned binding and
 nonce exactly into the current result schema. Samples are not observations.
+Use a new `receipt_id` for each new observation; reuse an ID only to replay the
+identical receipt. A receipt conflict does not authorize changing old evidence
+or reporting an unverified success.
 On interruption, use `jobagent work status` and the returned recovery. A task
 that may already have sent or applied becomes read-only reconciliation; never
 click again to test success. A lease expiry is not a handoff to another agent.

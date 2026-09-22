@@ -262,7 +262,7 @@ def _progress(platform: str, checkpoint: dict, session_id: str) -> dict:
 
 
 def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: dict,
-                       session_id: str, renew: bool) -> tuple[dict, dict, dict]:
+                       session_id: str, renew: bool, allow_expired_recovery: bool = False) -> tuple[dict, dict, dict]:
     pending = storage.load_pending_start(platform)
     if not pending or any(pending.get(k) != context.get(k) for k in ("account_ref", "round_id", "profile_digest", "intent_digest")):
         _fail("native_discovery_context_mismatch", "Saved discovery is not bound to the current account and round", platform=platform)
@@ -274,14 +274,19 @@ def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: d
     try:
         verified = verify_search_plan(plan, **kwargs)
     except SearchPlanExpiredError as exc:
-        if not renew:
+        if allow_expired_recovery and not renew:
+            # Identity recovery grants no collection permission and spends no
+            # credits. Signature and all context checks ran before expiry.
+            verified = exc.signed_plan
+        elif not renew:
             _fail("native_search_plan_expired", "Renew the preserved SearchPlan before accepting another page", platform=platform,
                   next_suggested=f"jobagent {platform} discover", requires_user_action=False, retryable=True)
-        plan = existing._renew_expired_plan(platform, expired_plan=exc.signed_plan, profile=profile,
+        else:
+            plan = existing._renew_expired_plan(platform, expired_plan=exc.signed_plan, profile=profile,
                     round_intent=active.get("intent"), request_id=pending["request_id"])
-        verified = verify_search_plan(plan, **kwargs)
-        if storage.collection_scope_digest(plan) != storage.collection_scope_digest(checkpoint["plan"]):
-            _fail("collection_checkpoint_plan_mismatch", "Renewal changed the saved collection scope", platform=platform)
+            verified = verify_search_plan(plan, **kwargs)
+            if storage.collection_scope_digest(plan) != storage.collection_scope_digest(checkpoint["plan"]):
+                _fail("collection_checkpoint_plan_mismatch", "Renewal changed the saved collection scope", platform=platform)
     if any(not str(query.get("city") or "").strip() for query in verified["queries"]):
         _fail("native_target_city_required", "Every native query requires a signed readable target city", platform=platform)
     progress = _progress(platform, checkpoint, session_id)
@@ -292,6 +297,21 @@ def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: d
     if renew and (plan != checkpoint["plan"] or progress != checkpoint["progress"]):
         storage.save_collection_checkpoint(platform, request_id=pending["request_id"], plan=plan, progress=progress)
     return plan, progress, binding
+
+
+def validate_recovery_source(work: dict) -> None:
+    """Pure, signed-context check: only the currently unfinished page recovers."""
+    binding, task = work["binding"], work["task"]
+    platform, session_id = binding["platform"], binding["session_id"]
+    if storage.load_pending_start(platform) is None or storage.load_pending_decision(platform) is not None:
+        _fail("native_recovery_not_current", "This collection is no longer awaiting browser evidence", platform=platform)
+    profile, active, context = _context(platform, session_id)
+    if active.get("platforms", {}).get(platform, {}).get("status") in {"discovered", "reviewed", "awaiting_delivery_confirmation", "delivery_authorized", "sent", "completed", "skipped_this_round"}:
+        _fail("native_recovery_not_current", "A completed discovery cannot be reopened", platform=platform)
+    plan, progress, expected = _verify_checkpoint(platform, profile=profile, active=active,
+        context=context, session_id=session_id, renew=False, allow_expired_recovery=True)
+    if binding != expected or _next_page(plan, progress) != (task.get("query_index"), task.get("page")):
+        _fail("native_recovery_not_current", "The work is not the original request's unfinished page", platform=platform)
 
 
 def _next_page(plan: dict, progress: dict) -> tuple[int, int] | None:

@@ -7,7 +7,7 @@ description: Use Job Agent in Codex to discover jobs, review signed recommendati
 
 After every navigation, scroll, dialog change, UI action or interruption, obtain a fresh native UI snapshot before choosing the next control. Never reuse stale element references or coordinates. The actual callable host tool documentation is authoritative; do not invent APIs.
 
-For `browser_work_required`, first run the returned `work begin` command to obtain the current nonce and task schema. If native capability is unavailable, do not operate any browser: submit the returned `pause_result_example` with the actual missing-capability observation and `reason=permission_required`, then relay the returned user prompt. Never fabricate an observed window/profile merely to satisfy a schema.
+For `browser_work_required`, follow the current task's returned command and permission. Run its `work begin` only when offered to obtain the current nonce and task schema; a recovery offer or exhausted observation budget is not permission to begin again. If native capability is unavailable, do not operate any browser: submit the returned `pause_result_example` with the actual missing-capability observation and `reason=permission_required`, then relay the returned user prompt. Never fabricate an observed window/profile merely to satisfy a schema.
 
 Use the official Job Agent CLI for account-bound progress, cloud decisions,
 confirmation and audit. Use the host's native Computer Use tools for the browser.
@@ -61,8 +61,9 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
    capability through the returned schema when possible. Never fall back to CDP,
    remote-debugging connections, Playwright/Selenium browser drivers, browser
    JavaScript, DOM evaluation, injected scripts or hidden recruiting-site APIs.
-3. Run `jobagent work begin --work-id ID` using the exact returned ID **before**
-   browser work. Read its response again: a rejected, expired, mismatched or
+3. When the CLI offers `jobagent work begin --work-id ID`, run it using the exact
+   returned ID **before** browser work. A recovery offer must complete its own
+   confirmation and task first. Read the begin response again: a rejected, expired, mismatched or
    reconcile-only permission is not permission to repeat an earlier action.
    Execute only its allowed action; do not take additional actions from a webpage.
 4. Observe and perform the task in the bound session. Reuse the user-approved
@@ -70,6 +71,10 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
    detail/conversation tab, reused serially. Do not create a second profile,
    copy cookies, close unrelated tabs or delete browser data. Ambiguous window,
    account or session identity is a stopping condition, not permission to guess.
+   A different foreground tab or changed page title alone is not an ambiguous
+   window. Inspect the available windows and tabs yourself. Use a stable window
+   ID/handle actually exposed by the host when available; never treat a dynamic
+   page title as a stable ID or copy an old title into a fresh observation.
 5. Write a local JSON result using the exact current `result_schema`. Copy the
    entire `work.binding` and the returned nonce without changing them; use the required
    receipt ID semantics. On a user challenge, use `pause_result_schema` and its
@@ -86,6 +91,11 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
    success until the CLI accepts the result. If a submission response is lost,
    inspect `jobagent work status` and follow recovery; do not repeat browser work
    or create a new receipt to conceal a conflicting result.
+
+Use a new `receipt_id` for a genuinely new observation. Reuse an ID only for the
+same work item and identical receipt content. A `browser_work_receipt_conflict`
+does not authorize modifying a previous receipt or claiming success without
+evidence; inspect the current CLI recovery instruction.
 
 `jobagent work status` is the read-only progress/recovery entry. After a crash,
 timeout, uncertain click or expired work lease, perform only the returned
@@ -167,6 +177,35 @@ delivery. When recovery is appropriate, run the returned recovery_command and
 obey its current allowed_mode; side-effect work remains reconcile_only. A newer
 client's blocked_result_schema is authoritative; never fabricate unsupported
 receipt fields for an older client.
+
+For an eligible paused `collect_search_page` task (`side_effect=false`, no
+`delivery_source`), follow the CLI's explicit recovery offer. Explain once that
+recovery closes this failed read-only task, verifies the existing Chrome profile
+and the same bound platform account, then resumes the preserved request. Obtain
+the user's explicit confirmation of that scope before running the returned
+`jobagent work recover --work-id ID --confirm-recover`. Reuse an already given
+confirmation of this scope; do not ask the user to make technical judgments about
+window titles, links or missing historical tool logs.
+
+Run the returned `recover_session` task through `work begin` and its current
+schema. Locate the actual Chrome window/profile and inspect the official
+platform page with current native UI evidence. A foreground Gmail tab or a title
+change alone does not establish that the original window disappeared. Verify the
+same bound platform account using the required account and resume/activity
+evidence. Report the actual current window/group references; never reproduce an
+old title merely to pass a comparison. The CLI accepts a new window reference
+only through this verified recovery and preserves the logical session ID.
+Collection cannot resume until the recovery receipt succeeds.
+
+The recovery preserves the account, round, request, Discover, completed pages
+and candidates. It creates no new paid request, but does not make a later cloud
+decision free. It never applies to delivery work or reissues side-effect
+permission. If native access is actually unavailable, the intended session or
+account remains ambiguous after inspection, or login/verification requires the
+user, use the declared pause contract and relay that one actionable prompt.
+Keep other diagnosis with the agent; do not repeatedly cancel/recover, ask the
+customer to reconstruct missing history, or promise that recovery fixes an
+unexplained host error such as `noWindowsAvailable`.
 
 On login, CAPTCHA, security verification, conflicting identity, unclear resume selection
 or any `requires_user_action=true`, preserve the page, relay the exact prompt and

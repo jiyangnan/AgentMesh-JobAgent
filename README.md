@@ -43,8 +43,8 @@ the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
 jobagent work next
 ```
 
-Read each returned task and result schema, run `jobagent work begin --work-id ID`
-before its browser action, and report the observed result with
+Read each returned task and result schema. When the current response offers
+`jobagent work begin --work-id ID`, run it before its browser action and report the observed result with
 `jobagent work submit --work-id ID --result FILE`. `jobagent work status` is the
 read-only recovery entry. Native mode does not use CDP, browser scripts or hidden
 site APIs. If this host lacks native Computer Use, pause rather than switching
@@ -55,6 +55,12 @@ Wait for each CLI process to exit before parsing its complete response or
 starting the next command. Technical page/identity failures have a separate
 preserved-work recovery branch; they must not be presented as a need to log in
 again or close Chrome windows. Recovery never reauthorizes an uncertain send.
+For eligible read-only collection failures, `jobagent work recover` verifies the
+same Chrome profile and platform account before resuming the preserved request,
+after one explicit recovery confirmation. It preserves completed pages and
+candidates. Older clients must first complete the cancellation and signed-update
+sequence in the [canonical recovery instructions](docs/agent-onboarding.md#codex-native-execution-first)
+before using the new command; the agent handles window and page diagnosis.
 
 The official installer also installs the product-managed `codex-job-agent` skill
 under `$CODEX_HOME/skills` (or `~/.codex/skills`). A same-name custom skill or a
