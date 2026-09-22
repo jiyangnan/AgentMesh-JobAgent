@@ -81,7 +81,15 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 - **explicit recovery**：仅当前未完成、`side_effect=false` 且不含 `delivery_source` 的 `collect_search_page` 可在用户明确同意恢复范围后执行 `jobagent work recover --work-id ID --confirm-recover`。旧版已由用户明确取消的源采集任务，只有仍对应原 pending request/checkpoint 的下一未完成页时也可恢复；已采集完成或已完成决策的任务不可恢复。该命令结束旧只读任务并创建 `recover_session` 只读任务；它不把旧任务改成采集成功，也不重置旧任务次数。重复恢复返回既有恢复任务，不重置其观察次数，也不重新开放已取消的恢复任务。
 - **verify before resume**：新任务必须通过当前宿主的真实窗口/profile 观察和同一已绑定平台账号的独立证据校验，之后才允许更新实际 `window_reference` / `group_reference` 并续接采集。优先使用宿主提供的稳定窗口 ID/handle；前景标签或动态标题变化不等于窗口丢失，不得抄写旧标题伪造匹配。新任务未成功、profile/account 不一致或证据不足时保留请求并阻断采集。
 - **block**：投递来源任务、已有副作用意图，以及不符合上述源采集取消例外的已终结任务不适用；不能产生新的发送许可。其他账户、画像、签名和账本冲突仍失败关闭。恢复不创建新付费请求；后续云决策的正常计费合同不变，不能承诺整轮免费。
-- **no automatic reset**：升级本身不执行恢复、不清空会话或轮次。恢复范围只需一次明确确认；宿主负责当前窗口和页面排查，仅在真实权限不可用、会话/账号仍不明确或登录验证需要用户时交接。未知的 `noWindowsAvailable` 仍需保留为宿主诊断，不能宣称已修复或无限循环恢复。
+- **no automatic reset**：升级本身不执行恢复、不清空会话或轮次。恢复范围只需一次明确确认；宿主负责当前窗口和页面排查，在排查中遇到真实权限不可用、会话/账号仍不明确或登录验证需要用户时交接。未知的 `noWindowsAvailable` 仍需保留为宿主诊断，不能宣称已修复或无限循环恢复。
+
+### 0.6.13 恢复预检与 0.6.12 绑定保留修正（同协议扩展）
+
+- **preserve**：恢复预检失败不得清除或改写原简历绑定、round、pending request、checkpoint、候选或 BrowserWork。材料网络/服务错误保留 `resume_binding_material_unavailable` 与 `recovery_cause`，不能误报成 `native_recovery_not_current`；真正源页不匹配仍阻断。按 `retryable` 区分可重试故障和必须先处理的前置条件，后者处理后使用返回的原 work 恢复命令，不改用平台 Discover。
+- **verify before restore**：兼容 `0.6.12` 失败预检误清本地 `resume_binding` 的状态，只能从原签名 SearchPlan 的完整冻结快照取得原绑定，并逐项验证账户、round、request、Discover、session、已确认意图与 profile 摘要，再读取服务端当前同一材料进行一致性校验。预检只在内存使用该快照；成功恢复回执续行时再次校验一致后才允许补回。原签名缺少绑定、签名不可信、已有绑定不一致或当前材料不可用时不得推断、换绑或从本地 profile 补造。
+- **committed receipt**：成功 UI 回执已在账本提交后，若材料复校阻断，错误必须返回 `recovery_receipt_saved=true`、`browser_replay_permitted=false`，不得返回或转述 `recovery_state_changed=false`。已保存回执与未完成续行分开报告；前置条件解决后按返回的原 `work recover` 续行，不重发 `work begin`、不重做浏览器动作，也不创建新回执掩盖中断。
+- **explicit new material**：原绑定为 stale/released 时返回 `recovery_requires_new_round=true`，不能把当前新修订或另一材料放入旧签名请求。宿主需取得一次明确业务确认，先读 `round status` 与 `work status`。若原只读源任务仍 open，仅当返回同一 `collect_search_page`、`side_effect=false`、无 `delivery_source` 且提供 `cancel_command` 时，在该结束旧轮确认范围内执行此命令；确认 `ok=true` / `browser_work_cancelled` 后再次检查任务状态。不得为解锁轮次批量取消其他任务或未确定投递；无安全取消入口时按返回的核验流程处理。原源任务关闭且无其他 open work 后，按 `round status` 的当前平台依序执行既有 `round skip --platform <current_platform> --confirm-skip`，每次确认成功，直至 `workflow.workflow_complete=true`；之后运行 `round start`，按用户选择完成当前简历、目标岗位和城市交互。已有同范围确认继续有效，技术恢复确认本身不授权换材料或结束整轮。
+- **archive, no silent reanalysis**：上述显式新轮路径由 CLI 按既有规则归档旧 pending 状态；原轮历史、候选、签名、回执及审计保留，不将旧候选或授权冒充新轮结果。不得为本次换轮自动重做简历分析，也不得承诺新轮免费；新云端操作按原计费合同执行。旧请求未恢复、旧轮被跳过与新轮开始必须分别报告。执行说明见 [Agent 工作流](./agent-onboarding.md#native-recovery-material)。
 
 ### 原生技术暂停分类（同协议扩展）
 

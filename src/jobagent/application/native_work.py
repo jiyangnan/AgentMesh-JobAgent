@@ -479,7 +479,7 @@ def recover(work_id: str, *, confirmed: bool) -> dict[str, Any]:
     if (not session or session.get("id") != source["binding"].get("session_id")
             or not session.get("profile_label") or not session.get("accounts", {}).get(platform)):
         _error("native_recovery_context_missing", "The original profile/account binding is unavailable; preserve the request for technical recovery.")
-    _assert_recovery_source(source)
+    restored_binding = _assert_recovery_source(source)
     expected = copy.deepcopy(session)
     # Cancellation is committed first. A crash here retains the ordinary cancel
     # gate; repeating this confirmed command creates the same recovery work.
@@ -498,19 +498,58 @@ def recover(work_id: str, *, confirmed: bool) -> dict[str, Any]:
             "profile_label": expected["profile_label"], "account_label": expected["accounts"][platform],
             "group_reference": "actual task tab group reference", "login_state": "authenticated",
             "account_navigation": "true", "resume_or_activity": "true"}}}
+    if restored_binding is not None:
+        task["restore_resume_binding"] = restored_binding
     work = store.ensure_work(action="recover_session", task=task,
         binding={**source["binding"], "recovery_source": work_id}, key=f"recover:{work_id}")
     return present(work)
 
 
-def _assert_recovery_source(source: dict[str, Any]) -> None:
+def _assert_recovery_source(source: dict[str, Any], *, receipt_committed: bool = False) -> dict[str, Any] | None:
     from jobagent.application.native_discovery import validate_recovery_source
+    from jobagent.infra.cloud_client import CloudError
     from jobagent.infra.protocol import ProtocolError
     from jobagent.platforms.discovery import CollectionError
+    command = f"jobagent work recover --work-id {source['work_id']} --confirm-recover"
+    preserved = {"request_preserved": True, "recovery_work_id": source["work_id"],
+                 "recovery_command": command}
+    if receipt_committed:
+        preserved.update(recovery_receipt_saved=True, browser_replay_permitted=False)
+        progress_note = "The recovery receipt is saved; do not repeat the browser action."
+    else:
+        preserved["recovery_state_changed"] = False
+        progress_note = "No recovery state was changed."
     try:
-        validate_recovery_source(source)
-    except (CollectionError, ProtocolError, ValueError):
-        _error("native_recovery_not_current", "The preserved signed request no longer matches this unfinished page; no recovery state was changed.")
+        return validate_recovery_source(source)
+    except CollectionError as exc:
+        # A material fetch failure is not evidence of a different signed page.
+        # Keep its typed cause and retry contract instead of hiding every
+        # preflight failure behind native_recovery_not_current.
+        details = {**exc.details, **preserved}
+        cause = exc.__cause__
+        if isinstance(cause, CloudError):
+            details["recovery_cause"] = {"error": cause.code, "status": cause.status,
+                                         "reason": (cause.details or {}).get("reason")}
+        if details.get("retryable") or isinstance(cause, CloudError):
+            # Non-retryable material errors still resume this work after the
+            # prerequisite is fixed; discover would hit the cancellation gate.
+            details["next_suggested"] = command
+        prompt = exc.user_prompt
+        if (isinstance(cause, CloudError) and cause.code == "preparation_required"
+                and (cause.details or {}).get("reason") in {"resume_binding_stale", "resume_binding_released"}):
+            details.pop("recovery_command", None)
+            details.update(retryable=False, requires_user_action=True,
+                           recovery_requires_new_round=True, next_suggested="jobagent round status")
+            prompt = ("旧请求绑定的简历版本已变更或绑定已结束，不能把新材料换入旧请求。"
+                      "请先由用户确认结束旧轮次剩余平台并保留历史，再选择当前简历和目标岗位、城市开始新轮次。"
+                      "不要循环恢复、修改签名或清空本机状态；实际投递仍须完整预览和确认。")
+        _error(exc.code, exc.message, **{**details, "user_prompt": prompt})
+    except ProtocolError as exc:
+        _error("native_recovery_plan_invalid", f"The preserved signed plan could not be verified. {progress_note}",
+               reason=str(exc), **preserved)
+    except ValueError as exc:
+        _error("native_recovery_state_invalid", f"The saved recovery state could not be read or validated. {progress_note}",
+               reason=str(exc), **preserved)
 
 
 def _validate_session_recovery(work: dict[str, Any], result: dict[str, Any], evidence: dict[str, Any]) -> None:
@@ -702,7 +741,15 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
                 or session.get("profile_label") != work["task"]["expected_profile_label"]
                 or session.get("accounts", {}).get(platform) != work["task"]["expected_account_label"]):
             _error("native_session_binding_mismatch", "The preserved collection belongs to another logical session.")
-        _assert_recovery_source(store.get_work(work["task"]["recovery_source"], _binding()))
+        restored_binding = _assert_recovery_source(
+            store.get_work(work["task"]["recovery_source"], _binding()), receipt_committed=True)
+        if restored_binding is not None:
+            frozen_binding = work["task"].get("restore_resume_binding")
+            if frozen_binding is not None and restored_binding != frozen_binding:
+                _error("native_recovery_context_mismatch", "The verified original resume binding changed during recovery.")
+            # Older recovery tasks predate this hint. The source's original
+            # signed snapshot was independently reverified above in all cases.
+            active["resume_binding"] = restored_binding
         e = result["evidence"]
         session.update({key: e[key] for key in ("window_reference", "window_reference_kind", "group_reference")})
         if active.get("native_cancelled_work", {}).get("work_id") == work["task"]["recovery_source"]:

@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from jobagent.application import discover as existing
 from jobagent.infra import discovery_state as storage
+from jobagent.infra import protocol as signed_protocol
 from jobagent.infra.protocol import (
     ProtocolError,
     SearchPlanExpiredError,
@@ -133,12 +134,14 @@ def _same_city(left: str, right: str) -> bool:
     return left.strip().removesuffix("市") == right.strip().removesuffix("市")
 
 
-def _binding_material_or_pause(platform: str, binding: dict) -> dict:
+def _binding_material_or_pause(platform: str, binding: dict, *, preserve_binding: bool = False,
+                               include_identity: bool = False) -> dict:
     """Bound rounds discover with the confirmed resume's own material."""
     from jobagent.application.round_resume_binding import binding_material_profile
 
     try:
-        return binding_material_profile(binding)["profile"]
+        material = binding_material_profile(binding)
+        return material if include_identity else material["profile"]
     except existing.cloud_client.CloudError as exc:
         from jobagent.application.round_resume_binding import (
             BINDING_PROFILE_INCOMPLETE_CODE,
@@ -146,22 +149,26 @@ def _binding_material_or_pause(platform: str, binding: dict) -> dict:
         )
 
         if exc.code == "preparation_required":
-            existing.rounds.clear_round_resume_binding()
+            if not preserve_binding:
+                existing.rounds.clear_round_resume_binding()
             raise CollectionError(
                 "resume_binding_paused",
-                "绑定的简历已变更或不再可用，本平台已暂停。请重新选择简历后再继续。",
-                user_prompt=(
+                ("原简历材料未通过服务端校验，恢复已暂停；原绑定、请求与采集进度均保留。"
+                 if preserve_binding else
+                 "绑定的简历已变更或不再可用，本平台已暂停。请重新选择简历后再继续。"),
+                user_prompt=("请按服务端返回的具体原因处理原简历材料；不要重复取消、重建轮次或删除原状态。"
+                    if preserve_binding else
                     "绑定的简历已变更或不再可用，本轮投递已暂停。"
                     "请重新执行 jobagent round start 选择简历；不要删除状态。"
                 ),
                 details={
                     "retryable": False,
                     "requires_user_action": True,
-                    "request_preserved": False,
+                    "request_preserved": preserve_binding,
                     "no_charge": True,
                     "billing_status": "not_charged",
                     "resume_binding_paused": True,
-                    "next_suggested": "jobagent round start",
+                    "next_suggested": "jobagent round status" if preserve_binding else "jobagent round start",
                     "platform": platform,
                 },
             ) from exc
@@ -203,7 +210,7 @@ def _binding_material_or_pause(platform: str, binding: dict) -> dict:
         ) from exc
 
 
-def _context(platform: str, session_id: str) -> tuple[dict, dict, dict]:
+def _context(platform: str, session_id: str, *, recovery: bool = False) -> tuple[dict, dict, dict]:
     if platform not in _ENTRY_URLS or not isinstance(session_id, str) or not session_id:
         _fail("native_discovery_context_invalid", "Platform and host session are required", platform=platform)
     profile = existing.load_json(existing.profile_path())
@@ -214,7 +221,7 @@ def _context(platform: str, session_id: str) -> tuple[dict, dict, dict]:
     existing.rounds.assert_platform_turn(platform)
     round_binding = active.get("resume_binding") or {}
     if round_binding.get("id"):
-        profile = _binding_material_or_pause(platform, round_binding)
+        profile = _binding_material_or_pause(platform, round_binding, preserve_binding=recovery)
         existing.require_compatible_profile(profile)
     session = active.get("native_session") or {}
     if session.get("id") != session_id:
@@ -299,19 +306,87 @@ def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: d
     return plan, progress, binding
 
 
-def validate_recovery_source(work: dict) -> None:
-    """Pure, signed-context check: only the currently unfinished page recovers."""
+def _signed_recovery_context(work: dict, pending: dict, checkpoint: dict) -> tuple[dict, dict, dict, dict | None] | None:
+    """Use a signed original binding in memory; never select or persist a replacement."""
+    binding = work["binding"]
+    platform, session_id = binding["platform"], binding["session_id"]
+    plan = signed_protocol.verify_signed_payload(checkpoint["plan"],
+        public_key=signed_protocol.DECISION_SIGNING_PUBLIC_KEY, expected_type="search_plan")
+    if "resume_binding" not in plan:
+        return None  # Legacy unbound plans provide no binding to reconstruct.
+    snapshot = plan["resume_binding"]
+    fields = ("id", "context_id", "resume_id", "resume_revision_id", "content_digest",
+              "target_role", "resume_name", "confirmed_at", "account_ref")
+
+    def require(condition: bool) -> None:
+        if not condition:
+            _fail("native_recovery_binding_mismatch",
+                  "The original signed resume binding differs from the current recovery context or material.",
+                  platform=platform)
+
+    require(isinstance(snapshot, dict)
+            and all(isinstance(snapshot.get(key), str) and bool(snapshot[key].strip()) for key in fields)
+            and type(snapshot.get("resume_revision_number")) is int and snapshot["resume_revision_number"] > 0)
+    active = existing.rounds.ensure_current_round()
+    existing.rounds.assert_platform_turn(platform)
+    from jobagent.infra.account_state import current_account_ref
+    account = current_account_ref()
+    intent = active.get("intent") or {}
+    session = active.get("native_session") or {}
+    # These checks precede the material GET: do not read another signed
+    # binding's material merely because its opaque ID exists on disk.
+    require(bool(account) and account == snapshot["account_ref"] == binding["account_ref"] == pending.get("account_ref"))
+    require(active["round_id"] == binding["round_id"] == pending.get("round_id") == plan.get("round_id"))
+    require(platform == pending.get("platform") == plan.get("platform")
+            and plan.get("protocol_version") == signed_protocol.PROTOCOL_VERSION
+            and binding["request_id"] == pending.get("request_id") == plan.get("request_id")
+            and binding["discover_id"] == plan.get("discover_id")
+            and snapshot["context_id"] == plan.get("context_id"))
+    require(intent.get("status") == "confirmed" and plan.get("round_intent") == intent
+            and digest_payload(intent) == pending.get("intent_digest") == plan.get("intent_digest")
+            and intent.get("profile_digest") == pending.get("profile_digest") == plan.get("profile_digest")
+            and intent.get("target_roles") == [snapshot["target_role"]])
+    require(session.get("id") == session_id and session.get("account_ref") == account
+            and session.get("round_id") == active["round_id"])
+    restore = "resume_binding" not in active
+    if not restore:
+        current = active["resume_binding"]
+        require(isinstance(current, dict))
+        # Selection responses predate the account_ref enrichment made when
+        # the server signs a SearchPlan. No other field may be substituted.
+        require({"account_ref": account, **current} == snapshot)
+    material = _binding_material_or_pause(platform, snapshot, preserve_binding=True, include_identity=True)
+    profile = material["profile"]
+    existing.require_compatible_profile(profile)
+    require(material["binding"] == snapshot
+            and material["profile_digest"] == digest_payload(profile) == plan["profile_digest"])
+    context = existing._start_context(platform, profile=profile, active_round=active, round_intent=intent)
+    return profile, active, context, copy.deepcopy(snapshot) if restore else None
+
+
+def validate_recovery_source(work: dict) -> dict | None:
+    """Validate the unfinished page; return only a verified missing binding, without writes."""
     binding, task = work["binding"], work["task"]
     platform, session_id = binding["platform"], binding["session_id"]
-    if storage.load_pending_start(platform) is None or storage.load_pending_decision(platform) is not None:
+    pending = storage.load_pending_start(platform)
+    if pending is None or storage.load_pending_decision(platform) is not None:
         _fail("native_recovery_not_current", "This collection is no longer awaiting browser evidence", platform=platform)
-    profile, active, context = _context(platform, session_id)
+    checkpoint = storage.load_collection_checkpoint(platform)
+    if checkpoint is None:
+        _fail("native_checkpoint_missing", "Saved signed SearchPlan is missing", platform=platform)
+    signed_context = _signed_recovery_context(work, pending, checkpoint)
+    restore_binding = None
+    if signed_context is None:
+        profile, active, context = _context(platform, session_id, recovery=True)
+    else:
+        profile, active, context, restore_binding = signed_context
     if active.get("platforms", {}).get(platform, {}).get("status") in {"discovered", "reviewed", "awaiting_delivery_confirmation", "delivery_authorized", "sent", "completed", "skipped_this_round"}:
         _fail("native_recovery_not_current", "A completed discovery cannot be reopened", platform=platform)
     plan, progress, expected = _verify_checkpoint(platform, profile=profile, active=active,
         context=context, session_id=session_id, renew=False, allow_expired_recovery=True)
     if binding != expected or _next_page(plan, progress) != (task.get("query_index"), task.get("page")):
         _fail("native_recovery_not_current", "The work is not the original request's unfinished page", platform=platform)
+    return restore_binding
 
 
 def _next_page(plan: dict, progress: dict) -> tuple[int, int] | None:

@@ -67,16 +67,63 @@ Completed collection or decision work is not reopened. Repeating `work recover`
 uses the existing recovery task; it does not reset observation attempts or reopen
 a cancelled recovery task.
 
+<a id="native-recovery-material"></a>
+
+Recovery preflight preserves the bound resume, round, pending request and
+checkpoint on failure. Report the returned error and `recovery_cause` accurately:
+`resume_binding_material_unavailable` is not proof that the source page is no
+longer current. Honor `retryable`; a non-retryable material error needs its stated
+prerequisite resolved before using the offered command for the original work.
+Do not replace that command with a platform Discover or repeatedly cancel work.
+
+If `0.6.12` previously cleared a local resume binding during failed recovery, the
+updated CLI may recover only the original binding from the verified signed
+SearchPlan. It must match the account, round, request, Discover, session and
+confirmed intent, and pass a fresh check of the same server material. Preflight
+does not write the binding; successful recovery continuation checks it again
+before restoring it. No signed binding means no binding can be reconstructed.
+Never substitute a local profile, current selection or new resume revision.
+
+On `recovery_requires_new_round=true` for a stale or released binding, stop
+retrying the original request. Explain that its frozen material is no longer
+usable and obtain one explicit business confirmation to end the old round's
+remaining platforms, preserve its history and start a new round with the user's
+chosen current resume, role and cities. Existing approval of this exact scope
+remains valid; technical recovery approval alone does not cover it. First run
+`jobagent round status` and `jobagent work status`. If the original read-only
+source remains open, use only the returned `cancel_command` for that same
+`collect_search_page` task with `side_effect=false` and no `delivery_source`,
+covered by the confirmed old-round closure. Require `ok=true` and
+`event=browser_work_cancelled`, then check work status again. Do not cancel other
+pending work or uncertain delivery to unlock the round; if no safe cancellation
+is offered, follow the returned reconciliation flow. Once the original source
+is closed and no other open work remains, use the existing
+`jobagent round skip --platform <current_platform> --confirm-skip` serially for
+the returned current platform, checking each successful result. Only after
+`workflow.workflow_complete=true`, run `jobagent round start` and answer its
+resume/role/city interactions with the user's choices. Let the CLI archive old
+pending state; never delete history or reuse old signatures/candidates as new
+results. Do not rerun resume analysis merely for this handoff or promise that
+the new round is free; its cloud operations follow their normal billing contract.
+
+If an error reports `recovery_receipt_saved=true` and
+`browser_replay_permitted=false`, the successful UI receipt is already saved,
+but continuation remains blocked. Do not claim no state changed, repeat the
+browser action or submit a new observation to replace it. After the prerequisite
+is resolved, use the offered original recovery command, or the explicit new-round
+path when required; do not repeat `work begin` for that saved recovery receipt.
+
 Follow the returned `recover_session` task and its `work begin` permission before
 browser inspection. The agent locates the actual current Chrome window and
 official platform page and verifies the existing profile and bound platform
 account. A foreground Gmail page or changed tab title does not prove that the
 window was lost. Prefer a stable window ID or handle actually provided by the
 host; never copy an old page title into fresh evidence to manufacture a match.
-Only a successful recovery receipt updates the actual window/group references
-and allows collection to continue; the logical session ID remains unchanged.
-Pause for the user only when native access is unavailable, the intended session
-or account remains ambiguous, or login/verification needs the user. Preserve the
+Only successful recovery continuation, including the current material check,
+updates the actual window/group references and allows collection to continue;
+the logical session ID remains unchanged. During browser inspection, pause for
+the user when native access is unavailable, the intended session or account
+remains ambiguous, or login/verification needs the user. Preserve the
 actual technical failure and do not loop on recovery or claim it fixes an unknown
 host error such as `noWindowsAvailable`.
 
@@ -301,9 +348,12 @@ re-run `jobagent round start` to select — or upload in the workbench — a
 resume matching that direction. Direct `--target-role` values outside the
 binding direction and `append_roles`/`replace_roles` responses are refused by
 design; do not work around the refusal. If a platform command returns
-`preparation_required` with `resume_binding_paused`, the bound resume changed:
-the platform is paused — ask the user to choose a resume again via
-`jobagent round start`; do not deliver with an unbound profile in that round.
+`preparation_required` with `resume_binding_paused`, stop and follow its specific
+cause; do not deliver with an unbound profile in that round. For a preserved
+request with `recovery_requires_new_round=true`, use the
+[confirmed old-round closure and new-material path](#native-recovery-material)
+above before `round start`. Re-selecting a new resume cannot make the original
+signed request valid for that new material.
 A 409 `resume_profile_invalid` is different: the binding is still valid but
 the resume's workbench analysis profile is not confirmed. It surfaces as
 `resume_binding_profile_incomplete` with workbench guidance — the staged

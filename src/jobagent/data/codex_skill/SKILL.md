@@ -19,9 +19,10 @@ operating procedure, not a mechanism that can intercept host UI actions.
 Run `jobagent work next`. If the client is not installed, use the official
 installer linked in the [public guide](https://github.com/jiyangnan/AgentMesh-JobAgent/blob/main/docs/agent-onboarding.md).
 Follow setup or recovery commands returned by the CLI. Never invent an API Key,
-create a replacement round to recover a failure, or edit account/state files.
-Only `jobagent round start` creates a round; use it only for a user-requested new
-round. Preserve the same account, round, request, Discover and browser session.
+automatically create a replacement round for a failure, or edit account/state
+files. Only `jobagent round start` creates a round; use it for a user-requested
+new round or the explicitly confirmed new-material path below. Same-request
+recovery preserves the account, round, request, Discover and browser session.
 
 When the user asks about their resumes (how many, what the profile looks like,
 or whether preparation is ready), run the read-only `jobagent resume list` and
@@ -187,6 +188,50 @@ the user's explicit confirmation of that scope before running the returned
 confirmation of this scope; do not ask the user to make technical judgments about
 window titles, links or missing historical tool logs.
 
+Recovery preflight preserves the bound resume, round, pending request and
+checkpoint on failure. Report the returned error and `recovery_cause` accurately:
+`resume_binding_material_unavailable` is not proof that the source page is no
+longer current. Honor `retryable`; a non-retryable material error needs its stated
+prerequisite resolved before using the offered command for the original work.
+Do not replace that command with a platform Discover or repeatedly cancel work.
+
+If `0.6.12` previously cleared a local resume binding during failed recovery, the
+updated CLI may recover only the original binding from the verified signed
+SearchPlan. It must match the account, round, request, Discover, session and
+confirmed intent, and pass a fresh check of the same server material. Preflight
+does not write the binding; successful recovery continuation checks it again
+before restoring it. No signed binding means no binding can be reconstructed.
+Never substitute a local profile, current selection or new resume revision.
+
+On `recovery_requires_new_round=true` for a stale or released binding, stop
+retrying the original request. Explain that its frozen material is no longer
+usable and obtain one explicit business confirmation to end the old round's
+remaining platforms, preserve its history and start a new round with the user's
+chosen current resume, role and cities. Existing approval of this exact scope
+remains valid; technical recovery approval alone does not cover it. First run
+`jobagent round status` and `jobagent work status`. If the original read-only
+source remains open, use only the returned `cancel_command` for that same
+`collect_search_page` task with `side_effect=false` and no `delivery_source`,
+covered by the confirmed old-round closure. Require `ok=true` and
+`event=browser_work_cancelled`, then check work status again. Do not cancel other
+pending work or uncertain delivery to unlock the round; if no safe cancellation
+is offered, follow the returned reconciliation flow. Once the original source
+is closed and no other open work remains, use the existing
+`jobagent round skip --platform <current_platform> --confirm-skip` serially for
+the returned current platform, checking each successful result. Only after
+`workflow.workflow_complete=true`, run `jobagent round start` and answer its
+resume/role/city interactions with the user's choices. Let the CLI archive old
+pending state; never delete history or reuse old signatures/candidates as new
+results. Do not rerun resume analysis merely for this handoff or promise that
+the new round is free; its cloud operations follow their normal billing contract.
+
+If an error reports `recovery_receipt_saved=true` and
+`browser_replay_permitted=false`, the successful UI receipt is already saved,
+but continuation remains blocked. Do not claim no state changed, repeat the
+browser action or submit a new observation to replace it. After the prerequisite
+is resolved, use the offered original recovery command, or the explicit new-round
+path when required; do not repeat `work begin` for that saved recovery receipt.
+
 Run the returned `recover_session` task through `work begin` and its current
 schema. Locate the actual Chrome window/profile and inspect the official
 platform page with current native UI evidence. A foreground Gmail tab or a title
@@ -195,7 +240,8 @@ same bound platform account using the required account and resume/activity
 evidence. Report the actual current window/group references; never reproduce an
 old title merely to pass a comparison. The CLI accepts a new window reference
 only through this verified recovery and preserves the logical session ID.
-Collection cannot resume until the recovery receipt succeeds.
+Collection cannot resume until both the recovery receipt and current material
+validation succeed.
 
 The recovery preserves the account, round, request, Discover, completed pages
 and candidates. It creates no new paid request, but does not make a later cloud
