@@ -51,6 +51,11 @@ site APIs. If this host lacks native Computer Use, pause rather than switching
 drivers. Browser permissions and real UI observations still belong to the host;
 the task protocol cannot intercept actions taken outside it.
 
+Hosts that expose only a native app reference can use the app-scoped window
+branch. The agent verifies the selected window, profile and account before each
+action; it does not invent a window ID or use a changing page title as one.
+Unresolved window selection still pauses the task and preserves the round.
+
 Wait for each CLI process to exit before parsing its complete response or
 starting the next command. Technical page/identity failures have a separate
 preserved-work recovery branch; they must not be presented as a need to log in

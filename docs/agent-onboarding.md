@@ -12,6 +12,28 @@ invent tool APIs. Use one approved Chrome session throughout login, search,
 details, confirmed delivery and receipt verification, normally reusing a list tab
 and a detail/conversation tab. All real browser work is serial.
 
+Native hosts may expose a window ID/handle or only an application reference.
+Use the current task's matching result branch. `app_scoped_window` uses the
+actual native app reference and fresh `window_context` selection evidence;
+it does not claim persistent physical-window identity. Before every UI action,
+read fresh native state. Task-permitted window/tab selection and navigation to
+the declared official URL may prepare the target; inspect again afterward.
+Before collecting, inspecting job details/receipts or any recruiting action,
+verify the selected window, bound profile, official task page and bound account
+when present. Resolve multiple windows through native selection/menu and inspect
+the chosen window again. Missing window IDs or an omitted window list do not
+prove either missing Computer Use capability or a unique window. Treat the
+current title as diagnostic, never a fixed identifier; pause if the intended
+context remains ambiguous. Every non-paused app-scoped receipt must include its
+fresh context, while login and recovery retain their independent account checks.
+
+`native_capability_required` identifies invalid binding fields, not a missing
+window handle. Read `invalid_fields` and the complete schema. Correct only
+unaccepted fields supported by actual observations using the original work ID
+and nonce; do not repeat `begin`, cancel the task, rebuild the round or redo
+resume analysis merely to repair receipt formatting. An accepted receipt is
+immutable and must never be reused with different content.
+
 Finish each CLI process before advancing: retain a running host process handle,
 collect its output until exit, and parse the complete final response rather than
 empty/partial chunks or progress events. Do not run another work command while

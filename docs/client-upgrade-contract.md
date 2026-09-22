@@ -75,6 +75,14 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 
 ## 验收标准
 
+### 应用范围原生窗口兼容（同协议扩展）
+
+- **preserve**：原生账本 schema、原任务定义、work ID、nonce、观察次数、轮次、简历绑定和账户状态不迁移。旧待绑定任务显示当前完整回执契约，但不改写存储的 specification。已接受的回执不可变。
+- **typed scope**：新增 `window_reference_kind=app_scoped_window`，引用值为宿主真实应用引用，不冒充窗口句柄；绑定时持久化类型。每次非暂停回执要求新鲜的 `window_context`，应用引用一致、当前窗口标题、窗口选择已核验及实际选择证据。标题不作为固定身份。旧窗口 ID/handle 与未标类型的既有绑定兼容，但已标应用范围的任务不得省略证据降级。
+- **verify before action**：此模式保证每步重新选定同 profile/account 上下文，不承诺固定物理窗口。每次 UI 操作前读取新鲜原生状态；任务允许的选窗、选标签或导航至指定官方 URL 可作为定位准备，随后再次观察。采集、岗位/回执核验与招聘动作前核验窗口、profile、官方页面与已绑定账号；仍有歧义即暂停。缺少窗口枚举不能推断只有一窗。成功回执的事后校验不能替代点击前检查。投递授权、精确岗位身份和不可重复发送约束不变。
+- **diagnostics**：绑定能力字段错误列出 `invalid_fields` 并保留原 work；缺少窗口 ID 不等于能力不可用。真实能力不可用时仅提交最小暂停证据，不填造成功字段。
+- **upgrade evidence**：旧版正在处理的只读绑定也可能延后自动升级。必须以实际上一版受管安装验证更新入口与状态保留，不能把新代码测试当作旧版自动升级成功；未完成真实宿主从绑定到采集的验证前不得声称客户路径已修复。
+
 ### 只读采集会话恢复（同协议扩展）
 
 - **preserve**：BrowserWork schema 不迁移，旧回执、nonce 与观察次数不重写；账户、API Key、Chrome profile/cookies、逻辑 session ID、round、request、Discover、已完成采集页、候选、签名决策、预览授权和 audit 全部保留。

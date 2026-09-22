@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.6.13
+version: 0.6.14
 metadata:
   openclaw:
     emoji: "💼"
@@ -35,6 +35,17 @@ Legacy platform examples below remain compatible command entry points; their
 driver-specific recovery descriptions do not override native tasks. The full
 Codex instructions are in the public
 [Codex skill](https://github.com/jiyangnan/AgentMesh-JobAgent/blob/main/skills/codex-job-agent/SKILL.md).
+
+When the current task offers `app_scoped_window`, a native host without window
+IDs can use its actual app reference with fresh window-selection evidence. This
+is not a persistent physical-window handle. Before every UI action, read fresh
+native state. Task-permitted window/tab selection or navigation to the declared
+official URL may prepare the target; inspect again afterward. Before collection,
+job/receipt inspection or recruiting actions, verify the selected window, bound
+profile, official task page and bound account; otherwise pause.
+A missing ID/list does not mean missing capability or prove a unique window.
+Use the current schema and typed binding fields; never copy a changing title as
+a stable ID or skip evidence to get a success receipt.
 
 For an eligible paused read-only `collect_search_page` task without a
 `delivery_source`, follow the CLI's `work recover` offer after the user explicitly
