@@ -488,5 +488,7 @@ def test_collection_identity_block_does_not_advance_or_decide(env, monkeypatch):
         assert paused["requires_technical_recovery"]
     assert rounds.ensure_current_round() == before
     assert paused["work"]["allowed_mode"] == "reconcile_only"
-    assert paused["recovery_command"].startswith("jobagent work submit")
+    assert paused["recovery_command"].startswith("jobagent work recover")
+    assert paused["recovery_requires_confirmation"] is True
+    assert paused["completion_command"].startswith("jobagent work submit")
     assert native.status()["recovery_command"] == paused["recovery_command"]

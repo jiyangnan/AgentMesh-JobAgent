@@ -56,7 +56,7 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 
 `account`、`init`、`doctor`、`upgrade-check`、`platforms` 和 `update` 等恢复或只读命令在冲突期间仍可运行。画像属于账户业务状态，`resume analyze` 必须等 owner 归属问题解决后再执行。平台自动化命令收到 `client_upgrade_required` 后，宿主 Agent 必须执行响应中的 `next_suggested`，不可绕过检查。
 
-若唯一冲突为 `native_browser_work_inflight`，`work next/begin/submit/status` 可继续原任务的恢复协议，不能借此重新发放已记录副作用的许可；账户与画像校验仍必需。Key、画像或账本兼容性冲突不能用 work 命令豁免。账本不可读时执行只读 `jobagent upgrade-check` 查看冲突，保留原文件并使用兼容客户端处理；不得删除账本来解除阻断。
+若唯一冲突为 `native_browser_work_inflight`，`work next/begin/submit/status` 可继续原任务的恢复协议；`work recover` 仅能对客户端明确允许的只读采集任务执行下述恢复，不能借此重新发放已记录副作用的许可。账户与画像校验仍必需。Key、画像或账本兼容性冲突不能用 work 命令豁免。账本不可读时执行只读 `jobagent upgrade-check` 查看冲突，保留原文件并使用兼容客户端处理；不得删除账本来解除阻断。
 
 ## 发布门槛
 
@@ -74,6 +74,14 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 禁止用“让用户删除 `~/.jobagent` 后重装”作为正常升级方案。只有在已经确认具体文件不可恢复、完成备份并获得用户明确同意后，才可对单个文件执行人工修复。
 
 ## 验收标准
+
+### 只读采集会话恢复（同协议扩展）
+
+- **preserve**：BrowserWork schema 不迁移，旧回执、nonce 与观察次数不重写；账户、API Key、Chrome profile/cookies、逻辑 session ID、round、request、Discover、已完成采集页、候选、签名决策、预览授权和 audit 全部保留。
+- **explicit recovery**：仅当前未完成、`side_effect=false` 且不含 `delivery_source` 的 `collect_search_page` 可在用户明确同意恢复范围后执行 `jobagent work recover --work-id ID --confirm-recover`。旧版已由用户明确取消的源采集任务，只有仍对应原 pending request/checkpoint 的下一未完成页时也可恢复；已采集完成或已完成决策的任务不可恢复。该命令结束旧只读任务并创建 `recover_session` 只读任务；它不把旧任务改成采集成功，也不重置旧任务次数。重复恢复返回既有恢复任务，不重置其观察次数，也不重新开放已取消的恢复任务。
+- **verify before resume**：新任务必须通过当前宿主的真实窗口/profile 观察和同一已绑定平台账号的独立证据校验，之后才允许更新实际 `window_reference` / `group_reference` 并续接采集。优先使用宿主提供的稳定窗口 ID/handle；前景标签或动态标题变化不等于窗口丢失，不得抄写旧标题伪造匹配。新任务未成功、profile/account 不一致或证据不足时保留请求并阻断采集。
+- **block**：投递来源任务、已有副作用意图，以及不符合上述源采集取消例外的已终结任务不适用；不能产生新的发送许可。其他账户、画像、签名和账本冲突仍失败关闭。恢复不创建新付费请求；后续云决策的正常计费合同不变，不能承诺整轮免费。
+- **no automatic reset**：升级本身不执行恢复、不清空会话或轮次。恢复范围只需一次明确确认；宿主负责当前窗口和页面排查，仅在真实权限不可用、会话/账号仍不明确或登录验证需要用户时交接。未知的 `noWindowsAvailable` 仍需保留为宿主诊断，不能宣称已修复或无限循环恢复。
 
 ### 原生技术暂停分类（同协议扩展）
 

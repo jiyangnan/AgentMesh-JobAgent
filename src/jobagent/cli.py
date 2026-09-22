@@ -105,13 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
     work_sub = work.add_subparsers(dest="work_command", required=True)
     for name in ("next", "status", "contract"):
         work_sub.add_parser(name)
-    for name in ("begin", "submit", "cancel"):
+    for name in ("begin", "submit", "cancel", "recover"):
         action = work_sub.add_parser(name)
         action.add_argument("--work-id", required=True)
         if name == "submit":
             action.add_argument("--result", required=True, help="Local typed UI-observation JSON")
         if name == "cancel":
             action.add_argument("--confirm-cancel", action="store_true")
+        if name == "recover":
+            action.add_argument("--confirm-recover", action="store_true")
 
     update = sub.add_parser("update", help="Check signed client release policy")
     update.add_subparsers(dest="update_command", required=True).add_parser("check")
@@ -1449,6 +1451,8 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return native_work.begin(args.work_id)
         if args.work_command == "submit":
             return native_work.submit(args.work_id, args.result)
+        if args.work_command == "recover":
+            return native_work.recover(args.work_id, confirmed=args.confirm_recover)
         return native_work.cancel(args.work_id, confirmed=args.confirm_cancel)
     if args.command == "browser":
         return native_work.request_login(args.platform, diagnose=True)

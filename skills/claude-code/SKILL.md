@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching and recruiter greetings.
-version: 0.6.11
+version: 0.6.12
 ---
 
 # Job Agent
@@ -24,6 +24,23 @@ Legacy platform examples below remain compatible command entry points; their
 driver-specific recovery descriptions do not override native tasks. The full
 Codex instructions are in the public
 [Codex skill](https://github.com/jiyangnan/AgentMesh-JobAgent/blob/main/skills/codex-job-agent/SKILL.md).
+
+For an eligible paused read-only `collect_search_page` task without a
+`delivery_source`, follow the CLI's `work recover` offer after the user explicitly
+confirms closing that failed task and verifying the same Chrome profile/platform
+account to resume the preserved request. One confirmation covers this scope;
+the agent handles window and page diagnosis. Run the returned `recover_session`
+task before any further collection. A foreground Gmail tab or changed title does
+not prove the window is lost; use current native observations and a host-provided
+stable window ID/handle where available, never a copied old title. Successful
+recovery may update actual window/group references while retaining the logical
+session, round, request, Discover, completed pages and candidates. It creates no
+new paid request; normal later cloud decision billing still applies. Delivery
+work cannot use this recovery. Pause only for actual unavailable access, unresolved
+session/account ambiguity or a user login/verification challenge; do not loop or
+ask the customer to reconstruct missing historical calls. Use fresh receipt IDs
+for new observations and reuse an ID only for an identical receipt replay.
+
 
 ## Required Behavior
 

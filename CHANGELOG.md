@@ -2,6 +2,15 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.12] - 2026-09-22
+
+### Fixed
+
+- Exhausted read-only search tasks now offer a confirmed recovery path that verifies the original browser profile and platform account, refreshes a stale window reference, and preserves the same round, discovery request and collected candidates.
+- Browser recovery uses stable native window references instead of mutable page titles. It cannot reopen completed discoveries, repeat a delivery intent or reset an existing recovery task's observation limit.
+- Recovery survives interruption between receipt storage and progress updates. Conflicting receipt IDs now explain the distinction between an identical replay and a genuinely new observation.
+- Existing 0.6.11 clients can first confirm cancellation of the failed read-only task, complete the signed managed update, and recover that cancelled source task without rebuilding their job-search round.
+
 ## [0.6.11] - 2026-09-14
 
 ### Fixed

@@ -49,7 +49,7 @@ _RECOVERY_COMMANDS = {
     "update",
     "upgrade-check",
 }
-_NATIVE_RECOVERY_COMMANDS = {"work", "work-next", "work-begin", "work-submit", "work-status"}
+_NATIVE_RECOVERY_COMMANDS = {"work", "work-next", "work-begin", "work-submit", "work-status", "work-cancel", "work-recover"}
 _NATIVE_UPGRADE_CONFLICTS = {"native_browser_work_inflight"}
 
 

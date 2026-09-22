@@ -168,7 +168,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     example["evidence"] = {**_example(work)["evidence"], **example.get("evidence", {})}
     session = task.get("session") or (_session() if work["action"] != "bind_session" else {}) or {}
     for field in ("window_reference", "profile_label"):
-        if session.get(field):
+        if session.get(field) and work["action"] != "recover_session":
             example["evidence"][field] = session[field]
     account = session.get("accounts", {}).get(work["binding"].get("platform"))
     if account:
@@ -184,6 +184,8 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         "nonce": "copy current begun work.nonce exactly", "binding": "copy work.binding exactly",
         "outcome": schema.get("outcome", "success"), "evidence": "object of actual UI observations"}
     schema["evidence_common"] = common
+    if work["action"] == "recover_session":
+        common["window_reference"] = "actual stable native window ID or host window handle; never a page/window title"
     schema["evidence"] = {**common, **schema.get("evidence", {})}
     schema["branch_selection"] = "Success evidence requirements apply only to normal completion. For requires_user_action=true, use pause_result_schema. For technical page/identity failures, use blocked_result_schema. Omit all unobserved action-specific fields."
     task["result_schema"] = schema
@@ -243,7 +245,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     page_url = result.get("evidence", {}).get("page_url")
     platform = work["binding"]["platform"]
     safe_url = page_url if _official(platform, page_url) else ENTRY_URLS[platform]
-    return {"ok": True, "event": "browser_work_required", "executor": EXECUTOR,
+    response = {"ok": True, "event": "browser_work_required", "executor": EXECUTOR,
             "protocol": "jobagent.browser_work", "protocol_version": 1,
             "host_contract": skill_contract(),
             "work": work, "requires_user_action": paused,
@@ -258,6 +260,15 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                                if execution or observation_locked else "jobagent work status" if blocked
                                else f"jobagent work begin --work-id {work['work_id']}"),
             "workflow": rounds.round_status()}
+    if observation_locked and work["action"] == "collect_search_page" and not work["task"].get("delivery_source"):
+        command = f"jobagent work recover --work-id {work['work_id']} --confirm-recover"
+        response.update(recovery_command=command, next_suggested=command,
+            recovery_requires_confirmation=True, requires_user_action=True,
+            completion_command=f"jobagent work submit --work-id {work['work_id']} --result <result.json>",
+            cancel_command=f"jobagent work cancel --work-id {work['work_id']} --confirm-cancel",
+            user_prompt="当前只读采集的观察次数已用完。是否恢复这项采集？恢复会取消当前失败任务并重新核验同一浏览器 profile 和账号，保留原轮次、请求及已采集岗位，不执行投递。请明确回复同意恢复；助手不得替你确认。",
+            recovery_instructions="Do not submit invented completion or loop begin/next. Submit a final receipt only if actual complete evidence exists. Otherwise obtain explicit recovery confirmation once, then run recovery_command. Cancelling this read-only work does not require the old browser window to remain available.")
+    return response
 
 
 def _pause_prompt(reason: Any, url: str) -> str:
@@ -283,10 +294,10 @@ def ensure_session(platform: str) -> dict[str, Any] | None:
         del active["native_cancelled_work"]
         rounds.save_round(active)
     task = {
-        "instruction": "First verify native Computer Use is callable and app access is allowed. Inspect existing Chrome windows; reuse the existing Job Agent window/profile if uniquely identifiable. Bind that same window for login, search, details, delivery and receipts. If ambiguous, pause. Only if no reusable window exists may native UI open one. Do not copy cookies or clear profiles.",
+        "instruction": "First verify native Computer Use is callable and app access is allowed. Inspect existing Chrome windows; reuse the existing Job Agent window/profile if uniquely identifiable. Bind a stable native window ID or host window handle, never a mutable page/window title. A foreground Gmail tab does not by itself identify a different window. Bind that same window for login, search, details, delivery and receipts. If ambiguous, pause. Only if no reusable window exists may native UI open one. Do not copy cookies or clear profiles.",
         "required_evidence": ["native_computer_use_available=true", "browser=chrome", "window_reference", "profile_label", "group_reference", "observation", "reuse_status=reused|created_no_existing"],
         "result_schema": {"evidence": {"native_computer_use_available": "boolean", "browser": "chrome",
-            "window_reference": "observed stable window reference", "profile_label": "observed profile label",
+            "window_reference": "observed stable native window ID or host window handle; not a page/window title", "profile_label": "observed profile label",
             "group_reference": "observed task group reference", "reuse_status": "reused|created_no_existing"}},
     }
     revision = len(store.list_work(binding))
@@ -329,6 +340,9 @@ def _recover_collection_cancellations(binding: dict[str, Any]) -> None:
 def request_login(platform: str, *, diagnose: bool = False) -> dict[str, Any]:
     binding = _binding(platform)
     _recover_collection_cancellations(binding)
+    recovery = _resume_session_recovery(binding)
+    if recovery is not None:
+        return recovery
     pending = store.pending_work(binding)
     if pending:
         return present(pending)
@@ -367,6 +381,9 @@ def _renewable_collection(work: dict[str, Any]) -> bool:
 def request_discovery(platform: str) -> dict[str, Any]:
     binding = _binding(platform)
     _recover_collection_cancellations(binding)
+    recovery = _resume_session_recovery(binding)
+    if recovery is not None:
+        return recovery
     pending = store.pending_work(binding)
     if pending and not _renewable_collection(pending):
         return present(pending)
@@ -409,7 +426,7 @@ def _common_evidence(work: dict[str, Any], result: dict[str, Any]) -> dict[str, 
     session = _session()
     if not session or work["binding"].get("session_id") != session["id"]:
         _error("native_session_binding_mismatch", "The task is not bound to the current native browser session.")
-    if evidence.get("window_reference") != session["window_reference"] or evidence.get("profile_label") != session["profile_label"]:
+    if (work["action"] != "recover_session" and evidence.get("window_reference") != session["window_reference"]) or evidence.get("profile_label") != session["profile_label"]:
         _error("native_browser_changed", "The observed browser window/profile changed. Do not act on a different window.")
     platform = work["binding"]["platform"]
     halted = result.get("requires_user_action") or result.get("requires_technical_recovery")
@@ -419,6 +436,97 @@ def _common_evidence(work: dict[str, Any], result: dict[str, Any]) -> dict[str, 
     if expected_account and evidence.get("account_label") != expected_account and not halted:
         _error("native_platform_account_changed", "The visible platform account changed or is unverified.")
     return evidence
+
+
+def _resume_session_recovery(binding: dict[str, Any]) -> dict[str, Any] | None:
+    processed = rounds.ensure_current_round().get("native_processed_work", [])
+    for work in store.list_work(binding):
+        if work["action"] != "recover_session":
+            continue
+        if work["state"] != "closed":
+            return present(work)
+        if work["work_id"] not in processed and (work.get("result") or {}).get("outcome") == "success":
+            return _continue(work)
+    return None
+
+
+def recover(work_id: str, *, confirmed: bool) -> dict[str, Any]:
+    """Recover a cancelled read-only page without replacing its signed request.
+
+    The logical session stays bound to the original account/profile/checkpoint.
+    Only a fresh, independently verified browser observation may replace its
+    physical window reference. Delivery intents are never eligible.
+    """
+    if not confirmed:
+        _error("user_confirmation_required", "Explicit confirmation is required to recover this read-only collection.")
+    binding = _binding()
+    source = store.get_work(work_id, binding)
+    platform = source["binding"]["platform"]
+    rounds.assert_platform_turn(platform)
+    if source["action"] != "collect_search_page" or source["side_effect"] or source["task"].get("delivery_source"):
+        _error("native_recovery_not_allowed", "Only a read-only search collection can use session recovery; delivery intents remain reconciliation-only.")
+    works = store.list_work(binding)
+    previous = next((w for w in works if w["action"] == "recover_session" and w["task"].get("recovery_source") == work_id), None)
+    if previous:
+        if previous["state"] == "closed" and (previous.get("result") or {}).get("outcome") == "success":
+            return _continue(previous)
+        return present(previous)
+    if source["state"] == "closed" and (source.get("result") or {}).get("outcome") != "cancelled":
+        _error("native_recovery_not_allowed", "A completed collection cannot be reopened.")
+    if any(w["state"] != "closed" and w["work_id"] != work_id for w in works):
+        _error("native_recovery_work_pending", "Finish the existing browser task before recovering this collection.")
+    session = _session()
+    if (not session or session.get("id") != source["binding"].get("session_id")
+            or not session.get("profile_label") or not session.get("accounts", {}).get(platform)):
+        _error("native_recovery_context_missing", "The original profile/account binding is unavailable; preserve the request for technical recovery.")
+    _assert_recovery_source(source)
+    expected = copy.deepcopy(session)
+    # Cancellation is committed first. A crash here retains the ordinary cancel
+    # gate; repeating this confirmed command creates the same recovery work.
+    cancel(work_id, confirmed=True)
+    task = {"recovery_source": work_id, "session": expected,
+        "expected_profile_label": expected["profile_label"],
+        "expected_account_label": expected["accounts"][platform],
+        "url": ENTRY_URLS[platform],
+        "instruction": "Recover only this read-only collection. Inspect current native Chrome windows and tabs using the host's actual tools. A Gmail/other foreground tab or changed page title does not prove a different window. Reuse the existing window/profile when identifiable; select the existing official platform tab or navigate to the declared official URL. Verify the original profile and platform account with independent account navigation and resume/activity evidence. Use an actual stable native window ID or host window handle, never a page/window title. If multiple windows are ambiguous or native access is missing, stop using the pause schema. Do not ask the customer to diagnose tools or selectors. Do not collect jobs, send, apply, upload or change accounts during recovery.",
+        "allowed_actions": ["inspect_native_windows_and_tabs", "select_existing_official_tab", "open_official_entry", "inspect_account_and_resume_activity"],
+        "forbidden_actions": ["collect_jobs", "apply", "send_message", "upload_resume", "change_profile", "change_account", "CDP", "page_script", "hidden_api"],
+        "result_schema": {"outcome": "success|uncertain", "evidence": {
+            "native_computer_use_available": "true", "browser": "chrome",
+            "window_reference": "actual stable native window ID or host window handle",
+            "window_reference_kind": "native_window_id|host_window_handle",
+            "profile_label": expected["profile_label"], "account_label": expected["accounts"][platform],
+            "group_reference": "actual task tab group reference", "login_state": "authenticated",
+            "account_navigation": "true", "resume_or_activity": "true"}}}
+    work = store.ensure_work(action="recover_session", task=task,
+        binding={**source["binding"], "recovery_source": work_id}, key=f"recover:{work_id}")
+    return present(work)
+
+
+def _assert_recovery_source(source: dict[str, Any]) -> None:
+    from jobagent.application.native_discovery import validate_recovery_source
+    from jobagent.infra.protocol import ProtocolError
+    from jobagent.platforms.discovery import CollectionError
+    try:
+        validate_recovery_source(source)
+    except (CollectionError, ProtocolError, ValueError):
+        _error("native_recovery_not_current", "The preserved signed request no longer matches this unfinished page; no recovery state was changed.")
+
+
+def _validate_session_recovery(work: dict[str, Any], result: dict[str, Any], evidence: dict[str, Any]) -> None:
+    if result["outcome"] not in {"success", "uncertain"}:
+        _error("native_outcome_invalid", "Session recovery requires verified success or an unresolved pause.")
+    if result["outcome"] != "success":
+        return
+    task = work["task"]
+    if evidence.get("profile_label") != task["expected_profile_label"] or evidence.get("account_label") != task["expected_account_label"]:
+        _error("native_recovery_identity_mismatch", "Recovery must retain the original browser profile and platform account.")
+    if (evidence.get("native_computer_use_available") is not True or evidence.get("browser") != "chrome"
+            or evidence.get("window_reference_kind") not in {"native_window_id", "host_window_handle"}
+            or not all(isinstance(evidence.get(k), str) and evidence[k].strip() for k in ("window_reference", "group_reference"))
+            or evidence.get("login_state") != "authenticated" or evidence.get("account_navigation") is not True
+            or evidence.get("resume_or_activity") is not True):
+        _error("native_recovery_evidence_required", "Verify native window identity, original profile/account, account navigation and resume/activity before resuming.")
 
 
 def _review_for(work: dict[str, Any]) -> dict[str, Any]:
@@ -543,6 +651,8 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
             _error("native_outcome_invalid", "Unsupported session-inspection outcome.")
         if result["outcome"] == "success" and (e.get("login_state") != "authenticated" or not e.get("account_label") or e.get("account_navigation") is not True or e.get("resume_or_activity") is not True):
             _error("native_login_unverified", "Independent account navigation and resume/activity evidence must agree.")
+    elif work["action"] == "recover_session":
+        _validate_session_recovery(work, result, e)
     elif work["action"] == "collect_search_page":
         from jobagent.application.native_discovery import refresh_collection, validate_page
         # Renew an expired preserved plan inline so submit never deadlocks
@@ -584,6 +694,20 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
         active["native_session"] = session
         active["browser_session_id"] = session["id"]
         active["browser_executor"] = EXECUTOR
+    elif action == "recover_session":
+        session = active.get("native_session") or {}
+        if (session.get("id") != work["binding"]["session_id"]
+                or session.get("account_ref") != current_account_ref()
+                or session.get("round_id") != work["binding"]["round_id"]
+                or session.get("profile_label") != work["task"]["expected_profile_label"]
+                or session.get("accounts", {}).get(platform) != work["task"]["expected_account_label"]):
+            _error("native_session_binding_mismatch", "The preserved collection belongs to another logical session.")
+        _assert_recovery_source(store.get_work(work["task"]["recovery_source"], _binding()))
+        e = result["evidence"]
+        session.update({key: e[key] for key in ("window_reference", "window_reference_kind", "group_reference")})
+        if active.get("native_cancelled_work", {}).get("work_id") == work["task"]["recovery_source"]:
+            del active["native_cancelled_work"]
+        active["platforms"][platform].update(status="login_verified", next_suggested=f"jobagent {platform} discover")
     elif action == "inspect_session":
         active["native_session"].setdefault("accounts", {})[platform] = result["evidence"]["account_label"]
         if active.get("native_cancelled_work", {}).get("platform") == platform:
@@ -626,6 +750,9 @@ def next_work() -> dict[str, Any]:
                 "next_suggested": workflow.get("next_suggested") or "jobagent round status",
                 "workflow": workflow}
     _recover_collection_cancellations(_binding(platform))
+    recovery = _resume_session_recovery(_binding(platform))
+    if recovery is not None:
+        return recovery
     active = rounds.ensure_current_round()
     cancelled = active.get("native_cancelled_work", {})
     if cancelled.get("platform") == platform:
@@ -929,6 +1056,9 @@ def status() -> dict[str, Any]:
         return {"ok": True, "executor": EXECUTOR, "workflow": workflow}
     works = store.list_work({"account_ref": current_account_ref(), "round_id": workflow["round_id"]})
     active = state.load_json(state.current_round_path()) or {}
+    pending_recovery = next((w for w in works if w["action"] == "recover_session" and w["state"] != "closed"), None)
+    if pending_recovery:
+        return present(pending_recovery)
     blocked = next((w for w in works if w["state"] != "closed"
                     and (w.get("result") or {}).get("requires_technical_recovery")), None)
     if blocked:

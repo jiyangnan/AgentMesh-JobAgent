@@ -376,7 +376,8 @@ def submit_work(work_id, binding, result: dict) -> dict:
         if previous is not None:
             if previous["work_id"] != work_id or previous["digest"] != digest:
                 raise _error("browser_work_receipt_conflict",
-                             "This receipt ID was already used with different content.")
+                             "This receipt ID was already used for another work or different content. Replay an identical receipt unchanged; a genuinely new observation needs a new receipt ID. Changing the ID does not supply missing evidence or reopen a completed task.",
+                             next_suggested="jobagent work status")
             work["receipt_replayed"] = True
             return work
         if work["state"] == "closed":

@@ -193,7 +193,7 @@ def test_read_error_preserves_marker_and_every_asset(tmp_path, monkeypatch):
     assert files(root) == before
 
 
-@pytest.mark.parametrize("command", ["work", "work-next", "work-begin", "work-submit", "work-status"])
+@pytest.mark.parametrize("command", ["work", "work-next", "work-begin", "work-submit", "work-status", "work-cancel", "work-recover"])
 def test_work_recovery_only_exempts_native_inflight_not_account_or_profile_conflicts(command):
     report = {"ok": False, "conflicts": [{"code": "native_browser_work_inflight"}], "next_suggested": "jobagent work status"}
     assert client_upgrade.enforce_upgrade_for_command(command, report) == report
