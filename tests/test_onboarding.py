@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 from pathlib import Path
 import shutil
@@ -45,6 +46,25 @@ def test_doctor_keeps_typed_tls_diagnostics_instead_of_rebinding_key(monkeypatch
     assert result['workflow']['next_suggested'] == 'jobagent doctor tls'
     assert result['api_key_configured'] is True
     assert 'existing-secret' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('invalid_url', [True, False])
+def test_installer_still_emits_handoff_on_endpoint_or_proxy_protocol_error(monkeypatch, capsys, invalid_url):
+    monkeypatch.setattr(credentials, 'load_api_key', lambda: None)
+    monkeypatch.setenv('JOBAGENT_API_BASE', 'https://[invalid' if invalid_url else 'https://example.test')
+    monkeypatch.setenv('JOBAGENT_CORE_API_BASE', 'https://example.test')
+    def bad_response(*a, **kw):
+        raise http.client.BadStatusLine('private-proxy-text')
+    monkeypatch.setattr(tls_support.urllib.request, 'urlopen', bad_response)
+    monkeypatch.setattr(sys, 'argv', ['onboarding', '--installer'])
+    onboarding.main()
+    output = capsys.readouterr().out
+    result = json.loads(output.split('Agent handoff (follow before ending setup):\n')[1])
+    assert result['event'] == 'onboarding_handoff'
+    assert result['transport_preflight']['ok'] is False
+    assert result['transport_preflight']['checks'][0]['error'] == (
+        'https_endpoint_invalid' if invalid_url else 'http_protocol_error')
+    assert 'private-proxy-text' not in output
 
 
 def snapshot(root):

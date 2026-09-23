@@ -1,6 +1,7 @@
 """Verified HTTPS with product-owned roots; never modify host trust settings."""
 from __future__ import annotations
 
+import http.client
 import os
 import ssl
 import urllib.error
@@ -73,11 +74,11 @@ def failure_details(error: BaseException) -> dict[str, Any]:
 
 
 def _probe(service: str, base: str) -> dict[str, Any]:
-    parsed = urllib.parse.urlsplit(base)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
-        return {'service': service, 'ok': False, 'error': 'https_endpoint_required'}
-    request = urllib.request.Request(base.rstrip('/') + '/v1/health', headers={'Accept': 'application/json'})
     try:
+        parsed = urllib.parse.urlsplit(base)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+            return {'service': service, 'ok': False, 'error': 'https_endpoint_required'}
+        request = urllib.request.Request(base.rstrip('/') + '/v1/health', headers={'Accept': 'application/json'})
         with urllib.request.urlopen(request, timeout=5, context=verified_context()) as response:
             return {'service': service, 'ok': response.status == 200, 'http_status': response.status,
                     'tls_verified': urllib.parse.urlsplit(response.geturl()).scheme == 'https'}
@@ -92,6 +93,12 @@ def _probe(service: str, base: str) -> dict[str, Any]:
                           else 'tls_certificate_verification_failed' if detail
                           else 'network_connection_failed'),
                 **({'tls_diagnostic': detail['tls_diagnostic']} if detail else {})}
+    except ValueError:
+        return {'service': service, 'ok': False, 'tls_verified': False,
+                'error': 'https_endpoint_invalid'}
+    except http.client.HTTPException:
+        return {'service': service, 'ok': False, 'tls_verified': False,
+                'error': 'http_protocol_error'}
 
 
 def transport_preflight() -> dict[str, Any]:
