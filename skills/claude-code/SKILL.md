@@ -36,6 +36,26 @@ A missing ID/list does not mean missing capability or prove a unique window.
 Use the current schema and typed binding fields; never copy a changing title as
 a stable ID or skip evidence to get a success receipt.
 
+If native window actions are unavailable (for example `noWindowsAvailable`), or
+AX and screenshots disagree about the selected context, stop collecting. If the
+host exposes a native selection/activation API, use it once to activate the
+existing bound Chrome, then read fresh state. Do not invent APIs or replay timed-out input
+or sends. If still unusable, submit the minimal `pause_result_schema` with
+`reason=permission_required` and `evidence.host_window_issue` set to the observed
+`window_unavailable` or `ax_visual_mismatch`. Relay the CLI prompt asking the user
+to bring the original window forward once. Do not infer lockscreen, logout or
+missing Computer Use, or cancel, rebind, start a round or clear state to activate
+it. Afterward, freshly verify window, profile, official page and bound account;
+continue only under current work permissions, without repeating side effects.
+If that one user foregrounding does not restore consistent observations, retain
+the pause and report the host failure; do not ask again or loop actions.
+Ordinary job-identity or page-evidence failures still use the technical blocked
+branch, not this host-window pause. Foregrounding never resets attempts: when
+the budget is exhausted, submit existing complete evidence only through the
+returned `completion_command`; if further observation is needed, use the existing
+explicitly confirmed read-only recovery offer. Otherwise retain the same work
+and nonce.
+
 For an eligible paused read-only `collect_search_page` task without a
 `delivery_source`, follow the CLI's `work recover` offer after the user explicitly
 confirms closing that failed task and verifying the same Chrome profile/platform

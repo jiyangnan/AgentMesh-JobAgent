@@ -171,7 +171,12 @@ def test_pause_schema_declares_minimal_evidence_and_exempts_success_fields(recei
     }
     expected = COMMON_EVIDENCE if action == "bind_session" else COMMON_EVIDENCE | SESSION_EVIDENCE
     assert set(schema["evidence_required"]) == expected
-    assert set(schema["evidence_optional"]) == {"page_url", "account_label"}
+    assert set(schema["evidence_optional"]) == {"page_url", "account_label", "host_window_issue"}
+    assert schema["evidence_optional_schema"]["host_window_issue"]["enum"] == [
+        "window_unavailable", "ax_visual_mismatch",
+    ]
+    assert "reason=permission_required" in schema["evidence_optional_schema"]["host_window_issue"]["only_when"]
+    assert "host_window_issue" not in task["blocked_result_schema"]["evidence_optional"]
     assert schema["action_specific_success_fields_required"] is False
     assert schema["outcome"] == "uncertain" and schema["requires_user_action"] is True
     assert schema["reason"] == task["pause_reason_values"]

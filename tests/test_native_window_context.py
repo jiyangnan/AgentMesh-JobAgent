@@ -457,3 +457,157 @@ def test_recovery_presentation_has_complete_typed_success_examples(app_recovery_
     r.native._validate_session_recovery(before, example, checked)
     assert r.ledger.get_work(work["work_id"], work["binding"]) == before
     assert "window_context" not in task["pause_result_example"]["evidence"]
+
+
+@pytest.fixture
+def host_window_collection_env(app_recovery_env):
+    """Reach a fresh page through the real, confirmed recovery protocol."""
+    r = app_recovery_env
+    recovery = r.native.recover(r.source["work_id"], confirmed=True)["work"]
+    recovery = r.native.begin(recovery["work_id"])["work"]
+    r.host_page = r.submit(recovery, r.observed(recovery, recover=True))["work"]
+    assert r.host_page["action"] == "collect_search_page"
+    assert r.host_page["observation_attempts"] == 0
+    return r
+
+
+def host_window_pause(r, work, issue="window_unavailable"):
+    observed = r.observed(work)
+    observed.update(outcome="uncertain", requires_user_action=True, reason="permission_required")
+    observed["evidence"] = {key: value for key, value in observed["evidence"].items()
+                            if key in {"source", "observed_at", "observation", "window_reference", "profile_label"}}
+    observed["evidence"].update(host_window_issue=issue,
+        observation="Synthetic native window action is unavailable; no current page or job identity claimed.")
+    return observed
+
+
+@pytest.mark.parametrize("issue", ["window_unavailable", "ax_visual_mismatch"])
+def test_host_window_pause_preserves_page_and_resumes_with_same_nonce(host_window_collection_env, issue):
+    from tests.test_native_discovery import receipt
+
+    r = host_window_collection_env
+    work = r.native.begin(r.host_page["work_id"])["work"]
+    session_before = copy.deepcopy(r.env.active["native_session"])
+    paused = r.submit(work, host_window_pause(r, work, issue))
+    assert paused["requires_user_action"] is True
+    assert "前置" in paused["user_prompt"]
+    assert "一次" in paused["user_prompt"]
+    assert "host_window_issue" in paused["work"]["task"]["pause_result_schema"]["evidence_optional"]
+    assert paused["work"]["observation_attempts"] == 1
+    assert paused["work"]["nonce"] == work["nonce"]
+    assert r.pending_path.read_bytes() == r.pending_bytes
+    assert r.env.active["native_session"] == session_before
+    assert not paused.get("recovery_command")
+
+    # The user foregrounding a window is not simulated as a grant. Only the
+    # existing protocol can issue the second permitted observation.
+    resumed = r.native.begin(work["work_id"])["work"]
+    assert resumed["nonce"] == work["nonce"]
+    assert resumed["observation_attempts"] == 2
+    complete = receipt(resumed, final=True)
+    complete["evidence"].update(r.observed(resumed)["evidence"])
+    response = r.submit(resumed, complete)
+    assert response["ok"] is True
+    assert r.ledger.get_work(work["work_id"], work["binding"])["state"] == "closed"
+    assert len(r.env.starts) == 1 and len(r.env.decisions) == 1
+
+
+def test_exhausted_host_pause_keeps_explicit_recovery_and_continues_preserved_page(host_window_collection_env):
+    r = host_window_collection_env
+    work = r.host_page
+    for attempt in range(3):
+        work = r.native.begin(work["work_id"])["work"]
+        paused = r.submit(work, host_window_pause(r, work))
+        assert paused["work"]["observation_attempts"] == attempt + 1
+    prompt = paused["user_prompt"]
+    assert "前置" in prompt and "不会恢复观察额度" in prompt
+    assert "无需重新登录、取消任务" not in prompt
+    assert "恢复会取消当前失败任务" in prompt
+    assert "确认" in prompt
+    assert paused["work"]["allowed_mode"] == "reconcile_only"
+    assert paused["recovery_requires_confirmation"] is True
+    assert "work recover" in paused["recovery_command"]
+    assert paused["next_suggested"] == paused["recovery_command"]
+    assert "work submit" in paused["completion_command"]
+    assert r.ledger.get_work(work["work_id"], work["binding"])["state"] == "reconcile_only"
+    with pytest.raises(r.ledger.BrowserWorkError) as limited:
+        r.native.begin(work["work_id"])
+    assert limited.value.payload["error"] == "browser_work_observation_limit"
+    with pytest.raises(r.ledger.BrowserWorkError) as confirmation:
+        r.native.recover(work["work_id"], confirmed=False)
+    assert confirmation.value.payload["error"] == "user_confirmation_required"
+    assert r.ledger.get_work(work["work_id"], work["binding"])["observation_attempts"] == 3
+
+    recovery = r.native.recover(work["work_id"], confirmed=True)["work"]
+    recovery = r.native.begin(recovery["work_id"])["work"]
+    next_page = r.submit(recovery, r.observed(recovery, recover=True))["work"]
+    assert next_page["action"] == "collect_search_page"
+    assert next_page["task"]["page"] == work["task"]["page"] == 2
+    assert next_page["work_id"] != work["work_id"]
+    assert next_page["binding"] == work["binding"]
+    assert next_page["observation_attempts"] == 0
+    previous = r.ledger.get_work(work["work_id"], work["binding"])
+    assert previous["state"] == "closed" and previous["observation_attempts"] == 3
+    assert previous["nonce"] == work["nonce"]
+    assert r.pending_path.read_bytes() == r.pending_bytes
+    assert len(r.env.starts) == 1 and not r.env.decisions and not r.env.renewals
+
+
+def test_real_job_identity_block_does_not_become_foreground_request(app_recovery_env):
+    r = app_recovery_env
+    blocked = r.native.present(r.ledger.get_work(r.source["work_id"], r.source["binding"]))
+    assert blocked["error"] == "native_job_identity_unknown"
+    assert blocked["requires_technical_recovery"] is True
+    assert "前置" not in blocked["user_prompt"]
+    assert blocked["work"]["allowed_mode"] == "reconcile_only"
+
+
+@pytest.mark.parametrize("issue", ["job_identity_unknown", {}, [], None])
+def test_host_pause_marker_must_be_typed_host_issue(host_window_collection_env, issue):
+    r = host_window_collection_env
+    work = r.native.begin(r.host_page["work_id"])["work"]
+    # The fixture loads a separate real ledger module; window validators use
+    # the ordinary module's error class, exactly as production imports do.
+    with pytest.raises(store.BrowserWorkError) as caught:
+        r.submit(work, host_window_pause(r, work, issue))
+    assert caught.value.payload["error"] == "native_host_window_pause_invalid"
+    assert r.ledger.get_work(work["work_id"], work["binding"])["result"] is None
+
+
+def test_host_window_issue_cannot_reclassify_technical_job_error(host_window_collection_env):
+    r = host_window_collection_env
+    work = r.native.begin(r.host_page["work_id"])["work"]
+    blocked = host_window_pause(r, work)
+    blocked.update(requires_user_action=False, requires_technical_recovery=True, reason="job_identity_unknown")
+    with pytest.raises(store.BrowserWorkError) as caught:
+        r.submit(work, blocked)
+    assert caught.value.payload["error"] == "native_host_window_pause_invalid"
+    assert r.ledger.get_work(work["work_id"], work["binding"])["result"] is None
+
+
+def test_untagged_permission_pause_keeps_actual_permission_handoff(window_env):
+    work = begin_inspection(window_env)
+    paused = app_observation(work)
+    paused.update(outcome="uncertain", requires_user_action=True, reason="permission_required")
+    paused["evidence"].pop("window_context")
+    response = submit(window_env, work, paused)
+    assert "Computer Use 权限" in response["user_prompt"]
+    assert "前置" not in response["user_prompt"]
+
+
+def test_foregrounding_does_not_reissue_side_effect_intent(window_env):
+    inspect = app_delivery_work(window_env)
+    action = submit(window_env, inspect, app_observation(inspect))["work"]
+    work = native.begin(action["work_id"])["work"]
+    paused = app_observation(work)
+    paused.update(outcome="uncertain", requires_user_action=True, reason="permission_required")
+    paused["evidence"].pop("window_context")
+    paused["evidence"]["host_window_issue"] = "window_unavailable"
+    response = submit(window_env, work, paused)
+    assert "前置" in response["user_prompt"]
+    same = native.begin(work["work_id"])["work"]
+    assert same["nonce"] == work["nonce"] and same["allowed_mode"] == "reconcile_only"
+    assert same["execution_permitted"] is False
+    with pytest.raises(store.BrowserWorkError) as recovery:
+        native.recover(work["work_id"], confirmed=True)
+    assert recovery.value.payload["error"] == "native_recovery_not_allowed"

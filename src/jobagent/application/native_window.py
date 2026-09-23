@@ -8,6 +8,7 @@ from jobagent.infra.browser_work import BrowserWorkError
 
 APP_SCOPED = "app_scoped_window"
 KINDS = ("native_window_id", "host_window_handle", APP_SCOPED)
+HOST_WINDOW_ISSUES = ("window_unavailable", "ax_visual_mismatch")
 REFERENCE = ("Actual host window ID/handle when exposed. For app_scoped_window, use the actual "
              "native app reference accepted by the host; this identifies an app, not a persistent window. "
              "Never use a page title or snapshot element index as a stable identifier.")
@@ -28,7 +29,22 @@ BEFORE_ACTION = (
     "use native window selection or the window menu to resolve multiple windows, then inspect the "
     "selected window again. Recheck after foreground changes or interruptions. Do not assume one "
     "window because the host omits window IDs or a window list. If the target remains ambiguous, "
-    "pause without acting. A receipt checked after a click cannot replace these pre-action checks."
+    "pause without acting. A receipt checked after a click cannot replace these pre-action checks. "
+    "If a host window action is unavailable (for example noWindowsAvailable), or accessibility "
+    "state and the screenshot show inconsistent contexts, stop collecting. This does not prove "
+    "that the screen is locked, the account is logged out or Computer Use is disabled. If the "
+    "host's actual documented tools can select/activate the existing target window, try that "
+    "preparation once and read fresh state again; never invent an activation API or replay a "
+    "timed-out input or recruiting action. If still unavailable, use the minimal permission_required "
+    "pause with evidence.host_window_issue=window_unavailable or ax_visual_mismatch; ask the user "
+    "only to bring the existing Chrome window to the foreground once. Preserve work/nonce, profile "
+    "and round. Afterward verify fresh window/profile/page/account evidence before continuing "
+    "within current permissions. If that one user foregrounding does not restore consistent "
+    "observations, preserve the pause and report the host failure; do not ask again or loop actions. "
+    "Foregrounding does not restore observation attempts or permit "
+    "side-effect replay; an exhausted collection still uses its explicit confirmed recovery "
+    "entry if new observation is needed. Ordinary job identity or business-page evidence errors "
+    "remain technical blockers, not requests for the user to diagnose a window."
 )
 BIND_INSTRUCTION = (
     "Verify native Computer Use is callable and app access is allowed. Missing window IDs alone do "
@@ -96,3 +112,18 @@ def validate(evidence: dict[str, Any], *, expected_kind: str | None = None,
                        for key in ("window_title", "selection_evidence"))):
         raise BrowserWorkError("native_window_context_required",
                                "Verify the actual app reference and freshly selected native window before continuing; a title alone is not window identity.")
+
+
+def host_window_issue(result: dict[str, Any]) -> str | None:
+    evidence = result.get("evidence")
+    issue = evidence.get("host_window_issue") if isinstance(evidence, dict) else None
+    if (result.get("requires_user_action") is True and result.get("reason") == "permission_required"
+            and isinstance(issue, str) and issue in HOST_WINDOW_ISSUES):
+        return issue
+    return None
+
+
+def validate_host_pause(result: dict[str, Any], evidence: dict[str, Any]) -> None:
+    if "host_window_issue" in evidence and host_window_issue(result) is None:
+        raise BrowserWorkError("native_host_window_pause_invalid",
+                               "A host window issue is only a typed permission_required user pause; do not reclassify job identity or page evidence failures.")

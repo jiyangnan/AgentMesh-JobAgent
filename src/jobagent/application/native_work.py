@@ -246,19 +246,27 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     task["pause_result_example"] = {**_example(work), "outcome": "uncertain",
         "requires_user_action": True, "reason": "verification_required",
         "evidence": pause_evidence}
+    task["host_window_pause_result_example"] = {
+        **task["pause_result_example"], "reason": "permission_required",
+        "evidence": {**pause_evidence, "host_window_issue": "window_unavailable",
+                     "observation": "Describe the actual unavailable native window action or AX/screenshot mismatch; do not infer login state or claim completion."}}
     task["pause_reason_values"] = ["login_required", "verification_required", "challenge", "permission_required", "session_unknown"]
     task["pause_result_schema"] = {"type": "object",
         "required": ["receipt_id", "nonce", "binding", "outcome", "requires_user_action", "reason", "evidence"],
         "outcome": "uncertain", "requires_user_action": True, "reason": task["pause_reason_values"],
-        "evidence_required": list(pause_evidence), "evidence_optional": ["page_url", "account_label"],
+        "evidence_required": list(pause_evidence), "evidence_optional": ["page_url", "account_label", "host_window_issue"],
+        "evidence_optional_schema": {"host_window_issue": {
+            "type": "string", "enum": list(native_window.HOST_WINDOW_ISSUES),
+            "only_when": "requires_user_action=true and reason=permission_required; actual host window action failure or AX/screenshot mismatch, never ordinary job identity or business-page evidence failure"}},
         "action_specific_success_fields_required": False,
-        "instructions": "Copy current nonce/binding. Fill fresh observed_at and actual observation; use exact bound window/profile after binding. Omit unobserved optional fields; do not invent query/city, results, candidates, job identity or receipts. Before binding, missing capability requires only source/observed_at/observation. A pause grants no new action permission."}
+        "instructions": "Copy current nonce/binding. Fill fresh observed_at and actual observation; use exact bound window/profile after binding. Omit unobserved optional fields; do not invent query/city, results, candidates, job identity or receipts. Before binding, missing capability requires only source/observed_at/observation. For an actual host window action failure or AX/screenshot mismatch, follow window_context_contract and host_window_pause_result_example: try an actually available native selection/activation once, then ask only for foregrounding the existing window if still unavailable. A pause grants no new action permission or observation budget."}
     task["blocked_result_example"] = {**task["pause_result_example"],
         "requires_user_action": False, "requires_technical_recovery": True,
         "reason": "job_identity_unknown"}
     task["blocked_result_schema"] = {**task["pause_result_schema"],
         "required": ["receipt_id", "nonce", "binding", "outcome", "requires_technical_recovery", "reason", "evidence"],
         "requires_user_action": False, "requires_technical_recovery": True,
+        "evidence_optional": ["page_url", "account_label"], "evidence_optional_schema": {},
         "reason": list(TECHNICAL_BLOCK_REASONS),
         "instructions": "Use for inconsistent job identity or inconclusive page state, not login, verification or window ambiguity. Preserve actual observations and omit unverified success fields. Stop normal workflow for technical diagnosis; do not ask the user to log in, close windows or fix a selector. Recovery grants no side-effect permission."}
     if "unresolved_result_example" in task:
@@ -283,6 +291,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         work["allowed_mode"] = "reconcile_only" if observation_locked else "observe"
     result = work.get("result") or {}
     paused = bool(result.get("requires_user_action")) and not execution
+    host_window_issue = native_window.host_window_issue(result) if paused else None
     blocked = bool(result.get("requires_technical_recovery")) and not execution
     page_url = result.get("evidence", {}).get("page_url")
     platform = work["binding"]["platform"]
@@ -291,7 +300,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             "protocol": "jobagent.browser_work", "protocol_version": 1,
             "host_contract": skill_contract(),
             "work": work, "requires_user_action": paused,
-            **({"user_prompt": _pause_prompt(result.get("reason"), safe_url)} if paused else {}),
+            **({"user_prompt": _pause_prompt(result.get("reason"), safe_url, host_window_issue)} if paused else {}),
             **({"requires_technical_recovery": True, "error": f"native_{result['reason']}",
                 "message": "页面或岗位身份的证据不一致，正常流程已暂停并保留进度；需要技术排查，不代表登录失效或窗口冲突。",
                 "recovery_command": (f"jobagent work submit --work-id {work['work_id']} --result <result.json>"
@@ -310,10 +319,20 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             cancel_command=f"jobagent work cancel --work-id {work['work_id']} --confirm-cancel",
             user_prompt="当前只读采集的观察次数已用完。是否恢复这项采集？恢复会取消当前失败任务并重新核验同一浏览器 profile 和账号，保留原轮次、请求及已采集岗位，不执行投递。请明确回复同意恢复；助手不得替你确认。",
             recovery_instructions="Do not submit invented completion or loop begin/next. Submit a final receipt only if actual complete evidence exists. Otherwise obtain explicit recovery confirmation once, then run recovery_command. Cancelling this read-only work does not require the old browser window to remain available.")
+        if host_window_issue:
+            response["user_prompt"] = (
+                "宿主暂时无法操作原窗口，或辅助功能信息与截图未能对应。请先将原来的 Chrome 窗口前置并保持可见一次，完成后回复“已前置”。"
+                  "\n本只读任务的观察次数已用完，前置窗口不会恢复观察额度。已有完整真实证据时可按 completion_command 提交；"
+                  "若还需新的观察或采集，必须先明确确认下面的只读恢复范围，不能自动恢复或重复 begin。\n"
+                + response["user_prompt"])
     return response
 
 
-def _pause_prompt(reason: Any, url: str) -> str:
+def _pause_prompt(reason: Any, url: str, host_window_issue: str | None = None) -> str:
+    if reason == "permission_required" and host_window_issue in native_window.HOST_WINDOW_ISSUES:
+        return ("宿主暂时无法操作原窗口，或辅助功能信息与截图未能对应，当前任务已暂停并保留。"
+                "请只将原来的 Chrome 窗口前置并保持可见一次，完成后回复“已前置”。"
+                "无需重新登录、取消任务、新建轮次或重新绑定；不需要你诊断工具。")
     if reason == "login_required":
         return f"请在当前已绑定的 Chrome 页面 {url} 完成登录，完成后回复“登录好了”；不会新开另一套浏览器。"
     if reason in {"verification_required", "challenge"}:
@@ -713,6 +732,7 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         closed = store.submit_work(work_id, binding, result)
         return _continue(closed)
     e = _common_evidence(work, result)
+    native_window.validate_host_pause(result, e)
     if result.get("requires_user_action") or result.get("requires_technical_recovery"):
         pass
     elif result.get("outcome") not in {"success", "page_collected", "uncertain", "unresolved", "unavailable"}:
