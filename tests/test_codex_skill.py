@@ -42,7 +42,7 @@ def test_contract_returns_current_full_instructions_without_writing(monkeypatch,
     assert result["protocol_version"] == 1
     assert result["instructions"] == codex_skill._bundle()["SKILL.md"].decode()
     assert result["file_sha256"] == {name: codex_skill._digest(data) for name, data in codex_skill._bundle().items()}
-    assert result["next_suggested"] == "jobagent work next"
+    assert result["next_suggested"] == "jobagent workflow next"
     assert list(tmp_path.iterdir()) == []
 
 

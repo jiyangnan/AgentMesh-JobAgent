@@ -460,6 +460,10 @@ def request_discovery(platform: str) -> dict[str, Any]:
                                 f"若要恢复本平台，可重新运行 jobagent {platform} login。已有回执与本轮进度会保留。"),
                 "workflow": rounds.round_status(), "next_suggested": "jobagent round status"}
     from jobagent.application.native_discovery import start_discovery
+    from jobagent.application.resume_freshness import gate_search
+    gate = gate_search(platform)
+    if gate:
+        return gate
     response = start_discovery(platform, session["id"])
     return present(response["work"]) if response.get("work") else response
 

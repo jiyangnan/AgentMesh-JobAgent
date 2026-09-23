@@ -17,6 +17,13 @@ Each platform is isolated from the others. A page change on one platform does no
 
 ## Product Flow
 
+Hosts enter the standard loop with `jobagent workflow contract` and
+`jobagent workflow next`. New user intent goes through `workflow submit`; the
+CLI returns one exact command, interaction, handoff or native task at a time.
+See the [host workflow contract](docs/workflow-host-loop.md). City, salary and
+company filters can change within a round; changing a bound resume's direction
+requires an explicit old-round finish and a matching resume.
+
 ```text
 Resume profile
   -> Boss Discover / signed review / delivery preview / user confirmation / delivery / audit
@@ -40,7 +47,7 @@ cloud decisions, final-list confirmation, progress and audit in the CLI. Read
 the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
 
 ```bash
-jobagent work next
+jobagent workflow next
 ```
 
 Read each returned task and result schema. When the current response offers

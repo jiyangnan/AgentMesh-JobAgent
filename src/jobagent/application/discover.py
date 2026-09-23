@@ -436,6 +436,10 @@ def run_discover(
     wait_seconds: int = 6,
     page_delay: float = 2.0,
 ) -> dict[str, Any]:
+    from jobagent.application.resume_freshness import gate_search
+    gate = gate_search(platform)
+    if gate:
+        return gate
     profile = load_json(profile_path())
     if not profile:
         raise ValueError(
@@ -522,7 +526,8 @@ def run_discover(
                 )
                 if binding_material
                 else None,
-                round_id=str(active_round.get("round_id")) if round_binding.get("id") else None,
+                round_id=str(active_round.get("round_id")),
+                **({"criteria_revision": active_round["round_criteria"]["criteria_revision"]} if active_round.get("round_criteria") else {}),
             )
     except cloud_client.CloudError as exc:
         from jobagent.application.round_resume_binding import (
@@ -601,6 +606,9 @@ def run_discover(
             request_id=request_id,
             require_request_id=True,
         )
+    if plan.get("round_criteria") != active_round.get("round_criteria"):
+        raise CollectionError("criteria_search_plan_mismatch", "Signed search criteria differ from the current round",
+                              details={"request_preserved": True, "no_charge": True, "next_suggested": "jobagent round status"})
     if collection is not None and collection_scope_digest(plan) != collection_scope_digest(collection["plan"]):
         raise CollectionError(
             "collection_checkpoint_plan_mismatch",

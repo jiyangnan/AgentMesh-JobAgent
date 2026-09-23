@@ -68,6 +68,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("workflow-contract", help="Read the complete host-independent workflow and CLI command catalog offline")
+    workflow = sub.add_parser("workflow", help="Follow the persisted product workflow")
+    workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
+    for name in ("contract", "next"):
+        workflow_sub.add_parser(name)
+    workflow_submit = workflow_sub.add_parser("submit")
+    workflow_submit.add_argument("--input", required=True, help="User intent JSON; never a command or receipt")
+    workflow_advance = workflow_sub.add_parser("advance")
+    workflow_advance.add_argument("--action-id", required=True)
+    workflow_advance.add_argument("--expected-revision", type=int, required=True)
+    workflow_status = workflow_sub.add_parser("status")
+    workflow_status.add_argument("--operation-id")
+    credits = sub.add_parser("credits", help="Read current account credits and action prices")
+    credits_sub = credits.add_subparsers(dest="credits_command", required=True)
+    credits_sub.add_parser("status")
+    quote = credits_sub.add_parser("quote")
+    quote.add_argument("--action", choices=["discover", "analysis"], required=True)
+    quote.add_argument("--request-id", required=True)
+    quote.add_argument("--scope-digest", required=True)
     sub.add_parser("onboarding", help="Show the next setup step without network access or state changes")
 
     init = sub.add_parser("init", help="Configure an AgentMesh API Key")
@@ -138,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_sub = interaction.add_subparsers(dest="interaction_command", required=True)
     interaction_respond = interaction_sub.add_parser("respond")
     interaction_respond.add_argument("--interaction-id", required=True)
+    interaction_respond.add_argument("--answer-file", help="JSON containing only the user's explicit answer fields")
     interaction_respond.add_argument(
         "--choice",
         choices=[
@@ -150,6 +169,10 @@ def build_parser() -> argparse.ArgumentParser:
             "cancel_delivery",
             "synced",
             "pause_platform",
+            "skip_platform",
+            "search_again",
+            "finish_round_and_rebind",
+            "keep_round",
             "pause_round",
         ],
     )
@@ -204,6 +227,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip resume binding and use the local profile for this round",
     )
     round_sub.add_parser("status")
+    round_update = round_sub.add_parser("update")
+    round_update.add_argument("--input", required=True, help="JSON request_id and criteria patch")
+    round_update.add_argument("--expected-revision", type=int, required=True)
     round_audit = round_sub.add_parser("audit")
     round_audit.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
     round_audit.add_argument("--recent", "-n", type=int, default=20)
@@ -256,7 +282,13 @@ def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool) -> 
             numeric_credit = int(credit)
         except (TypeError, ValueError):
             numeric_credit = None
-    required_credits = 10 if profile_exists else 5
+    required_action = "discover" if profile_exists else "analysis"
+    prices = account_response.get("workflow_prices")
+    required_credits = (prices.get(required_action) if isinstance(prices, dict) else (10 if profile_exists else 5))
+    if required_credits is None:
+        return {"usable": False, "reason": "credit_price_unavailable", "credit": credit,
+                "source": account.get("source"), "expires_at": account.get("expires_at"),
+                "required_credits": None, "paid_pass_required": None}
     usable = unlimited or (numeric_credit is not None and numeric_credit >= required_credits)
     source = account.get("source") or "none"
     if unlimited:
@@ -543,6 +575,18 @@ def _doctor_env() -> dict[str, Any]:
         from jobagent.infra.state import profile_path
 
         profile_exists = profile_path().exists()
+    credit_quotes = {}
+    capabilities = ((account_response or {}).get("server") or {}).get("capabilities") or {}
+    if account_response and capabilities.get("workflow_protocol_version", 0) >= 2:
+        from jobagent.infra.protocol import digest_payload
+        account_response["workflow_prices"] = {}
+        for action in ("analysis", "discover"):
+            try:
+                quote = cloud_client.credits_quote(action, "setup_price_" + action, digest_payload({"scope": "setup", "action": action}))
+                credit_quotes[action] = quote["quote"]
+                account_response["workflow_prices"][action] = quote["quote"]["credits_required"]
+            except cloud_client.CloudError as exc:
+                credit_quotes[action] = {"error": exc.code or "credit_quote_unavailable", "charged": False}
     access = (
         _cloud_access(account_response, profile_exists=profile_exists)
         if account_response is not None
@@ -598,6 +642,7 @@ def _doctor_env() -> dict[str, Any]:
         "account": account_response.get("account") if account_response else None,
         "local_state": local_state,
         "cloud_access": access,
+        "credit_quotes": credit_quotes,
         "round": workflow,
         "workflow": {
             "ready": not blocked_by,
@@ -868,6 +913,14 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     interaction_id = str(args.interaction_id or "").strip()
+    from jobagent.application.round_direction import respond as respond_direction
+    direction = respond_direction(interaction_id, str(args.choice or ""))
+    if direction is not None:
+        return direction
+    from jobagent.application.delivery_followup import respond as respond_after_cancel
+    after_cancel = respond_after_cancel(interaction_id, str(args.choice or ""))
+    if after_cancel is not None:
+        return after_cancel
     pending = load_pending_interaction()
     # 投递前平台简历新鲜度门禁的应答（含挂起后按 id 应答的最终 synced）。
     # 该门禁的挂起态记在轮次里，即使 pending 槽位已被其他平台的卡占用，
@@ -1526,7 +1579,7 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
     changes_context = (
         args.command == "init"
         or (args.command == "account" and args.account_command in {"bind", "switch"})
-        or (args.command == "round" and args.round_command in {"start", "skip"})
+        or (args.command == "round" and args.round_command in {"start", "skip", "update"})
         or (args.command == "resume" and args.resume_command == "analyze")
         or args.command == "interaction"
     )
@@ -1592,13 +1645,32 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return _dispatch_unlocked(args)
     # Serializes only CLI ledger/checkpoint/round transitions. It is deliberately
     # not held while Codex is operating the external native browser UI.
-    if args.command in {"boss", "liepin", "zhilian", "51job", "browser", "work", "round", "interaction", "resume", "init", "account"} and not (args.command == "work" and args.work_command == "contract"):
+    if args.command in {"boss", "liepin", "zhilian", "51job", "browser", "work", "round", "interaction", "resume", "init", "account", "workflow"} and not (args.command == "work" and args.work_command == "contract"):
         with command_lock():
             return _dispatch_unlocked(args)
     return _dispatch_unlocked(args)
 
 
 def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "workflow":
+        from jobagent.application.workflow import dispatch
+        return dispatch(args)
+    if args.command == "credits":
+        if args.credits_command == "status":
+            return _doctor_env()
+        from jobagent.infra.cloud_client import credits_quote
+        return credits_quote(action=args.action, request_id=args.request_id, scope_digest=args.scope_digest)
+    if args.command == "round" and args.round_command == "update":
+        from jobagent.application.round_criteria import update
+        return update(args.input, args.expected_revision)
+    if args.command == "interaction" and getattr(args, "answer_file", None):
+        from jobagent.application.interaction_answer import apply_answer_file
+        apply_answer_file(args)
+    if args.command in {"boss", "liepin", "zhilian", "51job"}:
+        from jobagent.application.delivery_followup import pending as after_cancel_pending
+        after_cancel = after_cancel_pending()
+        if after_cancel:
+            return after_cancel
     native = _native_dispatch(args)
     if native is not None:
         return native
@@ -1925,6 +1997,10 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
 
         skip_state = load_json(current_round_path()) or {}
         skip_item = (skip_state.get("platforms") or {}).get(args.platform) or {}
+        followup = skip_item.get("delivery_followup") or {}
+        if followup.get("status") == "awaiting":
+            from jobagent.application.delivery_followup import respond as respond_after_cancel
+            return respond_after_cancel(followup["interaction"]["interaction_id"], "skip_platform")
         owns_round_hold = (skip_state.get("resume_freshness_round_hold") or {}).get(
             "platform"
         ) == args.platform
@@ -2001,7 +2077,7 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    if args.command == "workflow-contract":
+    if args.command == "workflow-contract" or (args.command == "workflow" and args.workflow_command == "contract"):
         from jobagent.infra.workflow_protocol import contract
         _print(contract(parser))
         return
@@ -2032,6 +2108,9 @@ def main() -> None:
             account_verification = _verify_state_owner_for_command(args)
             _schedule_analytics_flush_safely()
             result = _dispatch(args)
+            if args.command not in {"workflow", "account", "init", "credits", "profile", "platforms", "upgrade-check", "update"}:
+                from jobagent.application.workflow import remember_result
+                remember_result(args, result)
         if skill_installation and skill_installation.get("status") != "current":
             result["codex_skill_installation"] = skill_installation
         if getattr(args, "_native_update_deferred", False):
@@ -2119,6 +2198,12 @@ def main() -> None:
                 "attempts": exc.attempts,
                 **exc.details,
             }
+            if (exc.retryable and exc.details.get("workflow_request_preserved")
+                    and args.command in {"workflow", "round", "interaction", "credits", "doctor", "boss", "liepin", "zhilian", "51job"}):
+                # These parsers contain no credential flags. Replay the same
+                # idempotent/read-only request, never init or paid analysis.
+                import shlex
+                payload["next_suggested"] = shlex.join(["jobagent", *sys.argv[1:]])
         elif isinstance(exc, ProtocolError):
             payload = {"ok": False, "error": "protocol_verification_failed", "message": str(exc)}
         else:

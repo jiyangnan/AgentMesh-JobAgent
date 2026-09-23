@@ -719,6 +719,8 @@ def round_status() -> dict[str, Any]:
         "native_session": deepcopy(state.get("native_session")),
         "intent": state.get("intent"),
         "resume_binding": state.get("resume_binding"),
+        "round_criteria": state.get("round_criteria"),
+        "criteria_revision": (state.get("round_criteria") or {}).get("criteria_revision", 0),
         "profile_reconciliation": state.get("profile_reconciliation"),
         "resume_freshness": freshness,
         "platforms": platforms,

@@ -6,6 +6,24 @@
 
 ## 工作流协议的兼容性
 
+工作流协议 V2 新增 `action` 和 `workflow contract/submit/next/advance/status`，
+保留 V1 `agent_action` 与 `workflow-contract`。旧签名协议和 BrowserWork 许可不改变。
+新 `state/workflow.json` 记录账户、需求、动作版本、执行意图和结果；与
+`round_criteria_input.json` 一同加入账户切换归档。动作在 dispatch 前持久化领取；
+丢失结果不重发原动作，已有 nonce 不作为新许可返回。只读查询不创建求职轮次。
+
+当前 round 可增加 `round_criteria`、`criteria_history`、`direction_change`、
+`delivery_followup`、`cancelled_delivery_lists`。缺少字段的旧 round 按原合同读取。
+条件版本绑定新的完整预览；旧清单和历史回执保留，但不能继续使用旧授权。
+新增取消记录只影响取消当时的清单，旧版已经跳过的平台不会复活。
+同步记录新增 `policy_version=2`、平台账号与 `basis=user_attested`。
+旧记录缺少 policy_version 时按 V1 的可恢复 hold 处理；不自动转换成跳过。
+不清除凭据、浏览器 profile、候选、审计或未知投递结果。
+
+Server 的新表均以 CREATE TABLE IF NOT EXISTS 增量初始化；既有轮次、绑定与
+收费表不重写。新接口未部署时明确报错并保留用户输入，不回退绕过新分支。
+此扩展不授权旧客户端继续处理已经使用 V2 条件或取消分支的轮次；应使用当前版本。
+
 `agent_action` 为新增输出字段；现有 `next_suggested`、交互协议、签名、
 BrowserWork nonce/binding 及投递授权保持原有校验。
 `jobagent workflow-contract` 不联网、不迁移、不读取账户状态。

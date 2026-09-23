@@ -296,6 +296,8 @@ def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: d
                 _fail("collection_checkpoint_plan_mismatch", "Renewal changed the saved collection scope", platform=platform)
     if any(not str(query.get("city") or "").strip() for query in verified["queries"]):
         _fail("native_target_city_required", "Every native query requires a signed readable target city", platform=platform)
+    if plan.get("round_criteria") != active.get("round_criteria"):
+        _fail("criteria_search_plan_mismatch", "The signed search plan does not match this round's current criteria revision", platform=platform)
     progress = _progress(platform, checkpoint, session_id)
     binding = _binding(context, session_id, pending["request_id"], plan)
     # Bind work to the ORIGINAL scope digest so a renewal never invalidates
@@ -612,7 +614,8 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
                 request_id=request_id, round_intent=active.get("intent"),
                 resume_binding_id=str(round_binding.get("id")) if round_binding.get("id") else None,
                 context_id=str(round_binding.get("context_id")) if round_binding.get("context_id") else None,
-                round_id=str(active.get("round_id")) if round_binding.get("id") else None)
+                round_id=str(active.get("round_id")),
+                **({"criteria_revision": active["round_criteria"]["criteria_revision"]} if active.get("round_criteria") else {}))
         except existing.cloud_client.CloudError as exc:
             from jobagent.application.round_resume_binding import (
                 BINDING_PROFILE_INCOMPLETE_CODE,

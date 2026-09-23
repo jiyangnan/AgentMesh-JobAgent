@@ -309,6 +309,99 @@ def health() -> dict[str, Any]:
     )
 
 
+def _workflow_request(method: str, path: str, body: dict | None = None, **kwargs) -> dict:
+    """Workflow writes have service idempotency; reads never grant execution.
+
+    Mark only classified transport failures. Business rejections and unrelated
+    billable requests must not acquire this retry guarantee.
+    """
+    try:
+        return _request(method, path, body, **kwargs)
+    except CloudError as exc:
+        if exc.status == 404 and exc.code is None:
+            raise CloudError("The server does not support workflow protocol 2; keep the current state and update the service before continuing.",
+                             status=404, code="workflow_protocol_unavailable",
+                             details={"request_preserved": True, "required_protocol_version": 2}) from exc
+        if is_transient_transport_error(exc):
+            exc.details = {**exc.details, "request_preserved": True,
+                           "workflow_request_preserved": True}
+        raise
+
+
+def workflow_submit(payload: dict[str, Any]) -> dict[str, Any]:
+    return _workflow_request("POST", "/v1/workflow/intents", payload, timeout=20,
+                    operation="workflow_submit")
+
+
+def workflow_status(session_id: str) -> dict[str, Any]:
+    from urllib.parse import quote
+    return _workflow_request("GET", f"/v1/workflow/sessions/{quote(session_id, safe='')}",
+                    timeout=20, operation="workflow_status")
+
+
+def round_criteria_update(round_id: str, body: dict) -> dict:
+    from urllib.parse import quote
+    return _workflow_request("POST", f"/v1/workflow/rounds/{quote(round_id, safe='')}/criteria", body,
+                    timeout=30, operation="round_criteria_update", max_attempts=3)
+
+
+def workflow_delivery_preview(body: dict) -> dict:
+    return _workflow_request("POST", "/v1/workflow/delivery/previews", body, timeout=30,
+                    operation="workflow_delivery_preview", max_attempts=3)
+
+
+def workflow_delivery_answer(preview_id: str, choice: str) -> dict:
+    from urllib.parse import quote
+    return _workflow_request("POST", f"/v1/workflow/delivery/previews/{quote(preview_id, safe='')}/answer",
+                    {"choice": choice}, timeout=30, operation="workflow_delivery_answer", max_attempts=3)
+
+
+def workflow_delivery_status(preview_id: str) -> dict:
+    from urllib.parse import quote
+    return _workflow_request("GET", f"/v1/workflow/delivery/previews/{quote(preview_id, safe='')}/authorization",
+                    timeout=20, operation="workflow_delivery_status")
+
+
+def round_criteria_status(round_id: str) -> dict:
+    from urllib.parse import quote
+    return _workflow_request("GET", f"/v1/workflow/rounds/{quote(round_id, safe='')}/criteria",
+                    timeout=20, operation="round_criteria_status")
+
+
+def round_criteria_filter(round_id: str, discover_id: str) -> dict:
+    from urllib.parse import quote
+    return _workflow_request("GET", f"/v1/workflow/rounds/{quote(round_id, safe='')}/filter/{quote(discover_id, safe='')}",
+                    timeout=20, operation="round_criteria_filter")
+
+
+def credits_quote(action: str, request_id: str, scope_digest: str) -> dict[str, Any]:
+    result = _workflow_request("POST", "/v1/workflow/credits/quote",
+                    {"action": action, "request_id": request_id, "scope_digest": scope_digest},
+                    timeout=20, operation="credits_quote")
+    from jobagent.infra import protocol
+    from jobagent.infra.account_state import current_account_ref
+    from datetime import datetime, timezone
+    quote = protocol.verify_signed_payload(result["quote"], public_key=protocol.DECISION_SIGNING_PUBLIC_KEY,
+                                           expected_type="workflow_credit_quote")
+    if (quote.get("account_ref") != current_account_ref() or quote.get("action") != action
+            or quote.get("request_id") != request_id or quote.get("scope_digest") != scope_digest
+            or quote.get("charged") is not False or quote.get("protocol_version") != 2
+            or datetime.fromisoformat(quote["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc)):
+        raise CloudError("Credit quote context mismatch", code="credit_quote_invalid")
+    return result
+
+
+def _workflow_price_stage(action: str, request_id: str, scope: dict) -> None:
+    from jobagent.infra import state, protocol
+    workflow = state.load_json(state.STATE_DIR / "workflow.json") or {}
+    if not workflow.get("intent"):
+        return
+    response = credits_quote(action, request_id, protocol.digest_payload(scope))
+    from jobagent.infra.diagnostics import emit_stage
+    emit_stage("credit_quote", action=action, quote=response["quote"], charged=False,
+               recheck_at_execution=True)
+
+
 def resume_center_preparation() -> dict[str, Any]:
     """Read-only workbench fact: resume list, confirmation state and receipt.
 
@@ -416,6 +509,9 @@ def resume_analyze(
         body["file_name"] = file_name
     if hints:
         body["hints"] = hints
+    from jobagent.infra.protocol import digest_payload
+    _workflow_price_stage("analysis", "analysis_" + digest_payload(body).split(":")[1][:32],
+                          {"material_digest": digest_payload(body)})
     return _request(
         "POST",
         "/v1/resume/analyze",
@@ -434,6 +530,7 @@ def discovery_start(
     resume_binding_id: str | None = None,
     context_id: str | None = None,
     round_id: str | None = None,
+    criteria_revision: int | None = None,
 ) -> dict[str, Any]:
     from jobagent.infra.protocol import digest_payload
 
@@ -448,12 +545,17 @@ def discovery_start(
     if round_intent and round_intent.get("status") == "confirmed":
         body["round_intent"] = round_intent
         body["intent_digest"] = digest_payload(round_intent)
+    if round_id:
+        body["round_id"] = round_id
+    if criteria_revision is not None:
+        body["criteria_revision"] = criteria_revision
     if resume_binding_id:
         body["resume_binding_id"] = resume_binding_id
         if context_id:
             body["context_id"] = context_id
         if round_id:
             body["round_id"] = round_id
+    _workflow_price_stage("discover", request_id, body)
     return _request(
         "POST",
         "/v1/discovery/start",

@@ -28,6 +28,8 @@ _DELIVERY_ACTIONS = {
     "zhilian": ["resume"],
     "51job": ["resume"],
 }
+_CRITERIA_LABELS = {"city": "城市", "salary": "薪资", "employee_count": "员工人数",
+                    "large_company": "大厂规模", "fortune_global_500": "指定年份世界500强"}
 
 
 class DeliveryPreviewError(RuntimeError):
@@ -53,6 +55,9 @@ def _preview_item(platform: str, item: dict[str, Any], index: int) -> dict[str, 
         "reason": _clean(item.get("reason")),
         "risk": _clean(item.get("risk")),
         "delivery_actions": list(_DELIVERY_ACTIONS[platform]),
+        **({"criteria_revision": item["criteria_revision"],
+            "criteria_unknown_fields": item.get("criteria_unknown_fields", [])}
+           if "criteria_revision" in item else {}),
     }
 
 
@@ -70,6 +75,9 @@ def _preview_id(
                     "job_id": item["job_id"],
                     "url": item["url"],
                     "delivery_actions": item["delivery_actions"],
+                    **({"criteria_revision": item["criteria_revision"],
+                        "criteria_unknown_fields": item.get("criteria_unknown_fields", [])}
+                       if "criteria_revision" in item else {}),
                 }
                 for item in items
             ],
@@ -94,6 +102,8 @@ def _fallback_text(
             (
                 f"{item['index']}. {item['title']}｜{item['company']}｜"
                 f"{item['area']}｜{item['salary']}"
+                + ("｜筛选信息未知：" + "、".join(_CRITERIA_LABELS.get(key, key) for key in item["criteria_unknown_fields"])
+                   if item.get("criteria_unknown_fields") else "")
             )
             for item in items
         )
@@ -106,7 +116,7 @@ def _fallback_text(
                 "请选择：",
                 "1. 确认全部投递",
                 "2. 排除部分岗位",
-                "3. 取消本平台投递",
+                "3. 取消当前清单，再选择重搜或跳过本平台",
                 "",
                 "在你明确选择前，Job Agent 不会执行任何真实投递。",
             ]
@@ -150,8 +160,8 @@ def _confirmation_interaction(
                     },
                     {
                         "option_id": "cancel_delivery",
-                        "label": "取消本平台投递",
-                        "description": "本轮不在这个平台投递任何岗位。",
+                        "label": "取消当前清单",
+                        "description": "撤销当前清单，然后选择重新搜索或跳过本平台。",
                     },
                 ],
                 "default_option_ids": ["confirm_all"],

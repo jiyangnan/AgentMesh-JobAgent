@@ -1,19 +1,7 @@
-"""投递前平台简历新鲜度门禁 (pre-delivery platform resume freshness gate).
+"""登录后、搜索前的平台简历同步确认；发送前保留修订检查。
 
-四平台的投递 = 浏览器触发平台自有动作，平台发送的是用户存在该平台后台的
-简历附件；工作台档案只用于分析，永不外发。若用户在工作台改了简历却忘了
-同步上传到平台后台，agent 触发投递时平台发出的就是旧简历，用户全程不知情。
-
-本模块在每个平台的投递动作触发前比较:
-  当前轮绑定简历的确认修订 (round ``resume_binding`` 快照)
-  vs 该平台上次投递确认时的基线 (``resume_freshness_baselines.json``)
-
-无基线或修订不一致 → 出一次三选项卡 (已同步 / 挂起本平台 / 整轮挂起);
-一致 → 静默直投。同一平台同一轮同一修订最多问一次：应答"已同步"即更新
-基线；绑定修订真实变更后的再次询问不属于重复打扰，正是本门禁要防的坑。
-
-设计文档 (权威): 私有 job-agent-server 仓
-docs/plans/2026-09-12-material-fallback-and-freshness-gate.md Part B。
+用户确认记录为 user_attested，不代表已观察到平台附件版本。
+新交互中的平台挂起表示跳过本轮；旧 hold 保留原可恢复语义。
 """
 
 from __future__ import annotations
@@ -49,6 +37,7 @@ CHOICE_PAUSE_PLATFORM = "pause_platform"
 CHOICE_PAUSE_ROUND = "pause_round"
 RESPOND_CHOICES = (CHOICE_SYNCED, CHOICE_PAUSE_PLATFORM, CHOICE_PAUSE_ROUND)
 _HOLD_STATES = {"platform_hold", "round_hold"}
+FRESHNESS_POLICY_VERSION = 2
 
 
 # ---------------------------------------------------------------- baselines
@@ -73,6 +62,7 @@ def _fingerprint(binding: dict[str, Any]) -> dict[str, str]:
 def _same_revision(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return bool(
         left.get("resume_revision_id")
+        and left.get("resume_id") == right.get("resume_id")
         and left.get("resume_revision_id") == right.get("resume_revision_id")
         and left.get("content_digest") == right.get("content_digest")
     )
@@ -80,14 +70,24 @@ def _same_revision(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _save_baseline(platform: str, fingerprint: dict[str, Any]) -> None:
     data = load_baselines()
-    data["platforms"][platform] = {**fingerprint, "updated_at": utc_now()}
+    data["platforms"][platform] = {
+        **fingerprint, "updated_at": utc_now(), "basis": "user_attested",
+        "platform_account": _platform_account(platform),
+    }
     save_json(resume_freshness_path(), data)
 
 
 def baseline_is_fresh(platform: str, binding: dict[str, Any]) -> bool:
     """True when the platform baseline already matches the bound revision."""
     baseline = load_baselines()["platforms"].get(platform)
-    return bool(baseline and _same_revision(baseline, _fingerprint(binding)))
+    account = _platform_account(platform)
+    return bool(baseline and _same_revision(baseline, _fingerprint(binding))
+                and (not account or baseline.get("platform_account") == account))
+
+
+def _platform_account(platform: str) -> str:
+    active = _active_round() or {}
+    return str((active.get("native_session", {}).get("accounts") or {}).get(platform) or "")
 
 
 # ------------------------------------------------------------------- cards
@@ -106,7 +106,7 @@ def _month_day(confirmed_at: Any) -> str:
 
 def _interaction_id(round_id: str, platform: str, fingerprint: dict[str, Any]) -> str:
     revision_tag = fingerprint["resume_revision_id"] or fingerprint["content_digest"]
-    return f"freshness:{round_id}:{platform}:{revision_tag}"
+    return f"freshness:{round_id}:{platform}:{revision_tag}:v{FRESHNESS_POLICY_VERSION}"
 
 
 def _respond_command(interaction_id: str, choice: str = CHOICE_SYNCED) -> str:
@@ -142,12 +142,12 @@ def _build_card(platform: str, *, round_id: str, fingerprint: dict[str, Any], fi
                     {
                         "option_id": CHOICE_SYNCED,
                         "label": "已同步到该平台",
-                        "description": f"{label} 后台已是这份最新简历，继续触发投递",
+                        "description": f"确认 {label} 后台已是这份简历，继续当前流程",
                     },
                     {
                         "option_id": CHOICE_PAUSE_PLATFORM,
-                        "label": "还没传，挂起本平台",
-                        "description": "本平台投递挂起，其余平台继续；同步完成后回来应答",
+                        "label": "还没传，跳过本平台",
+                        "description": "挂起即跳过本轮该平台，继续下一平台，不自动回来补投",
                     },
                     {
                         "option_id": CHOICE_PAUSE_ROUND,
@@ -159,7 +159,7 @@ def _build_card(platform: str, *, round_id: str, fingerprint: dict[str, Any], fi
         ],
         fallback_text=(
             f"请应答 {_respond_command(_interaction_id(round_id, platform, fingerprint))}："
-            "--choice synced（已同步）/ pause_platform（挂起本平台）/ pause_round（整轮挂起）。"
+            "--choice synced（已同步）/ pause_platform（跳过本平台，不自动补投）/ pause_round（整轮挂起）。"
         ),
         continuation_action="jobagent.interaction.respond",
         idempotency_key=_interaction_id(round_id, platform, fingerprint),
@@ -167,6 +167,8 @@ def _build_card(platform: str, *, round_id: str, fingerprint: dict[str, Any], fi
 
 
 def _send_command(platform: str, source: dict[str, Any]) -> str:
+    if source.get("stage") == "before_search":
+        return f"jobagent {platform} discover"
     quoted = shlex.quote(str(source.get("input_path") or ""))
     base = (
         f"jobagent boss greet send --input {quoted}"
@@ -237,7 +239,7 @@ def _gate_response(interaction: dict[str, Any], platform: str) -> dict[str, Any]
         "requires_user_action": True,
         "request_preserved": True,
         "no_charge": True,
-        "message": "投递已暂停：请先确认平台后台的简历与工作台最新确认版本一致。",
+        "message": "请先确认平台后台的简历与本轮绑定版本一致，再继续当前流程。",
         "next_suggested": _respond_command(interaction["interaction_id"], CHOICE_SYNCED),
         "workflow": round_status(),
     }
@@ -257,6 +259,21 @@ def _invalid_response(pending_or_record: dict[str, Any], message: str) -> dict[s
 
 
 # --------------------------------------------------------------------- gate
+
+
+def gate_search(platform: str) -> dict[str, Any] | None:
+    """Gate a new search, preserving older in-flight collection/decision work."""
+    from jobagent.infra.discovery_state import load_pending_start, load_pending_decision
+
+    active = _active_round()
+    if not active:
+        return None
+    item = active.get("platforms", {}).get(platform, {})
+    if item.get("status") not in {"pending", "active", "login_verified", "blocked"}:
+        return None
+    if load_pending_start(platform) or load_pending_decision(platform):
+        return None  # A pre-upgrade request keeps its original recovery path.
+    return gate_delivery(platform, source={"stage": "before_search"})
 
 
 def gate_delivery(platform: str, *, source: dict[str, Any], dry_run: bool = False) -> dict[str, Any] | None:
@@ -303,12 +320,14 @@ def gate_delivery(platform: str, *, source: dict[str, Any], dry_run: bool = Fals
                               first_delivery=first_delivery)
     item = (active.get("platforms") or {}).get(platform) or {}
     record = {
+        "policy_version": FRESHNESS_POLICY_VERSION,
         "interaction_id": interaction["interaction_id"],
         "interaction": interaction,
         "round_id": round_id,
         "state": "awaiting",
         "platform_label": PLATFORM_LABELS[platform],
         "resume_binding_id": str(binding.get("id") or ""),
+        "platform_account": _platform_account(platform),
         "resume_name": fingerprint["resume_name"],
         "revision": _fingerprint(binding),
         "pre_hold_status": str(item.get("status") or "reviewed"),
@@ -378,10 +397,26 @@ def _respond_initial(pending: dict[str, Any], interaction_id: str, choice: str) 
     if not record or str(record.get("interaction_id") or "") != interaction_id \
             or str(record.get("round_id") or "") != str(active.get("round_id") or ""):
         return _invalid_response(pending, "This freshness confirmation is no longer pending.")
+    if choice == "skip_platform":
+        choice = CHOICE_PAUSE_PLATFORM
     if choice not in RESPOND_CHOICES:
         return _invalid_response(pending, "Choose synced, pause_platform, or pause_round.")
     if choice == CHOICE_SYNCED:
+        if record.get("policy_version", 1) >= 2:
+            if record.get("platform_account") != _platform_account(platform):
+                return _invalid_response(pending, "平台账号已变化，请核实原账号后继续，不能复用这次同步确认。")
+            return _respond_hold(platform, record, choice)
         return _resolve_synced(platform, record, verified=None)
+    if choice == CHOICE_PAUSE_PLATFORM and record.get("policy_version", 1) >= 2:
+        _save_record(platform, None)
+        clear_pending_interaction()
+        set_platform_status(platform, "skipped_this_round", command="jobagent interaction respond",
+                            evidence={"reason": "resume_not_synced", "interaction_id": interaction_id,
+                                      "resume_revision_id": (record.get("revision") or {}).get("resume_revision_id")})
+        workflow = round_status()
+        return {"ok": True, "event": "platform_skipped", "platform": platform,
+                "message": "本轮已跳过该平台，继续下一平台，不会自动回来补投。",
+                "next_suggested": workflow.get("next_suggested"), "workflow": workflow}
     record["state"] = "platform_hold" if choice == CHOICE_PAUSE_PLATFORM else "round_hold"
     record["hold_choice"] = choice
     record["held_at"] = utc_now()
@@ -419,9 +454,19 @@ def _respond_initial(pending: dict[str, Any], interaction_id: str, choice: str) 
 def _respond_hold(platform: str, record: dict[str, Any], choice: str) -> dict[str, Any]:
     if choice != CHOICE_SYNCED:
         return _invalid_response(record, "本平台正处于挂起中；上传完成后请应答 synced。")
+    if record.get("policy_version", 1) >= 2 and record.get("platform_account") != _platform_account(platform):
+        return {"ok": False, "error": "resume_freshness_account_changed", "request_preserved": True,
+                "requires_user_action": True, "user_prompt": "平台账号与同步确认时不同，请核验原账号后继续。",
+                "next_suggested": f"jobagent browser diagnose --platform {platform}"}
     try:
         material = cloud_client.resume_binding_material(str(record.get("resume_binding_id") or ""))
     except cloud_client.CloudError as exc:
+        if record.get("policy_version", 1) >= 2:
+            return {"ok": False, "error": "resume_freshness_recheck_unavailable",
+                    "cause": exc.code, "retryable": bool(exc.retryable), "request_preserved": True,
+                    "requires_user_action": not bool(exc.retryable),
+                    "message": "无法确认本轮原绑定材料仍可用，已保留绑定和原待办；请按原材料恢复路径处理。",
+                    "next_suggested": _respond_command(str(record.get("interaction_id") or ""))}
         if exc.code in ("preparation_required", "resume_binding_not_found"):
             # The bound resume changed underneath or the binding is gone; the
             # same unwind discover.py performs. If the round was re-bound to a
@@ -493,6 +538,7 @@ def _resolve_synced(platform: str, record: dict[str, Any], *, verified: dict[str
                 evidence_extra={
                     "resume_freshness_hold": False,
                     "resume_freshness_synced": True,
+                    "resume_sync_basis": "user_attested",
                     "resume_revision_id": fingerprint.get("resume_revision_id"),
                 })
     pending = load_pending_interaction()
@@ -505,7 +551,8 @@ def _resolve_synced(platform: str, record: dict[str, Any], *, verified: dict[str
         "ok": True,
         "event": "resume_freshness_synced",
         "platform": platform,
-        "message": "已记录该平台的简历基线，恢复投递流程。",
+        "message": "已记录你对该平台简历同步的确认，继续当前流程。",
+        "basis": "user_attested",
         "next_suggested": _send_command(platform, record.get("source") or {}),
         "workflow": round_status(),
     }

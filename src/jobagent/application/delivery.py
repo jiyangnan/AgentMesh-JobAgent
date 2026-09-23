@@ -50,7 +50,11 @@ def _load_reviewed(
     authorization_id: str | None = None,
 ) -> dict[str, Any]:
     envelope = load_envelope(platform, input_path, reviewed=True if input_path is None else None)
+    from jobagent.application.delivery_followup import assert_list_active
+    assert_list_active(platform, str(envelope.get("discover_id") or ""))
     verify_stored_decision(envelope["manifest"], platform=platform)
+    from jobagent.application.round_criteria import assert_current
+    assert_current(envelope)
     if "send_candidates" not in envelope:
         raise DeliveryPreviewError(preview_required_payload(platform, input_path))
     preview = envelope.get("delivery_preview")
@@ -115,6 +119,8 @@ def _load_reviewed(
                 message=str(exc),
             )
         ) from exc
+    from jobagent.application.workflow_delivery import assert_authorized
+    assert_authorized(envelope)
     return envelope
 
 

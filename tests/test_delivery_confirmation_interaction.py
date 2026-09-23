@@ -31,6 +31,15 @@ def _jobs() -> list[dict]:
 
 @pytest.fixture
 def confirmation_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(state, "ROUNDS_DIR", tmp_path / "rounds")
+    monkeypatch.setattr("jobagent.application.delivery_followup.current_account_ref", lambda: "acct_delivery_test")
+    state.save_json(state.current_round_path(), {
+        "schema_version": 4, "round_id": "round-1", "status": "active",
+        "platform_order": ["boss", "liepin", "zhilian", "51job"],
+        "platforms": {"boss": {"status": "completed"}, "liepin": {"status": "awaiting_delivery_confirmation"},
+                      "zhilian": {"status": "pending"}, "51job": {"status": "pending"}},
+    })
     pending_path = tmp_path / "pending-interaction.json"
     review_path = tmp_path / "reviewed.json"
     jobs = _jobs()
@@ -61,10 +70,6 @@ def confirmation_context(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "jobagent.application.delivery_confirmation.current_account_ref",
         lambda: "acct_delivery_test",
-    )
-    monkeypatch.setattr(
-        "jobagent.application.delivery_confirmation.rounds.round_status",
-        lambda: {"round_id": "round-1", "current_platform": "liepin"},
     )
     statuses: list[tuple[str, str, dict]] = []
     monkeypatch.setattr(
@@ -171,7 +176,7 @@ def test_excluding_jobs_regenerates_preview_and_requires_final_confirmation(
     )
 
 
-def test_cancel_delivery_skips_platform_without_authorization(confirmation_context):
+def test_cancel_delivery_waits_for_destination_without_authorization(confirmation_context):
     result = respond_delivery_confirmation(
         interaction_state.load_pending_interaction(),
         choice="cancel_delivery",
@@ -181,14 +186,12 @@ def test_cancel_delivery_skips_platform_without_authorization(confirmation_conte
     saved = json.loads(
         confirmation_context["review_path"].read_text(encoding="utf-8")
     )
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["requires_user_action"] is True
     assert result["event"] == "delivery_cancelled"
     assert "delivery_authorization" not in saved
-    assert confirmation_context["statuses"][-1][:2] == (
-        "liepin",
-        "skipped_this_round",
-    )
-    assert not confirmation_context["pending_path"].exists()
+    assert state.load_json(state.current_round_path())["platforms"]["liepin"]["status"] == "awaiting_after_cancel_choice"
+    assert confirmation_context["pending_path"].exists()
 
 
 def test_exclusion_indices_are_validated_before_review_is_changed(confirmation_context):
@@ -219,3 +222,34 @@ def test_work_next_restores_full_preview_then_same_exclusion_prompt(confirmation
     assert action['response_arguments']['answer_flag'] == '--exclude-index'
     saved = json.loads(confirmation_context['review_path'].read_text())
     assert not saved.get('delivery_authorization')
+
+
+@pytest.mark.parametrize('choice', ['cancel_delivery', 'exclude_jobs'])
+def test_cancel_destination_is_explicit_and_idempotent(confirmation_context, choice):
+    from jobagent.application import delivery_followup as followup
+    result = respond_delivery_confirmation(interaction_state.load_pending_interaction(), choice=choice,
+                                           exclude_indices=[1, 2, 3] if choice == 'exclude_jobs' else [])
+    interaction_id = result['interaction']['interaction_id']
+    assert [o['option_id'] for o in result['interaction']['fields'][0]['options']] == ['search_again', 'skip_platform']
+    assert followup.pending()['interaction']['interaction_id'] == interaction_id
+    with pytest.raises(Exception) as exc:
+        followup.assert_list_active('liepin', 'dis-confirm')
+    assert exc.value.payload['error'] == 'delivery_list_cancelled'
+    answered = followup.respond(interaction_id, 'search_again')
+    assert answered['event'] == 'search_again_requested'
+    assert answered['workflow']['round_id'] == 'round-1'
+    before = state.load_json(state.current_round_path())
+    assert before['platforms']['liepin']['search_attempt'] == 2
+    assert followup.respond(interaction_id, 'search_again')['idempotent_replay']
+    assert state.load_json(state.current_round_path()) == before
+    assert followup.respond(interaction_id, 'skip_platform')['error'] == 'interaction_response_conflict'
+    assert followup.pending() is None
+
+
+def test_cancel_then_skip_advances_without_search(confirmation_context):
+    from jobagent.application import delivery_followup as followup
+    result = respond_delivery_confirmation(interaction_state.load_pending_interaction(), choice='cancel_delivery', exclude_indices=[])
+    answered = followup.respond(result['interaction']['interaction_id'], 'skip_platform')
+    assert answered['workflow']['current_platform'] == 'zhilian'
+    assert answered['workflow']['platforms']['liepin']['status'] == 'skipped_this_round'
+    assert 'search_attempt' not in state.load_json(state.current_round_path())['platforms']['liepin']

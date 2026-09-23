@@ -24,6 +24,24 @@ class _Response:
         return self.raw
 
 
+@pytest.mark.parametrize("code,retryable,preserved", [
+    ("network_timeout", True, True),
+    ("criteria_revision_conflict", False, False),
+    ("delivery_list_cancelled", False, False),
+])
+def test_workflow_retry_marker_only_for_safe_transport_failures(monkeypatch, code, retryable, preserved):
+    def failed(*args, **kwargs):
+        raise cloud_client.CloudError("synthetic", code=code, retryable=retryable)
+    monkeypatch.setattr(cloud_client, "_request", failed)
+    with pytest.raises(cloud_client.CloudError) as caught:
+        cloud_client.workflow_delivery_answer("preview-synthetic", "cancel_delivery")
+    assert caught.value.details.get("request_preserved", False) is preserved
+    # The generic transport primitive does not give other writes this promise.
+    with pytest.raises(cloud_client.CloudError) as unrelated:
+        cloud_client._request("POST", "/v1/resume/analyze", {})
+    assert "request_preserved" not in unrelated.value.details
+
+
 def _http_error(status: int, detail: dict) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
         "https://api.example.test/v1/discovery/decide",
