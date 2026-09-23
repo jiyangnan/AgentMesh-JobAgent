@@ -119,7 +119,7 @@ def test_round_start_requires_target_cities_before_role_confirmation(
             "placeholder": "例如：郑州、杭州",
         }
     ]
-    assert "告诉我本轮想看的城市" in interaction["fallback_text"]
+    assert "请确认本轮想看的目标城市" in interaction["fallback_text"]
     assert result["requires_user_action"] is True
     assert result["user_prompt"] == interaction["fallback_text"]
     assert not isolated_round_state["current"].exists()

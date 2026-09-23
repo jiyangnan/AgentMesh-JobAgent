@@ -245,7 +245,8 @@ def test_bound_rebind_choice_releases_staged_binding(monkeypatch):
     assert _current_round() is None
     import jobagent.infra.state as state_mod
 
-    assert not (state_mod.STATE_DIR / "pending_round_binding.json").exists()
+    from jobagent.application.round_resume_binding import load_pending_binding
+    assert load_pending_binding() is None
 
 
 def test_bound_replace_roles_is_refused_with_rebind_guidance(monkeypatch):
@@ -265,8 +266,9 @@ def test_bound_direct_target_role_outside_direction_is_refused(monkeypatch):
     binding = _binding(resume_id="resume-b")
     _stage_binding(monkeypatch, binding)
     result = _dispatch(_args("round start --target-role AI产品经理"))
-    assert result["error"] == "invalid_round_intent"
-    assert "方向" in result["message"]
+    assert result["error"] == "interaction_required"
+    assert result["reason"] == "resume_direction_confirmation_required"
+    assert "方向" in result["interaction"]["prompt"]
     assert _current_round() is None
     # The matching direction still goes through.
     ok = _dispatch(_args("round start --target-role 项目经理"))
@@ -346,15 +348,15 @@ def test_staged_binding_preparation_required_clears_and_reselects(monkeypatch):
     assert _current_round() is None
 
 
-def test_unreachable_resume_center_falls_back_to_classic_path(monkeypatch):
+def test_unreachable_resume_center_preserves_request_without_changing_resume(monkeypatch):
     def _down():
         raise CloudError("unavailable", status=503, code="resume_center_unavailable")
 
     monkeypatch.setattr(cloud_client, "resume_center_preparation", _down)
     result = _dispatch(_args("round start --accept-suggested"))
-    assert result["ok"] is True
-    assert result.get("resume_binding") is None
-    assert "resume_center_skipped" in (result.get("resume_notice") or "")
+    assert result["error"] == "resume_center_unavailable"
+    assert result["request_preserved"] is True
+    assert _current_round() is None
 
 
 def test_bound_discover_uses_material_profile_and_carries_binding(monkeypatch):
@@ -430,7 +432,7 @@ def test_unbound_round_keeps_local_suggestion_copy(monkeypatch):
     assert result["suggested_roles"] == ["Engineer"]
 
 
-def test_bound_intent_caps_cities_at_server_limit(monkeypatch):
+def test_bound_intent_refuses_silently_dropping_confirmed_cities(monkeypatch):
     binding = _binding(resume_id="resume-b")
     wide = _material_profile("项目经理")
     wide["preferences"]["targetCities"] = [
@@ -440,10 +442,9 @@ def test_bound_intent_caps_cities_at_server_limit(monkeypatch):
     material = _material(binding, profile=wide)
     _stage_binding(monkeypatch, binding, material)
     result = _dispatch(_args("round start --accept-suggested"))
-    assert result["ok"] is True
-    # The server's RoundIntent schema rejects more than 3 cities with a 422
-    # before any charge; the intent must carry at most the first three.
-    assert _current_round()["intent"]["target_cities"] == ["郑州", "杭州", "北京"]
+    assert result["error"] == "interaction_required"
+    assert result["interaction"]["kind"] == "target_city_input"
+    assert _current_round() is None
 
 
 def test_stale_attached_binding_unwinds_and_reselects(monkeypatch):
@@ -600,7 +601,8 @@ def test_staged_binding_profile_incomplete_keeps_binding_and_guides(monkeypatch)
     assert result["error"] == "resume_binding_profile_incomplete"
     assert result["retryable"] is False
     assert "工作台" in result["message"]
-    assert result["next_suggested"] == "jobagent round start --no-resume-binding"
+    assert result["next_suggested"] == "jobagent round start"
+    assert result["requires_user_action"] is True
     import jobagent.infra.state as state_mod
 
     # Completing the workbench profile makes a plain retry work, so the
@@ -671,3 +673,88 @@ def test_legacy_discover_profile_incomplete_keeps_binding(monkeypatch):
     assert "工作台" in details["message"]
     # The binding must NOT be detached — only preparation_required unwinds it.
     assert cleared == []
+
+
+def test_explicit_city_and_role_survive_selection_and_restart(monkeypatch):
+    from jobagent.application.round_resume_binding import load_pending_binding
+    from jobagent.infra import state
+    # A workbench-only customer has no obsolete local analyzed profile.
+    state.profile_path().unlink()
+    calls = []
+    monkeypatch.setattr(cloud_client, "resume_center_preparation", lambda: _preparation())
+    def select(context, revision):
+        calls.append(context)
+        return _selection()
+    monkeypatch.setattr(cloud_client, "resume_selection", select)
+    monkeypatch.setattr(cloud_client, "resume_selection_respond", lambda *a: {"binding": _binding()})
+    monkeypatch.setattr(cloud_client, "resume_binding_material", lambda *a: _material())
+    first = _dispatch(_args("round start --target-role 产品经理 --target-city 武汉"))
+    resumed = _dispatch(_args("work next"))
+    assert resumed["interaction"] == first["interaction"]
+    _dispatch(_args("round start"))
+    assert len(calls) == 1  # No second server selection after interruption.
+    _dispatch(_args("interaction respond --interaction-id selection-1 --resume-id resume-a"))
+    assert load_pending_binding()["round_request"]["target_cities"] == ["武汉"]
+    conflict = _dispatch(_args("round start"))
+    assert conflict["reason"] == "resume_direction_confirmation_required"
+    assert _current_round() is None
+    iid = conflict["interaction"]["interaction_id"]
+    accepted = _dispatch(_args(f"interaction respond --interaction-id {iid} --choice accept_suggested"))
+    assert accepted["ok"]
+    intent = _current_round()["intent"]
+    assert intent["target_cities"] == ["武汉"]
+    assert intent["target_roles"] == ["数据产品经理"]
+    assert intent["profile_digest"] == digest_payload(_material()["profile"])
+    assert not state.profile_path().exists()
+    assert load_pending_binding() is None
+    replay = _dispatch(_args(f"interaction respond --interaction-id {iid} --choice accept_suggested"))
+    assert replay["idempotent_replay"] is True
+    assert _current_round()["intent"] == intent
+
+
+def test_round_cannot_reuse_an_active_different_city(monkeypatch):
+    from jobagent.infra.rounds import RoundOrderError
+    _stage_binding(monkeypatch, _binding())
+    _dispatch(_args("round start --accept-suggested --target-city 武汉"))
+    with pytest.raises(RoundOrderError):
+        _dispatch(_args("round start --accept-suggested --target-city 杭州"))
+    assert _current_round()["intent"]["target_cities"] == ["武汉"]
+
+
+@pytest.mark.parametrize('status', [None, 503])
+def test_resume_selection_outage_preserves_explicit_input(monkeypatch, status):
+    from jobagent.application.round_request import request
+    def unavailable():
+        raise CloudError('unavailable', status=status, code='network_timeout', retryable=True)
+    monkeypatch.setattr(cloud_client, 'resume_center_preparation', unavailable)
+    result = _dispatch(_args('round start --target-role 产品经理 --target-city 武汉'))
+    assert result['error'] == 'resume_center_unavailable'
+    assert request()['target_roles'] == ['产品经理']
+    assert request()['target_cities'] == ['武汉']
+    assert _current_round() is None
+
+
+def test_explicit_accept_after_direction_conflict_consumes_original_city(monkeypatch):
+    _stage_binding(monkeypatch, _binding())
+    result = _dispatch(_args('round start --target-role 产品经理 --target-city 武汉'))
+    assert result['error'] == 'interaction_required'
+    result = _dispatch(_args('round start --accept-suggested'))
+    assert result['ok'] is True
+    assert _current_round()['intent']['target_roles'] == ['数据产品经理']
+    assert _current_round()['intent']['target_cities'] == ['武汉']
+
+
+def test_city_answer_preserves_known_role_without_editing_bound_resume(monkeypatch):
+    from jobagent.infra import state
+    profile = _material_profile('数据产品经理')
+    profile['preferences']['targetCities'] = []
+    state.profile_path().unlink()
+    _stage_binding(monkeypatch, _binding(), _material(profile=profile))
+    result = _dispatch(_args('round start --target-role 数据产品经理'))
+    assert result['interaction']['kind'] == 'target_city_input'
+    iid = result['interaction']['interaction_id']
+    _dispatch(_args(f'interaction respond --interaction-id {iid} --target-city 武汉'))
+    assert _dispatch(_args('round start'))['ok'] is True
+    assert _current_round()['intent']['target_cities'] == ['武汉']
+    assert _current_round()['intent']['profile_digest'] == digest_payload(profile)
+    assert not state.profile_path().exists()

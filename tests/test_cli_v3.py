@@ -460,7 +460,7 @@ def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypa
         "paid_pass_required": False,
     }
     assert result["api_key_action"] is None
-    assert result["next_suggested"] == "jobagent resume analyze --file <resume>"
+    assert result["next_suggested"] == "jobagent resume status"
 
 
 def test_doctor_env_reports_healthy_environment_when_credits_are_insufficient(
@@ -2386,7 +2386,8 @@ def test_cli_reports_delivery_preview_recovery_without_diagnostic_log(
 
     assert exc.value.code == 2
     reported = json.loads(capsys.readouterr().err)
-    assert reported == payload
+    from jobagent.infra.workflow_protocol import with_contract
+    assert reported == with_contract(payload)
     assert "diagnostic_log" not in reported
 
 

@@ -324,6 +324,14 @@ def resume_center_preparation() -> dict[str, Any]:
     )
 
 
+def resume_center_resume(resume_id: str) -> dict[str, Any]:
+    """Read one account-owned online resume; never charges or edits it."""
+    from urllib.parse import quote
+
+    return _request("GET", f"/v1/resume-center/resumes/{quote(resume_id, safe='')}",
+                    timeout=20, max_attempts=2, operation="resume_status")
+
+
 def resume_selection(context_id: str, expected_state_revision: int) -> dict[str, Any]:
     """Ask the user which confirmed resume this round delivers with."""
     return _request(

@@ -271,7 +271,9 @@ def _same_intent(current: Any, requested: dict[str, Any]) -> bool:
         for role in requested.get("target_roles", [])
         if str(role).strip()
     ]
-    return current_roles == requested_roles
+    current_cities = (current or {}).get("target_cities")
+    requested_cities = requested.get("target_cities")
+    return current_roles == requested_roles and (not current_cities or not requested_cities or current_cities == requested_cities)
 
 
 _PROFILE_REFRESH_SAFE_STATUSES = {"pending", "login_verified", "active", "blocked"}

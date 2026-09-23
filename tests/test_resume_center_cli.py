@@ -95,14 +95,22 @@ def test_resume_list_returns_online_facts(monkeypatch):
     assert result["workbench_url"].startswith("https://agentmesh360.com/workbench")
 
 
-def test_resume_status_matches_list_and_detail_is_reserved(monkeypatch):
-    monkeypatch.setattr(
-        cloud_client, "resume_center_preparation", lambda: _preparation()
-    )
-    assert _dispatch(_args("resume status"))["source"] == "resume_center"
-    with pytest.raises(CloudError) as exc:
-        _dispatch(_args("resume status --id resume-a"))
-    assert exc.value.code == "resume_detail_not_available"
+def test_resume_status_detail_reads_api_without_exposing_content(monkeypatch):
+    calls = []
+    def read(method, route, **kwargs):
+        calls.append((method, route))
+        return {**_preparation()["resumes"][0], "draft": {"secret": "body"}, "personal_info": "private", "revisions": ["private"]}
+    monkeypatch.setattr(cloud_client, "_request", read)
+    result = _dispatch(_args("resume status --id resume-a"))
+    assert calls == [("GET", "/v1/resume-center/resumes/resume-a")]
+    assert result["ready"] is True
+    assert result["resume"]["target_role"] == "数据产品经理"
+    assert not {"draft", "personal_info", "revisions"}.intersection(result["resume"])
+
+
+def test_resume_list_never_leaks_server_only_continuation(monkeypatch):
+    monkeypatch.setattr(cloud_client, "resume_center_preparation", lambda: {**_preparation(), "next_suggested": "jobagent preparation select --context unknown"})
+    assert _dispatch(_args("resume list"))["next_suggested"] == "jobagent round start"
 
 
 def test_resume_list_surfaces_unavailable_as_cloud_error(monkeypatch):

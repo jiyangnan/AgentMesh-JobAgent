@@ -167,6 +167,27 @@ Do not delete `~/.jobagent` or the Job Agent Chrome profile as a general upgrade
 
 The resume original and recruiting-site cookies remain on the user's machine. The profile and candidate job fields needed for Discover are sent to the Job Agent cloud service for decision.
 
+## Stable workflow across host agents
+
+The CLI owns workflow transitions for Codex, Claude Code and OpenClaw. Read
+`jobagent workflow-contract` for the installed commands and full workflow.
+Every terminal JSON result includes `agent_action`, distinguishing CLI execution, user
+input, issued native browser work, waiting, reporting and blockers. Host card
+availability changes presentation only. Missing browser capability pauses the
+same task; it does not permit another browser driver or a workbench UI fallback.
+See the [workflow contract](docs/agent-onboarding.md#host-independent-workflow-contract).
+
+Resume metadata is available through `jobagent resume status --id <resume-id>`.
+A user's already stated round inputs can be passed directly:
+
+```bash
+jobagent round start --target-role "产品经理" --target-city "武汉"
+```
+
+Selection and interruption preserve these inputs. A different bound resume
+direction requires the explicit choice returned by the CLI. Changing this
+round's city never requires reanalyzing or editing the confirmed resume.
+
 ## Platform Commands
 
 Start a new round explicitly. Reading status never creates a round:

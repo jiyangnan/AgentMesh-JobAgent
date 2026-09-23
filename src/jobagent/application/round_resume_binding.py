@@ -13,10 +13,9 @@ from jobagent.infra import cloud_client
 
 
 def pending_binding_path():
-    from jobagent.infra.state import STATE_DIR, ensure_dirs
+    from jobagent.infra.state import pending_interaction_path
 
-    ensure_dirs()
-    return STATE_DIR / "pending_round_binding.json"
+    return pending_interaction_path().with_name("pending_round_binding.json")
 
 
 def load_pending_binding() -> dict[str, Any] | None:
@@ -31,7 +30,11 @@ def save_pending_binding(value: dict[str, Any]) -> None:
     save_json(pending_binding_path(), value)
 
 
-def clear_pending_binding() -> None:
+def clear_pending_binding(*, preserve_request: bool = False) -> None:
+    request = (load_pending_binding() or {}).get("round_request") if preserve_request else None
+    if request:
+        save_pending_binding({"round_request": request})
+        return
     path = pending_binding_path()
     if path.exists():
         path.unlink()
@@ -46,8 +49,8 @@ BINDING_PROFILE_INCOMPLETE_CODE = "resume_profile_invalid"
 
 BINDING_PROFILE_INCOMPLETE_ROUND_START = (
     "绑定简历的分析档案尚未完成确认（服务端校验未通过），本轮未开始。"
-    "请到工作台补全并确认这份简历的分析后重试；或运行 "
-    "jobagent round start --no-resume-binding 改用本地档案开轮。"
+    "请到工作台补全并确认这份简历，完成后回到当前对话回复“简历已确认”，"
+    "Agent 将继续原来的 round start。本轮输入和简历选择已保留。"
 )
 
 BINDING_PROFILE_INCOMPLETE_DISCOVER = (
@@ -160,7 +163,7 @@ def respond_resume_selection(pending: dict[str, Any], resume_id: str) -> dict[st
             "message": "The server did not return a usable resume binding.",
             "next_suggested": "jobagent round start",
         }
-    save_pending_binding({"binding": binding})
+    save_pending_binding({**(load_pending_binding() or {}), "binding": binding})
     return {
         "ok": True,
         "resume_binding": binding_summary(binding),
@@ -264,7 +267,10 @@ def resolve_round_binding(
     and adopts; otherwise the user chooses via the selection interaction.
     """
     if no_binding:
+        request = (load_pending_binding() or {}).get("round_request")
         clear_pending_binding()
+        if request:
+            save_pending_binding({"round_request": request})
         return {"binding": None}
     existing = (current_round or {}).get("resume_binding") if (current_round or {}).get("status") == "active" else None
     if existing and existing.get("id"):
@@ -284,12 +290,20 @@ def resolve_round_binding(
                     "next_suggested": "jobagent round start",
                 }
             }
-        save_pending_binding({"binding": binding})
+        save_pending_binding({**(load_pending_binding() or {}), "binding": binding})
         return {"binding": binding}
+    from jobagent.application.round_request import pending_setup
+    pending = pending_setup()
+    if pending and pending["interaction"]["kind"] == "resume_selection":
+        return {"interaction": pending}
     try:
         return begin_resume_selection()
     except cloud_client.CloudError as exc:
         if exc.status in (401, 403, 404):
             raise
-        # Unprepared or unreachable resume center keeps the classic path.
+        if not isinstance(exc, cloud_client.NotConfiguredError):
+            return {"error": {"ok": False, "error": "resume_center_unavailable",
+                              "message": "暂时无法检查在线简历，已保留本轮输入。请恢复服务后继续；不会改用另一份简历。",
+                              "retryable": bool(exc.retryable), "request_preserved": True,
+                              "next_suggested": "jobagent round start"}}
         return {"notice": f"resume_center_skipped:{exc.code or exc.status}"}

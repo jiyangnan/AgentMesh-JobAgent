@@ -99,7 +99,12 @@ def test_complete_serial_platform_chain(env, platform, actions):
     while response.get("work"):
         pending = response["work"]
         assert pending["allowed_mode"] == "observe"
-        work = native.begin(pending["work_id"])["work"]
+        from jobagent.infra.workflow_protocol import with_contract
+        assert with_contract(response)["agent_action"]["type"] == "run_cli"
+        issued = native.begin(pending["work_id"])
+        assert with_contract(issued)["agent_action"]["type"] == "native_work"
+        assert with_contract(issued)["agent_action"]["allowed_mode"] == issued["work"]["allowed_mode"]
+        work = issued["work"]
         actual.append(work["action"])
         assert work["task"]["result_example"]["nonce"] == work["nonce"]
         if work["side_effect"]:
@@ -492,3 +497,16 @@ def test_collection_identity_block_does_not_advance_or_decide(env, monkeypatch):
     assert paused["recovery_requires_confirmation"] is True
     assert paused["completion_command"].startswith("jobagent work submit")
     assert native.status()["recovery_command"] == paused["recovery_command"]
+
+
+def test_closed_native_work_never_reissues_host_action(env):
+    from jobagent.infra.workflow_protocol import with_contract
+    env.choose('zhilian')
+    response = env.start('zhilian')
+    work_id = response['work']['work_id']
+    work = native.begin(work_id)['work']
+    submit(env, work)
+    # The inspection work is closed; the following work owns any new action.
+    closed = store.get_work(work_id, work['binding'])
+    assert closed['state'] == 'closed'
+    assert with_contract(native.present(closed, execution=True))['agent_action']['type'] != 'native_work'

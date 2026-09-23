@@ -202,3 +202,20 @@ def test_exclusion_indices_are_validated_before_review_is_changed(confirmation_c
 
     assert result["error"] == "invalid_interaction_response"
     assert confirmation_context["review_path"].read_text(encoding="utf-8") == original
+
+
+def test_work_next_restores_full_preview_then_same_exclusion_prompt(confirmation_context):
+    from jobagent.infra.workflow_protocol import with_contract
+    pending = interaction_state.load_pending_interaction()
+    resumed = _dispatch(build_parser().parse_args(['work', 'next']))
+    assert resumed['interaction']['interaction_id'] == pending['interaction_id']
+    assert len(resumed['delivery_preview']['items']) == 3
+    assert with_contract(resumed)['agent_action']['type'] == 'wait_user'
+    exclusions = respond_delivery_confirmation(pending, choice='exclude_jobs', exclude_indices=[])
+    resumed = _dispatch(build_parser().parse_args(['work', 'next']))
+    assert resumed['interaction'] == exclusions['interaction']
+    action = with_contract(resumed)['agent_action']
+    assert action['type'] == 'wait_user'
+    assert action['response_arguments']['answer_flag'] == '--exclude-index'
+    saved = json.loads(confirmation_context['review_path'].read_text())
+    assert not saved.get('delivery_authorization')

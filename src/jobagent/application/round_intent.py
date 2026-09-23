@@ -73,7 +73,7 @@ def target_city_input_request(
     ).split(":", 1)[1][:20]
     interaction_id = f"jobagent:target-city:{interaction_key}"
     fallback = (
-        "当前简历画像还没有目标城市。请告诉我本轮想看的城市，可以填写多个，"
+        "请确认本轮想看的目标城市，至少 1 个、最多 3 个，"
         "例如：郑州、杭州。"
     )
     interaction = build_interaction_required(
@@ -172,8 +172,10 @@ def build_round_intent(
         "profile_digest": digest_payload(profile),
         "confirmed_at": utc_now(),
     }
-    if direction is not None:
-        cities = _normalize_cities(target_cities or [])[:MAX_INTENT_TARGET_CITIES]
+    if direction is not None or target_cities:
+        cities = _normalize_cities(target_cities or [])
+        if len(cities) > MAX_INTENT_TARGET_CITIES:
+            raise ValueError(f"A round supports at most {MAX_INTENT_TARGET_CITIES} target cities.")
         if not cities:
             raise ValueError(
                 "A bound round must carry explicit target cities. "

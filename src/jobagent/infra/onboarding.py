@@ -105,7 +105,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--installer", action="store_true")
     args = parser.parse_args()
-    handoff = installation_handoff()
+    from jobagent.infra.workflow_protocol import with_contract
+    handoff = with_contract(installation_handoff())
     if args.installer:
         print(handoff["user_prompt"])
         print("\nAgent handoff (follow before ending setup):")

@@ -298,6 +298,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     safe_url = page_url if _official(platform, page_url) else ENTRY_URLS[platform]
     response = {"ok": True, "event": "browser_work_required", "executor": EXECUTOR,
             "protocol": "jobagent.browser_work", "protocol_version": 1,
+            "native_step_issued": bool(execution and work.get("state") != "closed" and not paused and not blocked),
             "host_contract": skill_contract(),
             "work": work, "requires_user_action": paused,
             **({"user_prompt": _pause_prompt(result.get("reason"), safe_url, host_window_issue)} if paused else {}),
@@ -857,6 +858,14 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_work() -> dict[str, Any]:
+    from jobagent.application.round_request import pending_setup
+    pending = pending_setup()
+    if pending:
+        return pending
+    from jobagent.application.delivery_confirmation import resume_pending_confirmation
+    confirmation = resume_pending_confirmation()
+    if confirmation:
+        return confirmation
     workflow = rounds.round_status()
     if workflow.get("workflow_complete") or not workflow.get("round_id"):
         return {"ok": True, "workflow": workflow, "next_suggested": workflow.get("next_suggested")}

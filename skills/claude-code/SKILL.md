@@ -8,6 +8,44 @@ version: 0.6.15
 
 Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platform login and review overrides.
 
+## Host-independent workflow contract
+
+Read `jobagent workflow-contract` once for the installed command catalog and
+complete setup/platform workflow. Each terminal JSON result includes `agent_action`; progress events are informational
+and the original CLI process must finish before advancing:
+
+- `run_cli`: execute its exact `argv` without a shell. Keep the original user
+  authorization scope; an install does not authorize `round start`.
+- `wait_user`: show the declared prompt/complete delivery preview, wait for the
+  actual answer, and submit it through the declared interaction ID and CLI flag.
+  Defaults are recommendations. Native cards and the unchanged text fallback
+  have identical choices and effects. A URL handoff is for the user; it does not
+  permit the host to inspect or edit workbench pages.
+- `native_work`: execute only `work.task` issued by `work begin`, respecting
+  `allowed_mode`, nonce, binding and `work.task.result_schema`. Receipt-only
+  reconciliation never permits a second submit/send click. Missing native
+  capability uses the returned pause schema; never substitute another driver.
+- `wait`: wait the declared duration and repeat the supplied command.
+- `report`: report the result; a completed round needs a new user request before
+  another round starts.
+- `blocked`: relay the blocker and recovery information. Never invent a command,
+  scrape a workbench page, call an undeclared API, or rewrite local state.
+
+Use `jobagent resume list` and `jobagent resume status --id <resume-id>` for
+resume metadata. To start a user-requested round, pass the user's already stated
+role and cities with `round start --target-role "<role>" --target-city "<city>"`
+(repeat the city flag for up to three cities). These inputs survive resume
+selection and interruptions; resume selection does not itself accept a different
+role. When a resume direction differs, present the CLI's accept/rebind choices.
+After interruption, `jobagent work next` restores a pending setup interaction.
+Never repeat analysis merely to change the current round's city.
+
+All hosts follow Boss -> Liepin -> Zhilian -> 51Job, completing each platform's
+login, discover, signed review, complete preview, separate user confirmation,
+send and audit before the next platform. No host may supply a missing business
+choice from its own judgment. This contract constrains accepted CLI transitions;
+it cannot intercept tools a host invokes outside the protocol.
+
 ## Installation-to-account handoff
 
 An installation request includes the setup handoff. After every successful install,

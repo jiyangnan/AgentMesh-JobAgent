@@ -175,6 +175,26 @@ def _load_context(
     return context, review, preview, round_id, account_ref
 
 
+def resume_pending_confirmation() -> dict[str, Any] | None:
+    """Restore the same verified preview/answer step after a host restart."""
+    from jobagent.infra.interaction_state import load_pending_interaction
+
+    pending = load_pending_interaction()
+    if not pending or pending.get("stage") not in {"delivery_choice", "delivery_exclusions"}:
+        return None
+    context, _review, preview, _round_id, _account = _load_context(pending)
+    if pending["stage"] == "delivery_choice":
+        return _interaction_response(preview=preview, review_path=context["review_path"])
+    interaction = pending["interaction"]
+    return {
+        "ok": False, "error": "interaction_required", "event": "delivery_exclusions",
+        "requires_user_action": True, "request_preserved": True,
+        "platform": context["platform"], "interaction": interaction,
+        "host_presentations": build_host_presentations(interaction),
+        "next_suggested": f'jobagent interaction respond --interaction-id "{interaction["interaction_id"]}" --exclude-index <job number>',
+    }
+
+
 def _exclusion_request(
     pending: dict[str, Any],
     *,

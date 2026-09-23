@@ -4,6 +4,18 @@
 
 关联文档：[用户指南](../README.md)、[Agent 工作流](./agent-onboarding.md)、[Codex 原生操作 Skill](../skills/codex-job-agent/SKILL.md)。
 
+## 工作流协议的兼容性
+
+`agent_action` 为新增输出字段；现有 `next_suggested`、交互协议、签名、
+BrowserWork nonce/binding 及投递授权保持原有校验。
+`jobagent workflow-contract` 不联网、不迁移、不读取账户状态。
+
+`pending_round_binding.json` 可新增可选 `round_request`，保存当前用户明确提供的
+岗位、城市和本地档案选择。文件继续受既有账户隔离与归档规则保护；旧文件缺少
+该字段时按原样读取，不补造用户意图。新轮次成功创建后清除暂存请求；换简历时
+保留本轮已给出的输入。未发生配置清空或简历重写，不需要提高状态 schema。
+旧客户端不认识的新字段不可作为业务事实另行推断；继续已有交互时应使用当前版本。
+
 ## 目标
 
 已安装旧版的客户升级后，应当直接得到一个可继续工作的客户端，而不是由宿主 Agent 猜测是否需要清缓存、重登平台或删除目录。升级过程必须满足：
