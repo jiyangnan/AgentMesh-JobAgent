@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.6.15
+version: 0.6.16
 metadata:
   openclaw:
     emoji: "💼"
@@ -311,3 +311,9 @@ For Boss use `greet preview` in place of `apply review`.
 ## Completion Report
 
 Include round ID, platform, Discover ID, category counts, credits, explicit overrides, attempted/delivered/failed/skipped counts, audit evidence and remaining platforms. Never report overall completion unless `workflow.workflow_complete=true`. Relay the optional one-time GitHub star prompt only if the CLI emits it.
+
+### HTTPS dependency recovery
+
+The client loads its bundled public root certificates automatically while preserving system trust. Explicit `SSL_CERT_FILE` or `SSL_CERT_DIR` settings remain authoritative. The installer checks cloud HTTPS without an API Key or business-state changes; a successful installation alone does not mean the account or workflow is ready. Normal `jobagent onboarding` remains offline.
+
+For a TLS failure, run `jobagent doctor tls` once. Follow its typed `dependency_repair` command at most once if the product CA dependency is missing, then check again in a fresh process and resume the original command when verified. Keep the original work, nonce, round and credentials. Certificate expiry, hostname mismatch and untrusted custom/proxy certificates remain blocked: relay the specific guidance instead of repeatedly reinstalling or asking for another API Key. Never disable TLS/hostname verification, import an unverified certificate, modify Keychain, clear state or replay delivery to repair connectivity.
