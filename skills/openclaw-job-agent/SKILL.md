@@ -19,6 +19,42 @@ metadata:
 
 Drive the official Job Agent CLI while keeping the user in control of credentials, login and review overrides.
 
+## Installation-to-account handoff
+
+An installation request includes the setup handoff. After every successful install,
+reinstall or update requested by the user, read the final `onboarding_handoff`
+output (or run `jobagent onboarding`). This read-only command works offline and
+never starts a round, changes account state or charges credits. Do not finish the
+turn with only “installed successfully” or a version check. If PATH is not yet
+refreshed, use the returned `cli_command` argument array for this installation.
+
+- If `onboarding.stage=api_key_required`, show the account-center link and the
+  complete `user_prompt`: register/sign in, generate an API Key, then **return to
+  this same Agent conversation** to continue configuration. The user can provide
+  the Key in a trusted private conversation or configure it in their own terminal
+  with `jobagent init --key <your_api_key>`, then return and say “我已配置 API Key，请继续
+  Job Agent 设置。” Never run a placeholder or echo a supplied secret.
+- If a Key is already configured, immediately run `jobagent doctor env`; local
+  credential presence does not prove verification or completed setup. Do not ask
+  for another Key merely because the client was reinstalled or updated.
+- After successful `init`, run `jobagent doctor env` before any paid or browser
+  action. Respect account ownership/recovery errors and distinguish
+  `environment_healthy` from `workflow.ready`. A temporary verification outage
+  preserves the Key and does not mean the user must register again.
+- Relay each current setup prompt, including what the user should do on the web,
+  **how to return here**, and what the Agent will do next. After a user reports
+  that their workbench resume is ready, use `jobagent resume list` before proposing
+  another analysis. Ask for missing resume/city/role inputs only; never infer them.
+- Show the workbench URL and the next concrete step. Recommend a paid pass only
+  after the CLI reports insufficient credits with `paid_pass_required=true`.
+  After a purchase, ask the user to return here; recheck with `jobagent doctor env`.
+
+A setup turn ends with a clear user handoff (including the return instruction),
+a concrete recovery blocker, or verified readiness plus the next user choice.
+An install alone does not authorize a new round, paid analysis or delivery.
+Preserve existing rounds and confirmations. All later platform actions retain
+Boss -> Liepin -> Zhilian -> 51Job order and final-list confirmation.
+
 ## Native mode takes precedence
 
 In Codex, use the dedicated `codex-job-agent` skill and start with
@@ -133,7 +169,7 @@ path when required; do not repeat `work begin` for that saved recovery receipt.
 - On Liepin `liepin_verification_required`, keep the existing browser tab and stop for the returned user prompt. Only after the user completes verification, run the exact `next_suggested` Discover command. Completed query pages and collected candidates resume from the preserved account-bound checkpoint; do not restart the round, request another login or repeat completed searches. Explicit no-results or verified final-page evidence retires only that query. An older request without a checkpoint remains preserved; never invent missing progress.
 
 - Never invent an API Key. Ask the user to create an AgentMesh360 universal Key at `https://agentmesh360.com/app/` and wait. Registration and Key creation are free; cloud capabilities require available credits.
-- After configuring the Key, run `jobagent doctor env`. Read `environment_healthy` and `workflow.ready` separately. If `cloud_access.usable=true`, briefly report the active balance source and run the top-level `next_suggested` immediately. Never block on `Pass: not purchased`; ask for a purchase only when `paid_pass_required=true` or a real cloud command returns `insufficient_credits`.
+- After configuring the Key, run `jobagent doctor env`. Read `environment_healthy` and `workflow.ready` separately. If `cloud_access.usable=true`, briefly report the active balance source and run the top-level `next_suggested` when no user action is pending. If `requires_user_action=true`, relay the setup prompt and wait; never execute resume or Key placeholders. Never block on `Pass: not purchased`; ask for a purchase only when `paid_pass_required=true` or a real cloud command returns `insufficient_credits`.
 - New accounts start with zero cloud credits. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. For grandfathered `signup_trial_active`, tell the user: `你的 AgentMesh360 账户仍有此前发放的体验额度：剩余 {credit} credits，有效期至 {expires_at}。无需购买通行证，我现在继续执行下一步。` Then execute `next_suggested` without asking for confirmation.
 - `jobagent init` returns `workbench_url=https://agentmesh360.com/workbench/` for the first-run handoff. Existing accounts may receive top-level `announcements` once after a successful account-verified command. For `id=jobagent_workbench_launch_202608`, show a non-blocking information card when the current host interface supports it, or a concise localized message with the URL, then continue the original `next_suggested`. Never ask for acknowledgement, rerun `init`, or repeat the announcement.
 - Run Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job as complete vertical chains. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> delivery preview -> delivery confirmation -> send -> audit` chain and complete its audit before logging in to the next platform. Never operate their shared browser concurrently.
@@ -196,7 +232,7 @@ both commands with `--target-role "<user-stated target role>"`.
 
 Each completed platform Discover accepts at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. Registration, API Key creation, and the open-source client are free; new accounts start with zero cloud credits. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The signed cloud response is authoritative for charges and refunds. The AgentMesh360 Standard Pass costs CNY 29.99 for 30 days and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days and includes 3,000 shared credits. An active pass can receive a CNY 15 add-on with 500 credits. Passes do not renew automatically. Previously issued signup-trial credits remain usable until their original expiry.
 
-First-run handoff: after `jobagent init` succeeds and `jobagent doctor env` reports ready, proactively tell the user three things before any job work: (1) the web workbench `https://agentmesh360.com/workbench/` (also returned as `workbench_url` in the `init` output) — the resume profile, tailored question banks, voice mock interviews with dual-track reports, 8-stage application tracking, offer compare and negotiation practice live there; (2) if the account has no usable pass, the pass page `https://agentmesh360.com/app/?lang=zh-CN#pricing` (Standard CNY 29.99 / 1,000 credits; Pro CNY 69.99 / 3,000 credits; 30 days, no auto-renewal); (3) the recommended first action: build the resume profile — open the workbench profile page and paste the resume, or run `jobagent resume analyze --file <resume>` here (5 credits). Question banks, mock interviews and Discover all build on that profile.
+First-run handoff: after `jobagent init` succeeds and `jobagent doctor env` verifies the account and environment, proactively tell the user three things before any job work: (1) the web workbench `https://agentmesh360.com/workbench/` (also returned as `workbench_url` in the `init` output) — the resume profile, tailored question banks, voice mock interviews with dual-track reports, 8-stage application tracking, offer compare and negotiation practice live there; (2) only if doctor returns insufficient_credits with paid_pass_required=true, the pass page `https://agentmesh360.com/app/?lang=zh-CN#pricing` (Standard CNY 29.99 / 1,000 credits; Pro CNY 69.99 / 3,000 credits; 30 days, no auto-renewal); (3) the recommended first action: build the resume profile — open the workbench profile page and paste the resume, or run `jobagent resume analyze --file <resume>` here (5 credits). Question banks, mock interviews and Discover all build on that profile. When directing the user to the workbench, explicitly ask them to return to this same Agent conversation and say “简历已准备好，请继续”; inspect existing online resumes with `jobagent resume list` before requesting another analysis.
 
 ## Platform Flow
 

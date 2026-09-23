@@ -38,7 +38,9 @@ def test_official_installer_targets_public_repo_and_current_credential_term(rela
     assert "license key" not in text.lower()
     assert "jobagent boss discover" not in text
     assert "config tar.umask 002" in text
-    assert text.index("jobagent round start") < text.index("jobagent boss login --check")
+    assert "jobagent.infra.onboarding --installer" in text
+    assert text.index("jobagent.infra.codex_skill install") < text.index("jobagent.infra.onboarding --installer")
+    assert "jobagent round start" not in text
 
 
 def test_windows_installer_stops_on_native_package_failures_before_marking_success():
@@ -48,6 +50,7 @@ def test_windows_installer_stops_on_native_package_failures_before_marking_succe
         "& $venvPy -m pip install --upgrade pip --quiet",
         "& $venvPip install -e $InstallDir --quiet",
         "& $venvPy -m jobagent.infra.codex_skill install",
+        "& $venvPy -m jobagent.infra.onboarding --installer",
     )
     for command in commands:
         position = lines.index(command)
@@ -55,4 +58,4 @@ def test_windows_installer_stops_on_native_package_failures_before_marking_succe
     assert text.index(commands[1]) < text.index('Ok "CLI installed"') < text.index("$metadata = @{")
     assert text.index(commands[2]) < text.index('Ok "Codex native skill installed"')
     assert "%USERPROFILE%\\Downloads" not in text
-    assert "Write-Host '     jobagent resume analyze --file \"$env:USERPROFILE\\Downloads\\your-resume.pdf\"'" in text
+    assert "your-resume.pdf" not in text

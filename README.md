@@ -109,6 +109,17 @@ The official installer creates a managed installation. Starting with `0.3.0`, ma
 
 ## Set Up
 
+**安装完成后，请继续连接账户。** 安装器会显示当前设置步骤；随时可运行
+`jobagent onboarding` 重新查看。已有安装也会检查是否仍需配置。
+
+1. 打开 [AgentMesh360 个人中心](https://agentmesh360.com/app/)，免费注册或登录并生成 API Key。
+2. **拿到 Key 后回到当前这段 Agent 对话**，让 Agent 继续配置。可在你信任的私密对话里提供 Key；也可以在自己的终端执行下面的 `init` 命令，然后回来回复：**“我已配置 API Key，请继续 Job Agent 设置。”** 请勿将 Key 发到公开群聊或 Issue。
+3. Agent 会运行环境与账户检查，再引导你准备简历并确认目标城市。若本机已有 Key，会直接检查，无需重新申请。
+
+如果在[工作台](https://agentmesh360.com/workbench/)准备简历，完成并确认画像后，
+请回到这段对话回复 **“简历已准备好，请继续。”** Agent 会检查已有在线简历后续接。
+安装和配置账户本身不会启动投递；每个平台的完整投递清单仍需你单独确认。
+
 ```bash
 jobagent init --key <your_api_key>
 jobagent doctor env

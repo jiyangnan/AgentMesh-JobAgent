@@ -1,6 +1,6 @@
 ---
 name: codex-job-agent
-description: Use Job Agent in Codex to discover jobs, review signed recommendations, and deliver user-confirmed applications through native Computer Use in the user's browser.
+description: Install and set up Job Agent in Codex, connect an API Key, discover jobs, review signed recommendations, and deliver user-confirmed applications through native Computer Use in the user's browser.
 ---
 
 # Job Agent for Codex
@@ -13,6 +13,42 @@ Use the official Job Agent CLI for account-bound progress, cloud decisions,
 confirmation and audit. Use the host's native Computer Use tools for the browser.
 The CLI's current task and result schema are authoritative; this skill is an
 operating procedure, not a mechanism that can intercept host UI actions.
+
+## Installation-to-account handoff
+
+An installation request includes the setup handoff. After every successful install,
+reinstall or update requested by the user, read the final `onboarding_handoff`
+output (or run `jobagent onboarding`). This read-only command works offline and
+never starts a round, changes account state or charges credits. Do not finish the
+turn with only “installed successfully” or a version check. If PATH is not yet
+refreshed, use the returned `cli_command` argument array for this installation.
+
+- If `onboarding.stage=api_key_required`, show the account-center link and the
+  complete `user_prompt`: register/sign in, generate an API Key, then **return to
+  this same Agent conversation** to continue configuration. The user can provide
+  the Key in a trusted private conversation or configure it in their own terminal
+  with `jobagent init --key <your_api_key>`, then return and say “我已配置 API Key，请继续
+  Job Agent 设置。” Never run a placeholder or echo a supplied secret.
+- If a Key is already configured, immediately run `jobagent doctor env`; local
+  credential presence does not prove verification or completed setup. Do not ask
+  for another Key merely because the client was reinstalled or updated.
+- After successful `init`, run `jobagent doctor env` before any paid or browser
+  action. Respect account ownership/recovery errors and distinguish
+  `environment_healthy` from `workflow.ready`. A temporary verification outage
+  preserves the Key and does not mean the user must register again.
+- Relay each current setup prompt, including what the user should do on the web,
+  **how to return here**, and what the Agent will do next. After a user reports
+  that their workbench resume is ready, use `jobagent resume list` before proposing
+  another analysis. Ask for missing resume/city/role inputs only; never infer them.
+- Show the workbench URL and the next concrete step. Recommend a paid pass only
+  after the CLI reports insufficient credits with `paid_pass_required=true`.
+  After a purchase, ask the user to return here; recheck with `jobagent doctor env`.
+
+A setup turn ends with a clear user handoff (including the return instruction),
+a concrete recovery blocker, or verified readiness plus the next user choice.
+An install alone does not authorize a new round, paid analysis or delivery.
+Preserve existing rounds and confirmations. All later platform actions retain
+Boss -> Liepin -> Zhilian -> 51Job order and final-list confirmation.
 
 ## Start or resume
 
