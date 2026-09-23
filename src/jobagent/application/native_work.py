@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from jobagent.infra import browser_work as store, rounds, state
 from jobagent.infra.account_state import current_account_ref
 from jobagent.infra.protocol import digest_payload
+from jobagent.application import native_window
 
 EXECUTOR = "codex_native"
 TECHNICAL_BLOCK_REASONS = ("job_identity_unknown", "page_state_unknown")
@@ -159,8 +160,37 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                 "user_prompt": (f"本平台的浏览器任务已按你的确认取消，未执行后续投递。若要结束本平台，请明确确认跳过；"
                                 f"若要恢复本平台，可重新运行 jobagent {work['binding']['platform']} login。已有回执与本轮进度会保留。"),
                 "workflow": rounds.round_status(), "next_suggested": "jobagent round status"}
-    task = dict(work.get("task") or {})
+    task = copy.deepcopy(work.get("task") or {})
+    # Refresh presentation, including already-begun tasks from older clients.
+    # The ledger specification, nonce and observation budget remain immutable.
+    if work["action"] == "bind_session":
+        task.update(native_window.binding_task())
+    elif work["action"] == "recover_session":
+        task["instruction"] = task.get("instruction", "").replace(
+            "Use an actual stable native window ID or host window handle, never a page/window title.",
+            native_window.REFERENCE)
+        task.setdefault("result_schema", {}).setdefault("evidence", {}).update(
+            window_reference=native_window.REFERENCE,
+            window_reference_kind="|".join(native_window.KINDS),
+            window_context={"required_for": native_window.APP_SCOPED, **native_window.CONTEXT_SCHEMA})
+        variants = native_window.binding_task()["result_examples"]
+        for variant in variants.values():
+            variant["evidence"].pop("reuse_status")
+            variant["evidence"].update(
+                profile_label=task["expected_profile_label"], account_label=task["expected_account_label"],
+                page_url="Replace with the currently observed official HTTPS page URL",
+                login_state="authenticated", account_navigation=True, resume_or_activity=True)
+        task["result_example"] = variants["native_window"]
+        task["result_examples"] = variants
     task["rules"] = list(RULES)
+    task["window_context_contract"] = {
+        "before_every_ui_action": True,
+        "supported_reference_kinds": list(native_window.KINDS),
+        "app_scoped_guarantee": "freshly selected profile/account context, not persistent physical window identity",
+        "instruction": native_window.BEFORE_ACTION,
+        "missing_window_id_is_missing_capability": False,
+        "examples_are_evidence": False,
+    }
     task["command_execution"] = dict(COMMAND_EXECUTION)
     _delivery_contract(work, task)
     example = {**_example(work), **task.get("result_example", {})}
@@ -185,7 +215,12 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         "outcome": schema.get("outcome", "success"), "evidence": "object of actual UI observations"}
     schema["evidence_common"] = common
     if work["action"] == "recover_session":
-        common["window_reference"] = "actual stable native window ID or host window handle; never a page/window title"
+        common["window_reference"] = native_window.REFERENCE
+    if session.get("window_reference_kind") == native_window.APP_SCOPED and work["action"] != "recover_session":
+        common.update(window_reference_kind=native_window.APP_SCOPED,
+                      window_context=dict(native_window.CONTEXT_SCHEMA))
+        example["evidence"].update(window_reference_kind=native_window.APP_SCOPED,
+            window_context=native_window.context_example(session["window_reference"]))
     schema["evidence"] = {**common, **schema.get("evidence", {})}
     schema["branch_selection"] = "Success evidence requirements apply only to normal completion. For requires_user_action=true, use pause_result_schema. For technical page/identity failures, use blocked_result_schema. Omit all unobserved action-specific fields."
     task["result_schema"] = schema
@@ -197,7 +232,11 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             variant["evidence"] = {**_example(work)["evidence"], **variant.get("evidence", {})}
             for field in ("window_reference", "profile_label", "account_label"):
                 if field in example["evidence"]:
-                    variant["evidence"][field] = example["evidence"][field]
+                    if work["action"] != "bind_session" and not (work["action"] == "recover_session" and field == "window_reference"):
+                        variant["evidence"][field] = example["evidence"][field]
+            if session.get("window_reference_kind") == native_window.APP_SCOPED and work["action"] != "recover_session":
+                variant["evidence"].update(window_reference_kind=native_window.APP_SCOPED,
+                    window_context=native_window.context_example(session["window_reference"]))
         task["result_examples"] = variants
     pause_evidence = dict(_example(work)["evidence"])
     for field in ("window_reference", "profile_label"):
@@ -207,19 +246,27 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     task["pause_result_example"] = {**_example(work), "outcome": "uncertain",
         "requires_user_action": True, "reason": "verification_required",
         "evidence": pause_evidence}
+    task["host_window_pause_result_example"] = {
+        **task["pause_result_example"], "reason": "permission_required",
+        "evidence": {**pause_evidence, "host_window_issue": "window_unavailable",
+                     "observation": "Describe the actual unavailable native window action or AX/screenshot mismatch; do not infer login state or claim completion."}}
     task["pause_reason_values"] = ["login_required", "verification_required", "challenge", "permission_required", "session_unknown"]
     task["pause_result_schema"] = {"type": "object",
         "required": ["receipt_id", "nonce", "binding", "outcome", "requires_user_action", "reason", "evidence"],
         "outcome": "uncertain", "requires_user_action": True, "reason": task["pause_reason_values"],
-        "evidence_required": list(pause_evidence), "evidence_optional": ["page_url", "account_label"],
+        "evidence_required": list(pause_evidence), "evidence_optional": ["page_url", "account_label", "host_window_issue"],
+        "evidence_optional_schema": {"host_window_issue": {
+            "type": "string", "enum": list(native_window.HOST_WINDOW_ISSUES),
+            "only_when": "requires_user_action=true and reason=permission_required; actual host window action failure or AX/screenshot mismatch, never ordinary job identity or business-page evidence failure"}},
         "action_specific_success_fields_required": False,
-        "instructions": "Copy current nonce/binding. Fill fresh observed_at and actual observation; use exact bound window/profile after binding. Omit unobserved optional fields; do not invent query/city, results, candidates, job identity or receipts. Before binding, missing capability requires only source/observed_at/observation. A pause grants no new action permission."}
+        "instructions": "Copy current nonce/binding. Fill fresh observed_at and actual observation; use exact bound window/profile after binding. Omit unobserved optional fields; do not invent query/city, results, candidates, job identity or receipts. Before binding, missing capability requires only source/observed_at/observation. For an actual host window action failure or AX/screenshot mismatch, follow window_context_contract and host_window_pause_result_example: try an actually available native selection/activation once, then ask only for foregrounding the existing window if still unavailable. A pause grants no new action permission or observation budget."}
     task["blocked_result_example"] = {**task["pause_result_example"],
         "requires_user_action": False, "requires_technical_recovery": True,
         "reason": "job_identity_unknown"}
     task["blocked_result_schema"] = {**task["pause_result_schema"],
         "required": ["receipt_id", "nonce", "binding", "outcome", "requires_technical_recovery", "reason", "evidence"],
         "requires_user_action": False, "requires_technical_recovery": True,
+        "evidence_optional": ["page_url", "account_label"], "evidence_optional_schema": {},
         "reason": list(TECHNICAL_BLOCK_REASONS),
         "instructions": "Use for inconsistent job identity or inconclusive page state, not login, verification or window ambiguity. Preserve actual observations and omit unverified success fields. Stop normal workflow for technical diagnosis; do not ask the user to log in, close windows or fix a selector. Recovery grants no side-effect permission."}
     if "unresolved_result_example" in task:
@@ -227,6 +274,9 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         unresolved["evidence"] = {**_example(work)["evidence"],
             **{k: example["evidence"][k] for k in ("window_reference", "profile_label", "account_label") if k in example["evidence"]},
             **unresolved["evidence"]}
+        if session.get("window_reference_kind") == native_window.APP_SCOPED:
+            unresolved["evidence"].update(window_reference_kind=native_window.APP_SCOPED,
+                window_context=native_window.context_example(session["window_reference"]))
     work["task"] = task
     can_execute = bool(execution and work.get("execution_permitted"))
     # A read-only work that exhausted its observation attempts can no longer
@@ -241,6 +291,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
         work["allowed_mode"] = "reconcile_only" if observation_locked else "observe"
     result = work.get("result") or {}
     paused = bool(result.get("requires_user_action")) and not execution
+    host_window_issue = native_window.host_window_issue(result) if paused else None
     blocked = bool(result.get("requires_technical_recovery")) and not execution
     page_url = result.get("evidence", {}).get("page_url")
     platform = work["binding"]["platform"]
@@ -249,7 +300,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             "protocol": "jobagent.browser_work", "protocol_version": 1,
             "host_contract": skill_contract(),
             "work": work, "requires_user_action": paused,
-            **({"user_prompt": _pause_prompt(result.get("reason"), safe_url)} if paused else {}),
+            **({"user_prompt": _pause_prompt(result.get("reason"), safe_url, host_window_issue)} if paused else {}),
             **({"requires_technical_recovery": True, "error": f"native_{result['reason']}",
                 "message": "页面或岗位身份的证据不一致，正常流程已暂停并保留进度；需要技术排查，不代表登录失效或窗口冲突。",
                 "recovery_command": (f"jobagent work submit --work-id {work['work_id']} --result <result.json>"
@@ -268,10 +319,20 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             cancel_command=f"jobagent work cancel --work-id {work['work_id']} --confirm-cancel",
             user_prompt="当前只读采集的观察次数已用完。是否恢复这项采集？恢复会取消当前失败任务并重新核验同一浏览器 profile 和账号，保留原轮次、请求及已采集岗位，不执行投递。请明确回复同意恢复；助手不得替你确认。",
             recovery_instructions="Do not submit invented completion or loop begin/next. Submit a final receipt only if actual complete evidence exists. Otherwise obtain explicit recovery confirmation once, then run recovery_command. Cancelling this read-only work does not require the old browser window to remain available.")
+        if host_window_issue:
+            response["user_prompt"] = (
+                "宿主暂时无法操作原窗口，或辅助功能信息与截图未能对应。请先将原来的 Chrome 窗口前置并保持可见一次，完成后回复“已前置”。"
+                  "\n本只读任务的观察次数已用完，前置窗口不会恢复观察额度。已有完整真实证据时可按 completion_command 提交；"
+                  "若还需新的观察或采集，必须先明确确认下面的只读恢复范围，不能自动恢复或重复 begin。\n"
+                + response["user_prompt"])
     return response
 
 
-def _pause_prompt(reason: Any, url: str) -> str:
+def _pause_prompt(reason: Any, url: str, host_window_issue: str | None = None) -> str:
+    if reason == "permission_required" and host_window_issue in native_window.HOST_WINDOW_ISSUES:
+        return ("宿主暂时无法操作原窗口，或辅助功能信息与截图未能对应，当前任务已暂停并保留。"
+                "请只将原来的 Chrome 窗口前置并保持可见一次，完成后回复“已前置”。"
+                "无需重新登录、取消任务、新建轮次或重新绑定；不需要你诊断工具。")
     if reason == "login_required":
         return f"请在当前已绑定的 Chrome 页面 {url} 完成登录，完成后回复“登录好了”；不会新开另一套浏览器。"
     if reason in {"verification_required", "challenge"}:
@@ -293,13 +354,7 @@ def ensure_session(platform: str) -> dict[str, Any] | None:
     if active.get("native_cancelled_work", {}).get("platform") == platform:
         del active["native_cancelled_work"]
         rounds.save_round(active)
-    task = {
-        "instruction": "First verify native Computer Use is callable and app access is allowed. Inspect existing Chrome windows; reuse the existing Job Agent window/profile if uniquely identifiable. Bind a stable native window ID or host window handle, never a mutable page/window title. A foreground Gmail tab does not by itself identify a different window. Bind that same window for login, search, details, delivery and receipts. If ambiguous, pause. Only if no reusable window exists may native UI open one. Do not copy cookies or clear profiles.",
-        "required_evidence": ["native_computer_use_available=true", "browser=chrome", "window_reference", "profile_label", "group_reference", "observation", "reuse_status=reused|created_no_existing"],
-        "result_schema": {"evidence": {"native_computer_use_available": "boolean", "browser": "chrome",
-            "window_reference": "observed stable native window ID or host window handle; not a page/window title", "profile_label": "observed profile label",
-            "group_reference": "observed task group reference", "reuse_status": "reused|created_no_existing"}},
-    }
+    task = native_window.binding_task()
     revision = len(store.list_work(binding))
     work = store.ensure_work(action="bind_session", task=task, binding=binding,
         key=f"bind:{active['round_id']}:{platform}:{revision}")
@@ -430,6 +485,9 @@ def _common_evidence(work: dict[str, Any], result: dict[str, Any]) -> dict[str, 
         _error("native_browser_changed", "The observed browser window/profile changed. Do not act on a different window.")
     platform = work["binding"]["platform"]
     halted = result.get("requires_user_action") or result.get("requires_technical_recovery")
+    if not halted and work["action"] != "recover_session":
+        native_window.validate(evidence, expected_kind=session.get("window_reference_kind"),
+                               expected_reference=session["window_reference"])
     if not _official(platform, evidence.get("page_url")) and not halted:
         _error("native_page_untrusted", "Observation must come from this platform's official HTTPS page.")
     expected_account = session.get("accounts", {}).get(platform)
@@ -561,11 +619,12 @@ def _validate_session_recovery(work: dict[str, Any], result: dict[str, Any], evi
     if evidence.get("profile_label") != task["expected_profile_label"] or evidence.get("account_label") != task["expected_account_label"]:
         _error("native_recovery_identity_mismatch", "Recovery must retain the original browser profile and platform account.")
     if (evidence.get("native_computer_use_available") is not True or evidence.get("browser") != "chrome"
-            or evidence.get("window_reference_kind") not in {"native_window_id", "host_window_handle"}
+            or evidence.get("window_reference_kind") not in native_window.KINDS
             or not all(isinstance(evidence.get(k), str) and evidence[k].strip() for k in ("window_reference", "group_reference"))
             or evidence.get("login_state") != "authenticated" or evidence.get("account_navigation") is not True
             or evidence.get("resume_or_activity") is not True):
         _error("native_recovery_evidence_required", "Verify native window identity, original profile/account, account navigation and resume/activity before resuming.")
+    native_window.validate(evidence, require_kind=True)
 
 
 def _review_for(work: dict[str, Any]) -> dict[str, Any]:
@@ -673,6 +732,7 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         closed = store.submit_work(work_id, binding, result)
         return _continue(closed)
     e = _common_evidence(work, result)
+    native_window.validate_host_pause(result, e)
     if result.get("requires_user_action") or result.get("requires_technical_recovery"):
         pass
     elif result.get("outcome") not in {"success", "page_collected", "uncertain", "unresolved", "unavailable"}:
@@ -681,10 +741,21 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         if result["outcome"] not in {"success", "uncertain", "unresolved"}:
             _error("native_outcome_invalid", "Unsupported session-binding outcome.")
         if result["outcome"] == "success":
-            if e.get("native_computer_use_available") is not True or e.get("browser") != "chrome" or e.get("reuse_status") not in {"reused", "created_no_existing"}:
-                _error("native_capability_required", "Native Computer Use and a verified Chrome reuse decision are required.")
+            invalid = []
+            if e.get("native_computer_use_available") is not True:
+                invalid.append("native_computer_use_available")
+            if e.get("browser") != "chrome":
+                invalid.append("browser")
+            if e.get("reuse_status") not in ("reused", "created_no_existing"):
+                invalid.append("reuse_status")
+            if invalid:
+                _error("native_capability_required", "Verify the listed capability/reuse fields against actual host observations. Missing window IDs alone do not mean Computer Use is unavailable.",
+                       invalid_fields=invalid, receipt_saved=False, work_id=work_id,
+                       next_suggested=f"jobagent work submit --work-id {work_id} --result <result.json>",
+                       recovery_instruction="Correct only facts supported by actual observations and the current schema; do not set success flags to bypass missing capability. Keep this work/nonce/round. Use the pause schema when native access or window selection is unresolved.")
             if not all(isinstance(e.get(k), str) and e[k].strip() for k in ("window_reference", "profile_label", "group_reference")):
                 _error("native_session_evidence_required", "Identify the actual Chrome window, profile and task group.")
+            native_window.validate(e)
     elif work["action"] == "inspect_session":
         if result["outcome"] not in {"success", "uncertain", "unresolved"}:
             _error("native_outcome_invalid", "Unsupported session-inspection outcome.")
@@ -729,6 +800,8 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
     if action == "bind_session":
         e = result["evidence"]
         session = {**work["binding"], **{k: e[k] for k in ("window_reference", "profile_label", "group_reference")}, "accounts": {}}
+        if e.get("window_reference_kind"):
+            session["window_reference_kind"] = e["window_reference_kind"]
         session["id"] = "native_" + digest_payload(session)[7:31]
         active["native_session"] = session
         active["browser_session_id"] = session["id"]

@@ -76,6 +76,20 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
    window. Inspect the available windows and tabs yourself. Use a stable window
    ID/handle actually exposed by the host when available; never treat a dynamic
    page title as a stable ID or copy an old title into a fresh observation.
+   If the native host selects an app and does not expose window IDs (as on some
+   macOS hosts), use the returned `app_scoped_window` result branch. Its
+   `window_reference` is the actual host app reference, not a fabricated window
+   handle. Before every UI action, freshly verify the selected target window,
+   using current native state. Task-permitted window/tab selection and navigation
+   to the declared official URL may prepare that target; inspect again afterward.
+   Before collecting, inspecting job details/receipts or any recruiting action,
+   verify the bound profile, official task page and bound account when present. Resolve
+   multiple windows using the host's native window selection/menu and inspect
+   the selected window again; a missing window list does not prove uniqueness.
+   Submit fresh `window_context` selection evidence and the current title on
+   every non-paused receipt. The title is diagnostic and can change. If selection
+   remains ambiguous, pause. This mode preserves the profile/account context;
+   it does not claim to pin one physical window across foreground changes.
 5. Write a local JSON result using the exact current `result_schema`. Copy the
    entire `work.binding` and the returned nonce without changing them; use the required
    receipt ID semantics. On a user challenge, use `pause_result_schema` and its
@@ -92,6 +106,35 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
    success until the CLI accepts the result. If a submission response is lost,
    inspect `jobagent work status` and follow recovery; do not repeat browser work
    or create a new receipt to conceal a conflicting result.
+
+If native window actions are unavailable (for example `noWindowsAvailable`), or
+AX and screenshots disagree about the selected context, stop collecting. If the
+host exposes a native selection/activation API, use it once to activate the
+existing bound Chrome, then read fresh state. Do not invent APIs or replay timed-out input
+or sends. If still unusable, submit the minimal `pause_result_schema` with
+`reason=permission_required` and `evidence.host_window_issue` set to the observed
+`window_unavailable` or `ax_visual_mismatch`. Relay the CLI prompt asking the user
+to bring the original window forward once. Do not infer lockscreen, logout or
+missing Computer Use, or cancel, rebind, start a round or clear state to activate
+it. Afterward, freshly verify window, profile, official page and bound account;
+continue only under current work permissions, without repeating side effects.
+If that one user foregrounding does not restore consistent observations, retain
+the pause and report the host failure; do not ask again or loop actions.
+Ordinary job-identity or page-evidence failures still use the technical blocked
+branch, not this host-window pause. Foregrounding never resets attempts: when
+the budget is exhausted, submit existing complete evidence only through the
+returned `completion_command`; if further observation is needed, use the existing
+explicitly confirmed read-only recovery offer. Otherwise retain the same work
+and nonce.
+
+For `native_capability_required`, read `invalid_fields`: the binding validator
+checks the JSON boolean `native_computer_use_available=true`, `browser=chrome`
+and `reuse_status=reused|created_no_existing`. Missing window IDs alone do not
+show that Computer Use is unavailable. Correct an unaccepted result only from
+actual observations, using the original work and nonce; do not call `begin`
+again just to repair its JSON. A receipt already accepted by the ledger remains
+immutable. Follow the exact current schema and choose its native-window or
+app-scoped example; examples supply field shapes, never observed evidence.
 
 Use a new `receipt_id` for a genuinely new observation. Reuse an ID only for the
 same work item and identical receipt content. A `browser_work_receipt_conflict`

@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.14] - 2026-09-22
+
+- Support native hosts that expose an application reference without a persistent window handle. App-scoped tasks require fresh window-selection, profile and account evidence before each action; titles are observations, not fixed identifiers.
+- Present complete binding receipt examples and name invalid capability/reuse fields, preserving the original work, nonce and round when a receipt is rejected.
+- Refresh pending binding instructions without rewriting their ledger records. Preserve window/account identity checks, signed job scope and user-confirmed delivery.
+
 ## [0.6.13] - 2026-09-22
 
 ### Fixed

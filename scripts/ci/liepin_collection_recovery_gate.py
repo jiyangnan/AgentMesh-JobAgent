@@ -312,6 +312,7 @@ def main() -> None:
             "--remote-debugging-address=127.0.0.1", "--remote-allow-origins=*",
             "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>",
             "--host-resolver-rules=MAP * ~NOTFOUND", "--disable-background-networking",
+            "--disable-extensions", "--disable-component-extensions-with-background-pages",
             "--disable-component-update", "--disable-sync", "--disable-default-apps",
             "--no-first-run", "--no-default-browser-check", "--metrics-recording-only",
             "--password-store=basic", "--disable-quic", "--window-size=1000,800", "about:blank",
