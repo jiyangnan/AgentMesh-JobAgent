@@ -56,7 +56,7 @@ def test_discovery_decide_retries_tls_eof_with_same_request(monkeypatch):
     calls: list[tuple[bytes | None, int]] = []
     sleeps: list[float] = []
 
-    def flaky(request, *, timeout):
+    def flaky(request, *, timeout, context=None):
         calls.append((request.data, timeout))
         if len(calls) < 3:
             raise urllib.error.URLError(
@@ -85,7 +85,7 @@ def test_discovery_decide_retries_tls_eof_with_same_request(monkeypatch):
 def test_discovery_decide_retries_gateway_503(monkeypatch):
     attempts = 0
 
-    def flaky(_request, *, timeout):
+    def flaky(_request, *, timeout, context=None):
         nonlocal attempts
         attempts += 1
         assert timeout == 600
@@ -109,7 +109,7 @@ def test_discovery_decide_retries_gateway_503(monkeypatch):
 def test_search_plan_renewal_retries_with_same_bound_request(monkeypatch):
     calls: list[dict] = []
 
-    def flaky(request, *, timeout):
+    def flaky(request, *, timeout, context=None):
         calls.append(json.loads(request.data))
         assert timeout == 60
         if len(calls) < 3:
@@ -138,7 +138,7 @@ def test_search_plan_renewal_retries_with_same_bound_request(monkeypatch):
 def test_semantic_decision_failure_is_not_retried(monkeypatch):
     attempts = 0
 
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         nonlocal attempts
         attempts += 1
         assert timeout == 600
@@ -164,7 +164,7 @@ def test_semantic_decision_failure_is_not_retried(monkeypatch):
 def test_resume_analyze_does_not_retry_without_request_idempotency(monkeypatch):
     attempts = 0
 
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         nonlocal attempts
         attempts += 1
         assert timeout == 180
@@ -187,7 +187,7 @@ def test_resume_analyze_does_not_retry_without_request_idempotency(monkeypatch):
 def test_tls_eof_has_stable_code_and_safe_discovery_diagnostic(monkeypatch):
     api_key = "agentmesh_live_super_secret"
 
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         assert timeout == 60
         raise urllib.error.URLError(ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING"))
 
@@ -216,7 +216,7 @@ def test_tls_eof_has_stable_code_and_safe_discovery_diagnostic(monkeypatch):
 
 
 def test_timeout_has_stable_code(monkeypatch):
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         assert timeout == 20
         raise TimeoutError("timed out")
 
@@ -239,7 +239,7 @@ def test_timeout_has_stable_code(monkeypatch):
 
 @pytest.mark.parametrize("status", [502, 503, 504])
 def test_gateway_failures_have_stable_code(status, monkeypatch):
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         assert timeout == 60
         raise _http_error(status, {"message": "temporary gateway failure"})
 
@@ -265,7 +265,7 @@ def test_gateway_failures_have_stable_code(status, monkeypatch):
 
 
 def test_gateway_status_replaces_generic_server_code(monkeypatch):
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         assert timeout == 20
         raise _http_error(503, {"code": "cloud_error", "message": "temporary"})
 
@@ -286,7 +286,7 @@ def test_gateway_status_replaces_generic_server_code(monkeypatch):
 def test_certificate_verification_failure_is_not_retried(monkeypatch):
     attempts = 0
 
-    def fail(_request, *, timeout):
+    def fail(_request, *, timeout, context=None):
         nonlocal attempts
         attempts += 1
         assert timeout == 20
@@ -317,7 +317,7 @@ def test_certificate_verification_string_reason_is_not_retried(monkeypatch):
     monkeypatch.setattr(
         cloud_client.urllib.request,
         "urlopen",
-        lambda _request, *, timeout: (_ for _ in ()).throw(
+        lambda _request, *, timeout, context=None: (_ for _ in ()).throw(
             urllib.error.URLError("CERTIFICATE_VERIFY_FAILED")
         ),
     )

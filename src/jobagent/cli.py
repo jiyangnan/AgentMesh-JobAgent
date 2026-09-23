@@ -103,7 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("upgrade-check", help="Check saved state after a Job Agent upgrade")
 
     doctor = sub.add_parser("doctor", help="Check the local and cloud environment")
-    doctor.add_subparsers(dest="doctor_command", required=True).add_parser("env")
+    doctor_commands = doctor.add_subparsers(dest="doctor_command", required=True)
+    doctor_commands.add_parser("env")
+    doctor_commands.add_parser("tls", help="Check HTTPS trust without account or state changes")
 
     resume = sub.add_parser("resume", help="Analyze a resume into the current profile")
     resume_sub = resume.add_subparsers(dest="resume_command", required=True)
@@ -522,8 +524,14 @@ def _doctor_env() -> dict[str, Any]:
 
     key_present = bool(load_api_key())
     cloud: dict[str, Any]
+    transport_details: dict[str, Any] = {}
     try:
         cloud = cloud_client.health()
+    except cloud_client.CloudError as exc:
+        cloud = {"ok": False, "error": exc.code or "cloud_request_failed"}
+        if exc.details.get("tls_diagnostic"):
+            transport_details = exc.details
+            cloud["tls_diagnostic"] = exc.details["tls_diagnostic"]
     except Exception as exc:
         cloud = {"ok": False, "error": str(exc)}
     key_valid = False
@@ -542,6 +550,8 @@ def _doctor_env() -> dict[str, Any]:
             except cloud_client.CloudError as exc:
                 key_error = exc.code or "api_key_verification_failed"
                 key_rejected = exc.status == 401 or exc.code == "invalid_api_key"
+                if exc.details.get("tls_diagnostic"):
+                    transport_details = exc.details
     python_available = bool(shutil.which("python3"))
     chrome_available = bool(
         Path("/Applications/Google Chrome.app").exists()
@@ -688,6 +698,15 @@ def _doctor_env() -> dict[str, Any]:
         payload["onboarding"] = {"stage": "resume_check_required", "workbench_url": WORKBENCH_URL}
         payload["requires_user_action"] = False
         payload["message"] = "账户和环境检查通过。接下来通过 CLI 检查工作台已有简历，再给出需要你完成的步骤。"
+    if transport_details:
+        for field in ("tls_diagnostic", "network_diagnostic", "request_preserved", "agent_instructions"):
+            if field in transport_details:
+                payload[field] = transport_details[field]
+        if key_present and not key_rejected:
+            payload["next_suggested"] = "jobagent doctor tls"
+            payload["workflow"]["next_suggested"] = "jobagent doctor tls"
+            payload["api_key_action"] = None
+
     return payload
 
 
@@ -1685,6 +1704,9 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             client_state=getattr(args, "_client_upgrade_report", None),
         )
     if args.command == "doctor":
+        if args.doctor_command == "tls":
+            from jobagent.infra.tls_support import transport_preflight
+            return transport_preflight()
         return _doctor_env()
     if args.command == "resume":
         if args.resume_command == "analyze":
@@ -2080,6 +2102,15 @@ def main() -> None:
     if args.command == "workflow-contract" or (args.command == "workflow" and args.workflow_command == "contract"):
         from jobagent.infra.workflow_protocol import contract
         _print(contract(parser))
+        return
+    if args.command == "doctor" and args.doctor_command == "tls":
+        from jobagent.infra.tls_support import transport_preflight
+
+        result = transport_preflight()
+        _print(result)
+        if not result["ok"]:
+            raise SystemExit(2)
+
         return
     if args.command == "onboarding":
         # Installation handoff must work offline and with active/legacy state.

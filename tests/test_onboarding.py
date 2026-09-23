@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 from pathlib import Path
 import shutil
@@ -11,8 +12,59 @@ import pytest
 
 from jobagent import cli
 from jobagent.infra import credentials, onboarding
+from jobagent.infra import tls_support
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_installer_adds_transport_check_without_claiming_account_verification(monkeypatch, capsys):
+    monkeypatch.setattr(credentials, 'load_api_key', lambda: 'secret')
+    monkeypatch.setattr(tls_support, 'transport_preflight', lambda: {
+        'ok': False, 'agent_instructions': 'Do not repeat until repaired.', 'user_prompt': 'HTTPS blocked.'})
+    monkeypatch.setattr(sys, 'argv', ['onboarding', '--installer'])
+    onboarding.main()
+    output = capsys.readouterr().out
+    result = json.loads(output.split('Agent handoff (follow before ending setup):\n')[1])
+    assert result['transport_preflight']['ok'] is False
+    assert result['account_verified'] is False
+    assert result['next_suggested'] == 'jobagent doctor env'
+    assert 'secret' not in output
+    assert 'HTTPS blocked.' in output
+
+
+def test_doctor_keeps_typed_tls_diagnostics_instead_of_rebinding_key(monkeypatch):
+    from jobagent.infra.cloud_client import CloudError
+    detail = {'tls_diagnostic': {'reason': 'certificate_expired', 'verify_code': 10},
+              'next_suggested': 'jobagent doctor tls', 'agent_instructions': 'Check time and service certificate.'}
+    def failed():
+        raise CloudError('TLS failure', code='tls_certificate_verification_failed', details=detail)
+    monkeypatch.setattr(credentials, 'load_api_key', lambda: 'existing-secret')
+    monkeypatch.setattr('jobagent.infra.cloud_client.health', failed)
+    result = cli._doctor_env()
+    assert result['tls_diagnostic']['verify_code'] == 10
+    assert result['next_suggested'] == 'jobagent doctor tls'
+    assert result['workflow']['next_suggested'] == 'jobagent doctor tls'
+    assert result['api_key_configured'] is True
+    assert 'existing-secret' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('invalid_url', [True, False])
+def test_installer_still_emits_handoff_on_endpoint_or_proxy_protocol_error(monkeypatch, capsys, invalid_url):
+    monkeypatch.setattr(credentials, 'load_api_key', lambda: None)
+    monkeypatch.setenv('JOBAGENT_API_BASE', 'https://[invalid' if invalid_url else 'https://example.test')
+    monkeypatch.setenv('JOBAGENT_CORE_API_BASE', 'https://example.test')
+    def bad_response(*a, **kw):
+        raise http.client.BadStatusLine('private-proxy-text')
+    monkeypatch.setattr(tls_support.urllib.request, 'urlopen', bad_response)
+    monkeypatch.setattr(sys, 'argv', ['onboarding', '--installer'])
+    onboarding.main()
+    output = capsys.readouterr().out
+    result = json.loads(output.split('Agent handoff (follow before ending setup):\n')[1])
+    assert result['event'] == 'onboarding_handoff'
+    assert result['transport_preflight']['ok'] is False
+    assert result['transport_preflight']['checks'][0]['error'] == (
+        'https_endpoint_invalid' if invalid_url else 'http_protocol_error')
+    assert 'private-proxy-text' not in output
 
 
 def snapshot(root):
@@ -231,6 +283,13 @@ def isolated_env(tmp_path):
                CODEX_HOME=str(tmp_path / 'codex'), PYTHONPATH=str(ROOT / 'src'),
                PYTHONUTF8='1', PYTHONDONTWRITEBYTECODE='1')
     Path(env['HOME']).mkdir(exist_ok=True)
+    # Installer runs real handoff code; replace only its external network boundary.
+    hooks = tmp_path / 'python-hooks'
+    hooks.mkdir(exist_ok=True)
+    (hooks / 'sitecustomize.py').write_text(
+        "from jobagent.infra import tls_support\n"
+        "tls_support.transport_preflight = lambda: {'ok': True, 'account_verified': False, 'checks': []}\n")
+    env['PYTHONPATH'] = str(hooks) + os.pathsep + env['PYTHONPATH']
     return env
 
 

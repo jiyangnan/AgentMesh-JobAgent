@@ -112,6 +112,16 @@ def main() -> None:
     from jobagent.infra.workflow_protocol import with_contract
     handoff = with_contract(installation_handoff())
     if args.installer:
+        from jobagent.infra.tls_support import transport_preflight
+
+        transport = transport_preflight()
+        handoff['transport_preflight'] = transport
+        if not transport['ok']:
+            handoff['agent_instructions'] = (
+                transport['agent_instructions'] + ' Original setup continuation: '
+                + handoff.get('agent_instructions', '')
+            )
+        print(transport.get('user_prompt', 'HTTPS check completed.'))
         print(handoff["user_prompt"])
         print("\nAgent handoff (follow before ending setup):")
     print(json.dumps(handoff, ensure_ascii=False, indent=2))

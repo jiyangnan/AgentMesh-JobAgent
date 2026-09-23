@@ -47,7 +47,7 @@ def _snapshot():
 
 
 def _read_only(argv):
-    return argv[1:3] in (["doctor", "env"], ["resume", "list"], ["resume", "status"],
+    return argv[1:3] in (["doctor", "env"], ["doctor", "tls"], ["resume", "list"], ["resume", "status"],
                          ["round", "status"], ["work", "status"], ["credits", "status"], ["credits", "quote"])
 
 

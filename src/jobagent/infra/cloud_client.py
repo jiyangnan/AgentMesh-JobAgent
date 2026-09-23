@@ -12,6 +12,7 @@ from typing import Any
 
 from jobagent import __version__
 from jobagent.infra.credentials import api_base_url, load_api_key
+from jobagent.infra.tls_support import TLSConfigurationError, failure_details, verified_context
 
 PROTOCOL_VERSION = 1
 _TRANSIENT_HTTP_STATUSES = frozenset({502, 503, 504})
@@ -91,6 +92,9 @@ def _transport_failure(error: BaseException) -> tuple[str, str, bool, str]:
     """Map transport exceptions to stable, non-secret client error contracts."""
 
     normalized = str(error).upper()
+    if isinstance(error, TLSConfigurationError):
+        return ('tls_trust_configuration_failed', 'tls_configuration', False,
+                'The HTTPS trust configuration could not be loaded.')
     if (
         isinstance(error, ssl.SSLCertVerificationError)
         or "CERTIFICATE_VERIFY_FAILED" in normalized
@@ -180,7 +184,7 @@ def _request(
             headers=headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout, context=verified_context()) as response:
                 raw = response.read()
             break
         except urllib.error.HTTPError as exc:
@@ -251,6 +255,7 @@ def _request(
                 retryable=retryable,
                 attempts=attempt,
                 details={
+                    **failure_details(reason),
                     "network_diagnostic": _network_diagnostic(
                         operation=operation,
                         failure_type=failure_type,
@@ -280,6 +285,7 @@ def _request(
                 retryable=retryable,
                 attempts=attempt,
                 details={
+                    **failure_details(exc),
                     "network_diagnostic": _network_diagnostic(
                         operation=operation,
                         failure_type=failure_type,

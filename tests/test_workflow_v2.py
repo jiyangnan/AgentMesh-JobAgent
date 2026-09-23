@@ -136,3 +136,20 @@ def test_new_contract_lists_round_update_and_answer_file():
     assert value["protocol_version"] == 2
     assert value["action_types"] == ["run", "ask", "native_work", "handoff", "wait", "blocked", "done"]
     assert ["jobagent", "round", "update"] in [c["argv_prefix"] for c in value["commands"]]
+
+
+def test_workflow_dispatches_tls_recovery_before_resuming_doctor(isolated, monkeypatch):
+    from jobagent.infra import tls_support
+    monkeypatch.setattr(cli, "_doctor_env", lambda: {"ok": False,
+        "error": "tls_trust_configuration_failed", "next_suggested": "jobagent doctor tls"})
+    action = cli.build_parser().parse_args(flow.next_action()["action"]["argv"][1:])
+    flow.advance(action.action_id, action.expected_revision)
+    recovery = flow.next_action()["action"]
+    assert recovery["business_argv"] == ["jobagent", "doctor", "tls"]
+    calls = []
+    monkeypatch.setattr(tls_support, "transport_preflight", lambda: calls.append(1) or {
+        "ok": True, "event": "tls_ready", "next_suggested": "jobagent doctor env"})
+    action = cli.build_parser().parse_args(recovery["argv"][1:])
+    assert flow.advance(action.action_id, action.expected_revision)["event"] == "tls_ready"
+    assert calls == [1]
+    assert flow.next_action()["action"]["business_argv"] == ["jobagent", "doctor", "env"]

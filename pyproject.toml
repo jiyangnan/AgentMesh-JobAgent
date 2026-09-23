@@ -1,10 +1,11 @@
 [project]
 name = "job-agent"
-version = "0.6.15"
+version = "0.6.16"
 description = "Agent-native job discovery and delivery CLI for AgentMesh 360"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "certifi>=2025.11.12",
   "pyyaml>=6.0",
   "pymupdf>=1.23",
   "python-docx>=1.1",
