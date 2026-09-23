@@ -27,6 +27,8 @@ output (or run `jobagent onboarding`). This read-only command works offline and
 never starts a round, changes account state or charges credits. Do not finish the
 turn with only “installed successfully” or a version check. If PATH is not yet
 refreshed, use the returned `cli_command` argument array for this installation.
+When the installer is used by a CLI-directed repair, preserve and resume the
+original recovery continuation instead of starting a separate setup flow.
 
 - If `onboarding.stage=api_key_required`, show the account-center link and the
   complete `user_prompt`: register/sign in, generate an API Key, then **return to

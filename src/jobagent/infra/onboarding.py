@@ -91,7 +91,9 @@ def installation_handoff() -> dict[str, Any]:
             "Run jobagent doctor env now and relay its current setup or recovery handoff. "
             "Do not stop after installation or infer readiness from credential presence. "
             "An install request authorizes setup checks, not a new round, paid analysis, "
-            "browser actions or delivery. Preserve any existing work and authorization."
+            "browser actions or delivery. Preserve any existing work and authorization. "
+            "If this installer was invoked by a CLI-directed repair, resume that original "
+            "recovery continuation instead of starting a separate setup flow."
         ),
         "next_suggested": "jobagent doctor env",
     }
