@@ -115,33 +115,7 @@ case ":$PATH:" in
         ;;
 esac
 
-cat <<EOF
-
-==========================================
-  Job Agent installed successfully
-==========================================
-
-Next steps:
-
-1. Create an account and API Key at https://agentmesh360.com/app/.
-
-2. Initialize:
-     jobagent init --key <your_api_key>
-
-3. Verify environment:
-     jobagent doctor env
-
-4. Analyze your resume:
-     jobagent resume analyze --file ~/Downloads/your-resume.pdf
-
-5. Start the four-platform round:
-     jobagent round start
-
-6. Follow the current platform:
-     jobagent work next
-   Compatibility commands such as jobagent boss login --check also return native work in Codex.
-
-7. Read the full guide:
-     $INSTALL_DIR/README.md
-
-EOF
+# Always surface the current setup handoff, including on reinstall/update.
+# Use this installation's Python: the shell may not have refreshed PATH yet.
+info "客户端安装完成，正在显示下一步设置指引 / Setup handoff"
+"$INSTALL_DIR/.venv/bin/python" -m jobagent.infra.onboarding --installer

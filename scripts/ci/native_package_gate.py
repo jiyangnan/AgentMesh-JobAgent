@@ -114,8 +114,8 @@ def isolated_env(directory: Path, inherited: dict[str, str] | None = None) -> di
     return env
 
 
-# Installed smoke commands are intentionally restricted to help, contract and
-# package Skill installation. Audit hooks also reject accidental network/process
+# Installed smoke commands are intentionally restricted to help, onboarding,
+# contract and package Skill installation. Audit hooks reject network/process
 # regressions even if an application catches the resulting exception.
 GUARDED_MODULE = r"""
 import runpy, sys
@@ -166,6 +166,13 @@ def smoke_wheel(wheel: Path, expected: dict) -> None:
             return _run([str(python), "-I", "-X", "utf8", "-c", GUARDED_MODULE, name, *args], cwd=directory, env=env, expected_code=expected_code)
 
         require(expected["client_version"] in module("jobagent", "--version"), "installed CLI version mismatch")
+        for name, args in (("jobagent", ("onboarding",)), ("jobagent.infra.onboarding", ())):
+            handoff = json.loads(module(name, *args))
+            require(handoff.get("event") == "onboarding_handoff", "installed setup handoff missing")
+            require(handoff.get("onboarding", {}).get("stage") == "api_key_required", "fresh install skipped Key setup")
+            require(handoff.get("requires_user_action") is True, "fresh setup did not stop for a real Key")
+            require("https://agentmesh360.com/app/" in handoff.get("user_prompt", ""), "account-center link missing")
+            require("回到当前这段 Agent 对话" in handoff.get("user_prompt", ""), "return-to-Agent handoff missing")
         module("jobagent", "zhilian", "--help")
         help_text = module("jobagent", "work", "--help")
         require(all(command in help_text for command in ("next", "begin", "submit", "status", "contract")), "native work commands missing from installed CLI")

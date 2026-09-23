@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"jobagent {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("onboarding", help="Show the next setup step without network access or state changes")
+
     init = sub.add_parser("init", help="Configure an AgentMesh API Key")
     init.add_argument("--key", required=True)
     init.add_argument("--no-verify", action="store_true")
@@ -306,14 +308,19 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
             return payload
         _record_initialized_safely(args.key.strip())
         mark_workbench_launch_announced()
-    access = payload.get("cloud_access") or {}
-    payload["next_suggested"] = (
-        "jobagent resume analyze --file <resume>"
-        if access.get("usable")
-        else "https://agentmesh360.com/app/?lang=zh-CN#pricing"
-        if access.get("paid_pass_required")
-        else "jobagent doctor env"
+    payload["onboarding"] = {"stage": "environment_check_required"}
+    payload["requires_user_action"] = False
+    payload["message"] = (
+        "API Key 已保存。接下来由 Agent 运行 jobagent doctor env，检查环境和账户后继续设置。"
+        "如果你在终端自行配置，请回到原来的 Agent 对话回复："
+        "“我已配置 API Key，请继续 Job Agent 设置。”"
     )
+    payload["agent_instructions"] = (
+        "Run jobagent doctor env immediately; saving a Key is not the end of setup. "
+        "Show its user_prompt and exact continuation. Do not repeat init or ask for "
+        "the Key again when verification is temporarily unavailable."
+    )
+    payload["next_suggested"] = "jobagent doctor env"
     return payload
 
 
@@ -424,8 +431,11 @@ def _verify_state_owner_for_command(args: argparse.Namespace) -> dict[str, Any] 
 
     api_key = load_api_key()
     if not api_key:
+        from jobagent.infra.onboarding import key_handoff
+
         raise AccountStateError(
             {
+                **key_handoff(),
                 "ok": False,
                 "error": "api_key_required",
                 "message": "Configure an AgentMesh API key before reading or changing account-bound state.",
@@ -472,18 +482,21 @@ def _doctor_env() -> dict[str, Any]:
     except Exception as exc:
         cloud = {"ok": False, "error": str(exc)}
     key_valid = False
+    key_rejected = False
     key_error: str | None = None
     account_response: dict[str, Any] | None = None
     if key_present:
         key = str(load_api_key() or "")
         if key.startswith("jba_live_"):
             key_error = "retired_license_key"
+            key_rejected = True
         elif cloud.get("status") == "ok":
             try:
                 account_response = cloud_client.me()
                 key_valid = True
             except cloud_client.CloudError as exc:
                 key_error = exc.code or "api_key_verification_failed"
+                key_rejected = exc.status == 401 or exc.code == "invalid_api_key"
     python_available = bool(shutil.which("python3"))
     chrome_available = bool(
         Path("/Applications/Google Chrome.app").exists()
@@ -522,7 +535,7 @@ def _doctor_env() -> dict[str, Any]:
         if account_response is not None
         else {
             "usable": False,
-            "reason": key_error or "api_key_required",
+            "reason": key_error or ("account_verification_pending" if key_present else "api_key_required"),
             "credit": None,
             "source": "none",
             "expires_at": None,
@@ -540,19 +553,21 @@ def _doctor_env() -> dict[str, Any]:
         blocked_by.append(str(local_state.get("error") or local_state.get("status")))
     if not access.get("usable"):
         blocked_by.append(str(access.get("reason") or "cloud_access"))
-    if not key_present or not key_valid:
+    if not key_present or key_rejected:
         next_suggested = "jobagent init --key <your_api_key>"
-    elif not cloud_healthy:
+    elif not cloud_healthy or not key_valid:
         next_suggested = "jobagent doctor env"
     elif not local_state.get("ready"):
         next_suggested = str(local_state.get("next_suggested") or "jobagent account status")
-    elif not access.get("usable"):
+    elif access.get("paid_pass_required"):
         next_suggested = "https://agentmesh360.com/app/?lang=zh-CN#pricing"
+    elif not access.get("usable"):
+        next_suggested = "jobagent doctor env"
     elif not profile_exists:
         next_suggested = "jobagent resume analyze --file <resume>"
     else:
         next_suggested = str((workflow or {}).get("next_suggested") or "jobagent round start")
-    return {
+    payload = {
         "ok": environment_healthy,
         "environment_healthy": environment_healthy,
         "browser_executor": "codex_native",
@@ -565,7 +580,7 @@ def _doctor_env() -> dict[str, Any]:
         "api_key_action": (
             None
             if key_valid
-            else "jobagent init --key <your_api_key>"
+            else next_suggested
         ),
         "account": account_response.get("account") if account_response else None,
         "local_state": local_state,
@@ -580,6 +595,49 @@ def _doctor_env() -> dict[str, Any]:
         "next_suggested": next_suggested,
         "cloud": cloud,
     }
+    from jobagent.infra.onboarding import WORKBENCH_URL, key_handoff
+
+    if not key_present or key_rejected:
+        handoff = key_handoff()
+        if key_present:
+            handoff["user_prompt"] = (
+                "当前 API Key 未通过验证，请在账户中心确认或生成可用的 Key。\n"
+                + handoff["user_prompt"]
+            )
+        payload.update(handoff)
+    elif not key_valid:
+        payload["onboarding"] = {"stage": "account_verification_pending"}
+        payload["message"] = (
+            "API Key 配置已保留，当前暂未完成账户验证。请按返回的诊断恢复后继续检查，"
+            "无需重新申请 Key。"
+        )
+    elif environment_healthy and local_state.get("ready") and access.get("paid_pass_required"):
+        payload["onboarding"] = {"stage": "credits_required", "workbench_url": WORKBENCH_URL}
+        payload["requires_user_action"] = True
+        payload["user_prompt"] = (
+            "账户已连接，当前可用额度不足。请打开 "
+            "https://agentmesh360.com/app/?lang=zh-CN#pricing 查看通行证。"
+            "完成后回到当前 Agent 对话回复“额度已准备好，请继续”；"
+            "Agent 会重新运行 jobagent doctor env 检查到账情况，再继续设置。"
+        )
+    elif environment_healthy and local_state.get("ready") and not access.get("usable"):
+        payload["onboarding"] = {"stage": "credit_status_pending"}
+        payload["message"] = (
+            "账户已连接，但暂时无法确认可用额度。当前结果不代表额度不足；"
+            "恢复后运行 jobagent doctor env 继续检查。"
+        )
+    elif environment_healthy and local_state.get("ready") and access.get("usable") and not profile_exists:
+        payload["onboarding"] = {"stage": "resume_required", "workbench_url": WORKBENCH_URL}
+        payload["requires_user_action"] = True
+        payload["user_prompt"] = (
+            f"账户和环境检查通过。你的求职工作台：{WORKBENCH_URL}，"
+            "可管理简历画像、练习面试和跟踪求职进展。"
+            "下一步请提供简历文件及你确认的目标城市，Agent 会继续引导简历分析；"
+            "也可以在工作台准备并确认简历画像，完成后回到当前对话回复"
+            "“简历已准备好，请继续”，Agent 会通过 jobagent resume list 检查已有在线简历。"
+            "请勿重复分析已准备好的简历；新的云端简历分析需 5 credits。"
+        )
+    return payload
 
 
 def _resume_center_overview() -> dict[str, Any]:
@@ -1893,6 +1951,13 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "onboarding":
+        # Installation handoff must work offline and with active/legacy state.
+        # Do not acquire a business lock, refresh a Skill or trigger migrations.
+        from jobagent.infra.onboarding import installation_handoff
+
+        _print(installation_handoff())
+        return
     account_verification: dict[str, Any] | None = None
     try:
         from jobagent.infra.native_command_lock import command_lock

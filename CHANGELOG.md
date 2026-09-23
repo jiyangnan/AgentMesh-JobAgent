@@ -2,6 +2,15 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.15] - 2026-09-23
+
+### Fixed
+
+- Both official installers now finish with a clear account-setup handoff: where to create an API Key, how to return to the same Agent conversation, and what happens next. Reinstalling with existing credentials continues to environment and account checks instead of asking for another Key.
+- Add the offline, read-only `jobagent onboarding` command to repeat the current setup instructions without changing account state, opening a browser or consuming credits.
+- Successful API Key initialization now consistently continues to `jobagent doctor env`. Resume and credit prompts explain how to return from the web workbench; temporary verification or unknown-balance errors no longer suggest replacing the Key or purchasing a pass.
+- Align the README, agent onboarding guide and all distributed Skills on the installation-to-account handoff. Installer-based repairs retain their original recovery continuation. Existing rounds, credentials, resume profiles, authorizations and audits are preserved; no state migration is introduced.
+
 ## [0.6.14] - 2026-09-22
 
 - Support native hosts that expose an application reference without a persistent window handle. App-scoped tasks require fresh window-selection, profile and account evidence before each action; titles are observations, not fixed identifiers.

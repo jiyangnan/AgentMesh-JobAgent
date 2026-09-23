@@ -126,30 +126,8 @@ if ($userPath -notlike "*$BinDir*") {
 }
 
 Write-Host ""
-Write-Host "=========================================="
-Write-Host "  Job Agent installed successfully"
-Write-Host "=========================================="
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host ""
-Write-Host "1. Create an account and API Key at https://agentmesh360.com/app/."
-Write-Host ""
-Write-Host "2. Open a NEW PowerShell window (so PATH refreshes), then:"
-Write-Host "     jobagent init --key <your_api_key>"
-Write-Host ""
-Write-Host "3. Verify environment:"
-Write-Host "     jobagent doctor env"
-Write-Host ""
-Write-Host "4. Analyze your resume:"
-Write-Host '     jobagent resume analyze --file "$env:USERPROFILE\Downloads\your-resume.pdf"'
-Write-Host ""
-Write-Host "5. Start the four-platform round:"
-Write-Host "     jobagent round start"
-Write-Host ""
-Write-Host "6. Follow the current platform:"
-Write-Host "     jobagent work next"
-Write-Host "   Compatibility commands such as jobagent boss login --check also return native work in Codex."
-Write-Host ""
-Write-Host "7. Read the full guide:"
-Write-Host "     $InstallDir\README.md"
-Write-Host ""
+# Always surface the current setup handoff, including on reinstall/update.
+# Use the venv directly; a newly installed shim may not be on this shell's PATH.
+Info "客户端安装完成，正在显示下一步设置指引 / Setup handoff"
+& $venvPy -m jobagent.infra.onboarding --installer
+if ($LASTEXITCODE -ne 0) { Die "Client installed, but setup guidance failed. Run jobagent onboarding to continue." }
