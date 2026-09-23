@@ -17,6 +17,25 @@ def apply_answer_file(args):
         raise ValueError("Interaction answer contains unsupported fields")
     if any(getattr(args, dest, None) for dest in fields.values()):
         raise ValueError("Use either an answer file or explicit answer flags")
+    from jobagent.infra.interaction_state import load_pending_interaction
+    pending = load_pending_interaction() or {}
+    if pending.get("interaction_id") == args.interaction_id:
+        card = pending.get("interaction") or {}
+        kind = card.get("kind") or pending.get("kind")
+        field_ids = {field.get("field_id") for field in card.get("fields", [])}
+        allowed = set()
+        if kind == "resume_selection":
+            allowed.add("resume_id")
+        else:
+            allowed.update(field_ids & {"target_roles", "target_cities", "exclude_indices"})
+            if any(field.get("options") for field in card.get("fields", [])):
+                allowed.add("choice")
+        if kind in {"delivery_confirmation", "delivery_exclusions"}:
+            allowed.update({"choice", "exclude_indices"})
+            if "exclude_indices" in answer and answer.get("choice", pending.get("choice")) != "exclude_jobs":
+                raise ValueError("Job exclusions require the exclude_jobs choice")
+        if set(answer) - allowed:
+            raise ValueError("Answer fields are not allowed by the current interaction")
     from jobagent.cli import build_parser
     argv = ["interaction", "respond", "--interaction-id", args.interaction_id]
     for key, value in answer.items():

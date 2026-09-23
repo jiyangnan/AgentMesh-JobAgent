@@ -138,6 +138,19 @@ def test_new_contract_lists_round_update_and_answer_file():
     assert ["jobagent", "round", "update"] in [c["argv_prefix"] for c in value["commands"]]
 
 
+def test_answer_file_does_not_silently_ignore_fields_from_another_card(isolated):
+    from jobagent.application.interaction_answer import apply_answer_file
+    state.save_json(state.pending_interaction_path(), {"interaction_id": "delivery-card",
+        "kind": "delivery_confirmation", "interaction": {"kind": "delivery_confirmation", "fields": []}})
+    file = isolated / "answer.json"
+    for answer in ({"choice": "confirm_all", "target_roles": ["工程师"]},
+                   {"choice": "confirm_all", "exclude_indices": [1]}):
+        file.write_text(json.dumps(answer))
+        args = cli.build_parser().parse_args(["interaction", "respond", "--interaction-id", "delivery-card", "--answer-file", str(file)])
+        with pytest.raises(ValueError):
+            apply_answer_file(args)
+
+
 def test_workflow_dispatches_tls_recovery_before_resuming_doctor(isolated, monkeypatch):
     from jobagent.infra import tls_support
     monkeypatch.setattr(cli, "_doctor_env", lambda: {"ok": False,
