@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.16] - 2026-09-24
+
+- Supply public root certificates for cloud and update connections automatically, preserving system trust and explicit custom CA settings.
+- Check unauthenticated HTTPS after installation and expose a read-only `jobagent doctor tls` handoff with specific, redacted certificate diagnostics and bounded dependency repair.
+- Preserve current tasks and account state; invalid certificates stay blocked without disabling verification or replaying requests.
+
 ## [0.6.15] - 2026-09-23
 
 ### Fixed

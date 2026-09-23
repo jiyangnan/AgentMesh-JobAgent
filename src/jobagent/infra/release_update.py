@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from typing import Any, Callable
 
 from jobagent import __version__
 from jobagent.infra.cloud_client import PROTOCOL_VERSION
+from jobagent.infra.tls_support import verified_context
 from jobagent.infra.protocol import RELEASE_SIGNING_PUBLIC_KEY, ProtocolError, verify_signed_payload
 from jobagent.infra.state import (
     load_json,
@@ -103,9 +105,9 @@ def fetch_release_manifest(*, force: bool = False) -> dict[str, Any] | None:
         headers={"Accept": "application/json", "User-Agent": f"jobagent/{__version__}"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=10, context=verified_context()) as response:
             manifest = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    except (urllib.error.URLError, ssl.SSLError, TimeoutError, json.JSONDecodeError):
         return cached_manifest
     if not isinstance(manifest, dict):
         return cached_manifest

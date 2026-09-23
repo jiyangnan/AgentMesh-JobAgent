@@ -32,6 +32,8 @@ Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creat
 
 ## Install
 
+The installer checks HTTPS connectivity using the installed Python and bundled public roots. If a certificate or network check remains blocked, the Agent follows `jobagent doctor tls` while preserving your existing task. Certificate verification and custom trust settings remain enforced.
+
 ### Codex native Computer Use
 
 The default Codex workflow uses native Computer Use in the user's existing
