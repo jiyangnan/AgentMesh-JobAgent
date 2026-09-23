@@ -758,3 +758,12 @@ def test_city_answer_preserves_known_role_without_editing_bound_resume(monkeypat
     assert _current_round()['intent']['target_cities'] == ['武汉']
     assert _current_round()['intent']['profile_digest'] == digest_payload(profile)
     assert not state.profile_path().exists()
+
+
+def test_invalid_preserved_round_input_requires_correction_not_retry_loop():
+    from jobagent.infra.workflow_protocol import with_contract
+    result = _dispatch(_args('round start --no-resume-binding --target-role A --target-role B --target-role C --target-role D --target-role E'))
+    assert result['error'] == 'invalid_round_intent'
+    assert result['request_preserved'] is True
+    assert with_contract(result)['agent_action']['type'] == 'wait_user'
+    assert _current_round() is None

@@ -1871,7 +1871,10 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     "ok": False,
                     "error": "invalid_round_intent",
                     "message": str(exc),
-                    "next_suggested": "jobagent round start",
+                    "requires_user_action": True,
+                    "user_prompt": str(exc),
+                    "request_preserved": True,
+                    "next_suggested": "jobagent round start --target-role <role> --target-city <city>",
                 }
             created = start_new_round(intent, resume_binding=round_binding)
             clear_pending_interaction()
