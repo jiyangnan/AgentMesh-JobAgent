@@ -2,6 +2,15 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.17] - 2026-09-24
+
+- Add a standard CLI workflow for setup, account and credit checks, resume selection, platform interactions and round completion. Agents follow explicit commands, user questions and native browser permissions, with persisted progress after interruptions.
+- Check platform resume synchronization before search. Cancelling a delivery list now asks whether to search again or skip that platform. City, salary and company filters can change within a round; changing the bound resume direction still requires a matching resume.
+- Preserve complete previews, exclusions and separate authorization for every platform. Liepin opens the conversation before resume submission, asks explicitly which existing attachment to use, and records resume submission separately from the personalized greeting.
+- Add a narrow continuation for older Liepin tasks that verifiably attempted no action before a missing conversation prerequisite. Unknown or attempted sends remain restricted to reconciliation.
+- Surface read-only collection recovery consistently after observation exhaustion, preserve tasks after TLS repair, and tolerate slower healthy HTTPS diagnostics. Skill installation continues to onboarding; valid workbench bindings no longer require an unrelated local profile.
+- Preserve accounts, credentials, existing rounds and completed receipts. Workflow protocol 2 is additive; existing command aliases remain available. Updated workflow features require a compatible service.
+
 ## [0.6.16] - 2026-09-24
 
 - Supply public root certificates for cloud and update connections automatically, preserving system trust and explicit custom CA settings.
