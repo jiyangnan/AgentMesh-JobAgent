@@ -4,6 +4,7 @@ All notable public Job Agent client changes are documented here.
 
 ## [0.6.17] - 2026-09-24
 
+- Preserve literal tildes in Boss job identifiers during native collection and delivery, including continuation of pending collection receipts after upgrade.
 - Add a standard CLI workflow for setup, account and credit checks, resume selection, platform interactions and round completion. Agents follow explicit commands, user questions and native browser permissions, with persisted progress after interruptions.
 - Check platform resume synchronization before search. Cancelling a delivery list now asks whether to search again or skip that platform. City, salary and company filters can change within a round; changing the bound resume direction still requires a matching resume.
 - Preserve complete previews, exclusions and separate authorization for every platform. Liepin opens the conversation before resume submission, asks explicitly which existing attachment to use, and records resume submission separately from the personalized greeting.

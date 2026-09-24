@@ -67,13 +67,19 @@ def _official_url(url: Any, hosts: set[str], *, platform: str) -> Any:
     return parsed
 
 
+def candidate_id_pattern(platform: str) -> str:
+    # Boss opaque detail identifiers may contain a literal URL-safe tilde.
+    # Keep it intact: dropping it would identify a different signed job.
+    return r"[A-Za-z0-9_~-]{1,160}" if platform == "boss" else r"[A-Za-z0-9_-]{1,160}"
+
+
 def validate_job_url(platform: str, url: str, job_id: str) -> str:
     """Validate an observed exact job route; never manufacture a search URL/ID.
 
     Returns the observed route with irrelevant tracking query/fragment removed.
     IDs may be opaque strings; a route must still contain that exact identifier.
     """
-    if platform not in _ENTRY_URLS or not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", job_id):
+    if platform not in _ENTRY_URLS or not isinstance(job_id, str) or not re.fullmatch(candidate_id_pattern(platform), job_id):
         _fail("native_candidate_id_invalid", "Candidate needs an exact platform job ID", platform=platform)
     hosts = {
         "boss": {"www.zhipin.com"}, "liepin": {"www.liepin.com"},
@@ -437,7 +443,7 @@ def _task(plan: dict, progress: dict, index: int, page: int) -> dict:
                             for field in candidate_fields if field != "skills"}
     candidate_properties["skills"] = {"type": "array", "maxItems": 100,
         "items": {"type": "string", "maxLength": 200}}
-    candidate_properties["id"].update(pattern="^[A-Za-z0-9_-]{1,160}$")
+    candidate_properties["id"].update(pattern=f"^{candidate_id_pattern(plan['platform'])}$")
     for field in ("id", "title", "company", "area", "url"):
         candidate_properties[field]["minLength"] = 1
     return {"query": query["keyword"], "city": query["city"], "query_index": index,

@@ -182,6 +182,10 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     # The ledger specification, nonce and observation budget remain immutable.
     if work["action"] == "bind_session":
         task.update(native_window.binding_task())
+    elif work["action"] == "collect_search_page":
+        from jobagent.application.native_discovery import candidate_id_pattern
+        task.setdefault("result_schema", {}).setdefault("candidate_properties", {}).setdefault("id", {}).update(
+            pattern=f"^{candidate_id_pattern(work['binding']['platform'])}$")
     elif work["action"] == "recover_session":
         task["instruction"] = task.get("instruction", "").replace(
             "Use an actual stable native window ID or host window handle, never a page/window title.",
