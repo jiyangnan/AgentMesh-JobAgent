@@ -692,3 +692,29 @@ def test_51job_terminal_unresolved_completes_send_with_cumulative_evidence(
         "reviewed_count": 9,
     }
     assert cleared == [True]
+
+
+@pytest.mark.parametrize('platform', ['boss', 'liepin'])
+def test_greeting_changes_have_new_confirmation_ids_and_show_exact_text(platform):
+    from jobagent.infra.delivery_preview import _preview_id
+    jobs = [{'id': 'j1', 'title': '数据产品经理', 'company': '示例', 'cloud_greeting': '您好，我有8年AI产品设计经验。'}]
+    def build(values):
+        return build_delivery_preview(platform=platform, discover_id='dis-one', send_candidates=values,
+            send_command='unused', selected_count=1, promoted_count=0, review_count=0, rejected_count=0, skipped_delivered_count=0)
+    first = build(jobs)
+    assert first['items'][0]['greeting'] == jobs[0]['cloud_greeting']
+    assert jobs[0]['cloud_greeting'] in first['fallback_text']
+    changed = [{**jobs[0], 'cloud_greeting': '您好，我有6年数据治理经验。'}]
+    second = build(changed)
+    assert first['preview_id'] != second['preview_id']
+    assert first['interaction']['interaction_id'] != second['interaction']['interaction_id']
+    with pytest.raises(ValueError):
+        validate_delivery_preview(first, send_candidates=changed, expected_platform=platform, expected_discover_id='dis-one')
+    # Persisted legacy previews remain readable; existing authorization still
+    # binds the complete send_candidates digest and never becomes a new permit.
+    import copy
+    legacy = copy.deepcopy(first); legacy.pop('content_bound')
+    for item in legacy['items']: item.pop('greeting')
+    legacy['preview_id'] = _preview_id(platform, 'dis-one', legacy['items'])
+    legacy['interaction']['interaction_id'] = 'delivery:'+legacy['preview_id']
+    assert validate_delivery_preview(legacy, send_candidates=jobs, expected_platform=platform, expected_discover_id='dis-one') == legacy

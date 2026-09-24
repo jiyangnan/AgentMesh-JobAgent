@@ -645,3 +645,10 @@ def discovery_repair(
         operation="discovery_repair",
         request_id=discover_id,
     )
+
+
+def discovery_greetings_refresh(*, discover_id: str, expected_manifest_id: str, expected_candidate_digest: str) -> dict[str, Any]:
+    return _request("POST", f"/v1/discovery/{discover_id}/greetings/refresh",
+        {"client_version": __version__, "protocol_version": PROTOCOL_VERSION,
+         "expected_manifest_id": expected_manifest_id, "expected_candidate_digest": expected_candidate_digest},
+        timeout=600, max_attempts=3, operation="discovery_greetings_refresh", request_id=discover_id)

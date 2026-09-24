@@ -25,6 +25,8 @@ Each platform is isolated from the others. A page change on one platform does no
 Hosts enter the standard loop with `jobagent workflow contract` and
 `jobagent workflow next`. New user intent goes through `workflow submit`; the
 CLI returns one exact command, interaction, handoff or native task at a time.
+Boss/Liepin greetings use cloud-selected resume evidence for each job. Before authorizing a list, you can ask the agent to refresh its greetings with the existing preview/review command plus `--refresh-greetings`, without a new search or extra credits. The new complete preview needs your confirmation.
+
 See the [host workflow contract](docs/workflow-host-loop.md). City, salary and
 company filters can change within a round; changing a bound resume's direction
 requires an explicit old-round finish and a matching resume.

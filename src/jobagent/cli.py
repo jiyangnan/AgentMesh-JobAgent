@@ -34,6 +34,7 @@ def _add_discover(parser: argparse.ArgumentParser) -> None:
 def _add_review(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", "-i", help="Signed decision file; defaults to latest")
     parser.add_argument("--promote", nargs="*", default=[], metavar="JOB_ID")
+    parser.add_argument("--refresh-greetings", action="store_true", help="Refresh cloud greetings on an unapproved Boss/Liepin list without a new search or charge")
     parser.add_argument("--confirm-promote", action="store_true")
     parser.add_argument("--output", "-o", help="Reviewed decision output path")
 
@@ -1675,6 +1676,10 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
     subcommand = getattr(args, "greet_command", None) or getattr(args, "apply_command", None)
     if subcommand in {"preview", "review"}:
         rounds.assert_platform_turn(platform)
+        if getattr(args, "refresh_greetings", False):
+            from jobagent.application.greeting_refresh import refresh
+            return refresh(platform, input_path=args.input, promoted_ids=args.promote,
+                confirm_promote=args.confirm_promote, output_path=args.output)
         from jobagent.application.native_repair import prepare_review
         response = prepare_review(platform, input_path=args.input, promoted_ids=args.promote,
             confirm_promote=args.confirm_promote, output_path=args.output)

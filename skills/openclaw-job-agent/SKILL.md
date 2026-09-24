@@ -146,6 +146,16 @@ complete preview -> separate platform confirmation -> send -> audit.
   fresh confirmation. Unknown company facts are never assumed to match; missing
   city coverage does not mean the new city has no jobs.
 
+- If the user requests better Boss/Liepin greetings on a never-authorized list,
+  run the current preview/review command with `--refresh-greetings`. The cloud
+  uses the saved resume and candidates; no new search or extra credits are used.
+  Show every preview row including its exact greeting; the preview ID binds the
+  displayed greeting. Preserve the signed text verbatim. The complete regenerated
+  preview requires
+  fresh confirmation; never reuse the old card or authorization. Authorized,
+  cancelled or already attempted lists cannot use this command, including
+  unresolved sends. Surface the CLI error without resetting the round.
+
 Skills guide the host. They cannot intercept tools invoked outside this protocol.
 Product-side account, signature, scope, ordering, preview and BrowserWork checks
 remain authoritative. Unsupported protocol/capability errors must be surfaced;

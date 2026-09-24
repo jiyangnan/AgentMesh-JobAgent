@@ -58,6 +58,16 @@ observation, renewed budget or recovery task. Never infer recovery eligibility
 from `reconcile_only` and the attempt count alone; read the actual action,
 side-effect flag and current recovery contract.
 
+Boss personalized delivery uses the official message center at
+`https://www.zhipin.com/web/geek/chat`. After opening communication once, follow
+the CLI's read-only conversation inspection before a new greeting permission.
+Select the existing conversation and verify the same account, recruiter, company
+and approved job; a job-detail popup is insufficient. Send only the exact signed
+text once from that verified message center. A pending/sending bubble is not a
+receipt: inspect persistent history read-only, then report uncertain/unresolved
+if delivery cannot be verified. Never resend a terminal unresolved job. Existing
+issued work keeps its original contract and cannot gain a new send permission.
+
 Liepin delivery opens the approved conversation before submitting a resume.
 Follow the CLI's subsequent read-only conversation inspection: a platform default
 greeting and an actual resume receipt are separate facts. Never submit a resume
@@ -114,6 +124,16 @@ complete preview -> separate platform confirmation -> send -> audit.
   clears salary/company filters. Show the regenerated full preview and obtain
   fresh confirmation. Unknown company facts are never assumed to match; missing
   city coverage does not mean the new city has no jobs.
+
+- If the user requests better Boss/Liepin greetings on a never-authorized list,
+  run the current preview/review command with `--refresh-greetings`. The cloud
+  uses the saved resume and candidates; no new search or extra credits are used.
+  Show every preview row including its exact greeting; the preview ID binds the
+  displayed greeting. Preserve the signed text verbatim. The complete regenerated
+  preview requires
+  fresh confirmation; never reuse the old card or authorization. Authorized,
+  cancelled or already attempted lists cannot use this command, including
+  unresolved sends. Surface the CLI error without resetting the round.
 
 Skills guide the host. They cannot intercept tools invoked outside this protocol.
 Product-side account, signature, scope, ordering, preview and BrowserWork checks

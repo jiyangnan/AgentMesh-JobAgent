@@ -4,6 +4,8 @@ All notable public Job Agent client changes are documented here.
 
 ## [0.6.17] - 2026-09-24
 
+- Add cloud greeting refresh for unapproved Boss/Liepin lists, preserving the original search, explicit choices and signed history with no additional credits. Changed greetings require a new complete preview and confirmation; attempted or unresolved delivery cannot be reopened.
+
 - Require a read-only Boss message-center preflight before new personalized greetings and verify receipts there. Reconciliation tasks explicitly prohibit another send; existing issued and terminal work stays preserved.
 - Preserve literal tildes in Boss job identifiers during native collection and delivery, including continuation of pending collection receipts after upgrade.
 - Add a standard CLI workflow for setup, account and credit checks, resume selection, platform interactions and round completion. Agents follow explicit commands, user questions and native browser permissions, with persisted progress after interruptions.
