@@ -159,6 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_respond = interaction_sub.add_parser("respond")
     interaction_respond.add_argument("--interaction-id", required=True)
     interaction_respond.add_argument("--answer-file", help="JSON containing only the user's explicit answer fields")
+    interaction_respond.add_argument("--attachment-id", help="Exact option ID from the platform resume attachment card")
     interaction_respond.add_argument(
         "--choice",
         choices=[
@@ -947,6 +948,15 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     interaction_id = str(args.interaction_id or "").strip()
+    from jobagent.application.native_resume_choice import respond as respond_attachment
+    if getattr(args, "attachment_id", None) and any(getattr(args, field, None) for field in
+            ("choice", "resume_id", "target_role", "target_city", "exclude_index")):
+        return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current attachment card."}
+    attachment = respond_attachment(interaction_id, str(getattr(args, "attachment_id", None) or ""))
+    if attachment is not None:
+        return attachment
+    if getattr(args, "attachment_id", None):
+        return {"ok": False, "error": "interaction_not_pending"}
     from jobagent.application.round_direction import respond as respond_direction
     direction = respond_direction(interaction_id, str(args.choice or ""))
     if direction is not None:

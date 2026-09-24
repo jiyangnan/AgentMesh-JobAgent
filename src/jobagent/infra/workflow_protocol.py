@@ -52,7 +52,7 @@ def contract(parser: argparse.ArgumentParser) -> dict:
                         "fortune_global_500": "boolean", "fortune_year": "integer 2000–2100, required with fortune_global_500", "unknown_evidence": ["exclude", "show_for_review"]}}},
             "round_update": {"required": ["request_id", "patch"], "patch": "criteria fields; omissions preserve current values; clear accepts salary/company; role changes require explicit old-round finish",
                 "revision": "criteria_revision from round status; zero before the first update"},
-            "interaction_answer": {"fields": ["choice", "resume_id", "target_roles", "target_cities", "exclude_indices"],
+            "interaction_answer": {"fields": ["choice", "resume_id", "attachment_id", "target_roles", "target_cities", "exclude_indices"],
                 "rules": "Only the current interaction's answer fields; no mixed answer-file and answer flags"},
         },
         "rules": {
@@ -105,6 +105,7 @@ def with_contract(payload: Any) -> Any:
             action["response_arguments"] = {
                 "command": ["jobagent", "interaction", "respond", "--interaction-id", interaction.get("interaction_id")],
                 "answer_flag": "--resume-id" if kind == "resume_selection" else (
+                    "--attachment-id" if kind == "platform_resume_choice" else
                     "--target-city" if kind == "target_city_input" else
                     "--exclude-index" if kind == "delivery_exclusions" else
                     "--target-role" if kind == "target_role_input" else "--choice"),

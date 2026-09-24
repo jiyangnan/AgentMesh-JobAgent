@@ -146,7 +146,7 @@ def test_recovered_job_completes_without_duplicate_actions(env, automatic_resume
         if work["task"].get("inspection_phase") == "after_communication" and automatic_resume:
             r["evidence"].update(resume_state="sent", receipt_kind="resume_card")
         response = submit(env, work, r)
-    assert actions == ["open_communication", "inspect_delivery", *([] if automatic_resume else ["submit_resume"]), "send_greeting"]
+    assert actions == ["open_communication", "inspect_delivery", *([] if automatic_resume else ["prepare_resume", "submit_resume"]), "send_greeting"]
     assert response["completion_state"] == "completed"
     assert response["summary"]["resume_submitted"] == 1
     assert response["summary"]["greeting_sent"] == 1

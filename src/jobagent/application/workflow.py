@@ -107,6 +107,10 @@ def _source(value):
     direction = direction_pending()
     if direction:
         return direction
+    from jobagent.application.native_resume_choice import pending as resume_choice_pending
+    pending = resume_choice_pending(recover_answered=True)
+    if pending:
+        return pending
     pending = after_cancel()
     if pending:
         return pending

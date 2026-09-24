@@ -73,6 +73,12 @@ def observation(work, **changes):
         result["evidence"]["communication_state"] = "open"
     if work["action"] == "submit_resume":
         result["evidence"].update(resume_state="sent", receipt_kind="application_history")
+        if "submission_mode" in work["task"]:
+            result["evidence"].update(submission_mode=work["task"]["submission_mode"],
+                attachment_reference=work["task"]["attachment_reference"], attachment_selection_verified=True)
+    elif work["action"] == "prepare_resume":
+        result["evidence"].update(communication_state="open", submission_attempted=False,
+            dialog_cancellable=True, options_complete=True, submission_mode="online_only", attachment_options=[])
     elif work["action"] == "open_communication":
         result["evidence"].update(communication_state="open", default_greeting_observed=True)
     elif work["action"] == "send_greeting":
@@ -90,7 +96,7 @@ def submit(env, work, result=None):
 
 @pytest.mark.parametrize("platform,actions", [
     ("boss", ["inspect_delivery", "open_communication", "send_greeting"]),
-    ("liepin", ["inspect_delivery", "open_communication", "inspect_delivery", "submit_resume", "send_greeting"]),
+    ("liepin", ["inspect_delivery", "open_communication", "inspect_delivery", "prepare_resume", "submit_resume", "send_greeting"]),
     ("zhilian", ["inspect_delivery", "submit_resume"]),
     ("51job", ["inspect_delivery", "submit_resume"]),
 ])

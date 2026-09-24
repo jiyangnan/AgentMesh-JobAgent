@@ -29,6 +29,10 @@ See the [host workflow contract](docs/workflow-host-loop.md). City, salary and
 company filters can change within a round; changing a bound resume's direction
 requires an explicit old-round finish and a matching resume.
 
+When Liepin asks for an attachment, the CLI presents the actual available
+resumes for your explicit choice before the final submission. A platform's
+default attachment is never selected on your behalf; pausing preserves progress.
+
 ```text
 Resume profile
   -> Boss Discover / signed review / delivery preview / user confirmation / delivery / audit

@@ -11,7 +11,7 @@ def apply_answer_file(args):
         answer = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, UnicodeError) as exc:
         raise ValueError("Interaction answer must be valid UTF-8 JSON") from exc
-    fields = {"choice": "choice", "resume_id": "resume_id", "target_roles": "target_role",
+    fields = {"choice": "choice", "resume_id": "resume_id", "attachment_id": "attachment_id", "target_roles": "target_role",
               "target_cities": "target_city", "exclude_indices": "exclude_index"}
     if not isinstance(answer, dict) or not answer or set(answer) - set(fields):
         raise ValueError("Interaction answer contains unsupported fields")
@@ -26,6 +26,8 @@ def apply_answer_file(args):
         allowed = set()
         if kind == "resume_selection":
             allowed.add("resume_id")
+        elif kind == "platform_resume_choice":
+            allowed.add("attachment_id")
         else:
             allowed.update(field_ids & {"target_roles", "target_cities", "exclude_indices"})
             if any(field.get("options") for field in card.get("fields", [])):
@@ -39,7 +41,7 @@ def apply_answer_file(args):
     from jobagent.cli import build_parser
     argv = ["interaction", "respond", "--interaction-id", args.interaction_id]
     for key, value in answer.items():
-        if key in {"choice", "resume_id"}:
+        if key in {"choice", "resume_id", "attachment_id"}:
             if not isinstance(value, str) or not value or len(value) > 200:
                 raise ValueError("Invalid scalar interaction answer")
             argv.extend(["--" + key.replace("_", "-"), value])

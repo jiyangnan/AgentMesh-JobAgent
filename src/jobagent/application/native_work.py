@@ -128,11 +128,28 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
             message_state="sent|delivered for success; use uncertain/unresolved if unknown, with no fabricated success fields",
             conversation_job_verified="boolean; must be true for success")
         success.update(outgoing_text=job["cloud_greeting"], message_state="sent", conversation_job_verified=True)
+    elif action == "prepare_resume":
+        fields.update(resume_reference="exact task.resume_reference for the existing online resume",
+            resume_state="not_sent", communication_state="open", conversation_job_verified="boolean true",
+            submission_attempted="boolean false; no final submit click",
+            dialog_cancellable="boolean true", options_complete="boolean true",
+            submission_mode="online_only|online_and_attachment; actual visible mode",
+            attachment_options="list of {reference: exact visible name plus distinguishing upload time, selected: boolean}; all observed options, no guessed IDs")
+        success.update(resume_reference=task.get("resume_reference"), resume_state="not_sent",
+            communication_state="open", conversation_job_verified=True, submission_attempted=False,
+            dialog_cancellable=True, options_complete=True, submission_mode="online_and_attachment",
+            attachment_options=[{"reference": "Replace with an actual visible attachment reference", "selected": False}])
     elif action == "submit_resume":
         fields.update(resume_state="sent for success", resume_reference="string; exact task.resume_reference observed in receipt",
             receipt_kind="application_history|resume_card|application_success_and_history")
         success.update(resume_state="sent", resume_reference=task.get("resume_reference"),
                        receipt_kind="application_history", receipt_checked=True)
+        if "submission_mode" in task:
+            fields.update(submission_mode="exact task.submission_mode verified before submission",
+                attachment_reference="exact task.attachment_reference; null for online-only",
+                attachment_selection_verified="boolean true only after actual pre-submit selection inspection")
+            success.update(submission_mode=task["submission_mode"], attachment_reference=task["attachment_reference"],
+                           attachment_selection_verified=True)
     task["result_schema"] = {**task.get("result_schema", {}), "outcome": "success|uncertain|unresolved|unavailable",
         "evidence": fields,
         "outcome_rules": {
@@ -730,6 +747,9 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
     elif action == "send_greeting":
         if e.get("outgoing_text") != job["cloud_greeting"] or e.get("message_state") not in {"sent", "delivered"} or e.get("conversation_job_verified") is not True:
             _error("native_greeting_unverified", "The exact approved personalized text must be visible as an outgoing sent message in the job-bound conversation.")
+    elif action == "prepare_resume":
+        from jobagent.application.native_resume_choice import validate_preparation
+        validate_preparation(work, e)
     elif action == "submit_resume":
         if e.get("resume_state") != "sent" or not str(e.get("resume_reference") or "").strip() or e.get("receipt_checked") is not True:
             _error("native_resume_unverified", "A named account resume and official application receipt/history are required.")
@@ -737,6 +757,11 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             _error("native_resume_receipt_required", "A click or a generic success page alone does not verify the resume submission.")
         if e.get("resume_reference") != work["task"].get("resume_reference"):
             _error("native_resume_changed", "The submitted account resume must match the preflight task; do not replace or upload a different resume.")
+        if "submission_mode" in work["task"] and (
+                e.get("submission_mode") != work["task"]["submission_mode"]
+                or e.get("attachment_reference") != work["task"]["attachment_reference"]
+                or e.get("attachment_selection_verified") is not True):
+            _error("native_attachment_changed", "Verify the exact user-selected attachment before submission and preserve its receipt; do not submit again to fix a mismatch.")
 
 
 def submit(work_id: str, result_path: str) -> dict[str, Any]:
@@ -894,6 +919,10 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_work() -> dict[str, Any]:
+    from jobagent.application.native_resume_choice import pending as resume_choice_pending
+    pending = resume_choice_pending()
+    if pending:
+        return pending
     from jobagent.application.round_request import pending_setup
     pending = pending_setup()
     if pending:
@@ -1119,12 +1148,27 @@ def _delivery_next(platform: str) -> dict[str, Any]:
             if action == "submit_resume" and not str(e.get("resume_reference") or "").strip():
                 _error("native_resume_selection_unverified", "Identify the existing account resume in read-only preflight before submitting.", requires_user_action=True)
             task["resume_reference"] = e.get("resume_reference")
+            if platform == "liepin" and action == "submit_resume":
+                prepared = next((w for w in own if w["action"] == "prepare_resume" and w["state"] == "closed"), None)
+                if not prepared:
+                    task["instruction"] = "In this exact verified job conversation, open only the cancellable resume-choice dialog (发简历). Do not click final submit/apply, send any message, upload or replace files. Inspect the online resume, actual submission mode, and every existing attachment's distinguishable name/upload time and selected state. If this control would submit immediately or its effect is uncertain, stop with a technical observation; do not click it. Defaults are not user choices. Leave the dialog open for the product's selection interaction."
+                    return present(store.ensure_work(action="prepare_resume", task=task, binding=job_binding))
+                if prepared["result"]["outcome"] != "success":
+                    terminal_problem = True
+                    break
+                from jobagent.application.native_resume_choice import selection
+                target, question = selection(prepared)
+                if question:
+                    return question
+                task.update(target)
             instructions = {
                 "submit_resume": "Verify the exact job and account again, then submit the existing account resume once. Do not upload or replace a file. Verify the visible resume name and job-bound official history or resume card. A generic success page alone is insufficient.",
                 "open_communication": "Open this exact job's communication once. It may emit a platform default greeting: record that separately, never as personalized delivery. Verify conversation-job identity; do not send custom text in this work.",
                 "send_greeting": "In the verified job-bound conversation, send job.cloud_greeting exactly once without rewriting. Read the exact outgoing message and sent/delivered state. Do not send a default template or a second message if uncertain.",
             }
             task["instruction"] = instructions[action]
+            if "submission_mode" in task:
+                task["instruction"] += " Reinspect the exact online resume and task.attachment_reference in the existing cancellable dialog before the final click. Select only the user's declared attachment; a platform default is not authorization. If the dialog was dismissed, reopen only its cancellable chooser and reverify the same target. If options, resume, account or job changed, stop and report; never substitute another attachment or click again after an uncertain result."
             task["required_evidence"] += {"submit_resume": ["resume_state=sent", "resume_reference", "receipt_kind", "receipt_checked"],
                 "open_communication": ["communication_state=open", "conversation_job_verified"],
                 "send_greeting": ["outgoing_text", "message_state", "conversation_job_verified"]}[action]
@@ -1216,7 +1260,7 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
             summary["unavailable"] += 1
         if any(w["result"].get("outcome") == "unresolved" for w in closed):
             summary["unresolved"] += 1
-        resumed_unattempted = any(w["result"].get("outcome") == "not_attempted" for w in closed)
+        resumed_unattempted = any(w["result"].get("outcome") == "not_attempted" or w["action"] == "prepare_resume" for w in closed)
         incomplete_continuation = resumed_unattempted and not (
             any(e.get("resume_state") == "sent" for e in observations)
             and greeting_verified)
