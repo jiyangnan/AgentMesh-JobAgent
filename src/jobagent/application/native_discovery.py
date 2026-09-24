@@ -213,16 +213,16 @@ def _binding_material_or_pause(platform: str, binding: dict, *, preserve_binding
 def _context(platform: str, session_id: str, *, recovery: bool = False) -> tuple[dict, dict, dict]:
     if platform not in _ENTRY_URLS or not isinstance(session_id, str) or not session_id:
         _fail("native_discovery_context_invalid", "Platform and host session are required", platform=platform)
-    profile = existing.load_json(existing.profile_path())
-    if not profile:
-        raise ValueError("No resume profile found. Run `jobagent resume analyze --file <resume>` first.")
-    existing.require_compatible_profile(profile)
     active = existing.rounds.ensure_current_round()
     existing.rounds.assert_platform_turn(platform)
     round_binding = active.get("resume_binding") or {}
     if round_binding.get("id"):
         profile = _binding_material_or_pause(platform, round_binding, preserve_binding=recovery)
-        existing.require_compatible_profile(profile)
+    else:
+        profile = existing.load_json(existing.profile_path())
+        if not profile:
+            raise ValueError("No resume profile found. Run `jobagent resume analyze --file <resume>` first.")
+    existing.require_compatible_profile(profile)
     session = active.get("native_session") or {}
     if session.get("id") != session_id:
         _fail("native_session_mismatch", "Host session does not match the current round", platform=platform)

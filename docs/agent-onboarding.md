@@ -76,6 +76,8 @@ complete preview -> separate platform confirmation -> send -> audit.
   resumes retain their own direction; a different role requires a matching
   resume. For an active round, the CLI asks before ending the old round and
   reselecting. Never offer a hard-apply override or silently choose the classic path.
+  Discovery reads the bound resume's verified cloud material. A new installation
+  with a valid workbench binding does not need a separate local resume analysis.
 - Resume synchronization is checked before search. `user_attested` means the
   user said it is synced; it is not observed proof of the platform attachment.
   New `pause_platform`/`skip_platform` choices skip this round's platform. A whole

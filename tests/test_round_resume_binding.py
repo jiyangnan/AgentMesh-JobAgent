@@ -675,6 +675,29 @@ def test_legacy_discover_profile_incomplete_keeps_binding(monkeypatch):
     assert cleared == []
 
 
+def test_legacy_bound_discovery_does_not_require_classic_profile(monkeypatch):
+    from jobagent.application import discover as discover_mod
+    from jobagent.infra import rounds as rounds_mod
+
+    binding = _binding()
+    material = _material(binding)
+    active = {"round_id": "round-1", "status": "active", "resume_binding": binding,
+              "intent": {"status": "confirmed", "target_roles": [binding["target_role"]]},
+              "platforms": {}}
+    monkeypatch.setattr(rounds_mod, "ensure_current_round", lambda: active)
+    monkeypatch.setattr(cloud_client, "resume_binding_material", lambda _: material)
+    monkeypatch.setattr(discover_mod, "load_json", lambda _: pytest.fail("Read unrelated classic profile"))
+    captured = []
+
+    def resume(platform, **context):
+        captured.append(context)
+        return {"ok": True, "resumed": True}
+
+    monkeypatch.setattr(discover_mod, "_resume_pending_decision", resume)
+    assert discover_mod.run_discover("boss") == {"ok": True, "resumed": True}
+    assert captured[0]["profile"] == material["profile"]
+
+
 def test_explicit_city_and_role_survive_selection_and_restart(monkeypatch):
     from jobagent.application.round_resume_binding import load_pending_binding
     from jobagent.infra import state

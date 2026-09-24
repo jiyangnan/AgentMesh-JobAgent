@@ -440,12 +440,6 @@ def run_discover(
     gate = gate_search(platform)
     if gate:
         return gate
-    profile = load_json(profile_path())
-    if not profile:
-        raise ValueError(
-            "No resume profile found. Run `jobagent resume analyze --file <resume>` first."
-        )
-    require_compatible_profile(profile)
     active_round = rounds.ensure_current_round()
     round_intent = active_round.get("intent")
     round_binding = active_round.get("resume_binding") or {}
@@ -494,6 +488,13 @@ def run_discover(
                 )
             raise
         profile = binding_material["profile"]
+    else:
+        profile = load_json(profile_path())
+        if not profile:
+            raise ValueError(
+                "No resume profile found. Run `jobagent resume analyze --file <resume>` first."
+            )
+    require_compatible_profile(profile)
     resumed = _resume_pending_decision(
         platform,
         profile=profile,

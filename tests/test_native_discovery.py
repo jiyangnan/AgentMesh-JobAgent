@@ -299,8 +299,13 @@ def _bound_env(env, monkeypatch, *, material=None, material_error=None):
     return binding, material
 
 
-def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypatch):
+@pytest.mark.parametrize("local_profile_available", [True, False])
+def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypatch, local_profile_available):
     binding, material = _bound_env(env, monkeypatch)
+    if not local_profile_available:
+        # Workbench-only installations must not read an absent or unrelated
+        # classic profile before using the verified bound material.
+        monkeypatch.setattr(existing, "load_json", lambda path: pytest.fail("Read classic profile for bound round"))
 
     # Sign the plan against the MATERIAL profile, not the local snapshot the
     # fixture's make_plan would use — otherwise this test cannot tell them apart.
@@ -327,6 +332,13 @@ def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypat
     # stale local snapshot (which differs in content).
     assert captured["profile"] == material
     assert captured["profile"] != env.profile
+
+
+def test_unbound_native_discovery_still_requires_local_profile(env, monkeypatch):
+    monkeypatch.setattr(existing, "load_json", lambda path: None)
+    with pytest.raises(ValueError, match="No resume profile found"):
+        native.start_discovery("boss", "session-test")
+    assert env.starts == []
 
 
 def test_bound_discovery_preparation_required_unwinds_binding(env, monkeypatch):
