@@ -45,7 +45,7 @@ def skill_contract() -> dict[str, Any]:
         "protocol_version": 1,
         "instructions": files["SKILL.md"].decode("utf-8"),
         "file_sha256": {name: _digest(data) for name, data in files.items()},
-        "next_suggested": "jobagent work next",
+        "next_suggested": "jobagent workflow next",
     }
 
 
@@ -173,7 +173,7 @@ def _install_locked(target: Path, files: dict[str, bytes]) -> dict[str, Any]:
         "status": "installed" if old is None else "updated" if changed or old != marker_data else "current",
         "updated_files": changed,
         "conflicts": [],
-        "next_suggested": "jobagent work next",
+        "next_suggested": "jobagent onboarding",
     }
 
 

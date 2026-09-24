@@ -8,7 +8,10 @@ from typing import Any
 from jobagent.infra import rounds
 from jobagent.infra.account_state import current_account_ref
 from jobagent.infra.delivery_authorization import build_delivery_authorization
-from jobagent.infra.delivery_preview import build_delivery_preview, validate_delivery_preview
+from jobagent.infra.delivery_preview import (
+    DeliveryPreviewError, build_delivery_preview, preview_required_payload,
+    validate_delivery_preview,
+)
 from jobagent.infra.discovery_state import load_envelope, save_review
 from jobagent.infra.interaction_protocol import (
     build_host_presentations,
@@ -148,20 +151,13 @@ def _load_context(
     if platform not in {"boss", "liepin", "zhilian", "51job"} or not review_path:
         raise ValueError("The delivery confirmation context is incomplete.")
     review = load_envelope(platform, review_path, reviewed=True)
+    from jobagent.application.round_criteria import assert_current
+    assert_current(review)
     verify_stored_decision(review["manifest"], platform=platform)
     preview = review.get("delivery_preview")
     candidates = list(review.get("send_candidates") or [])
     if not isinstance(preview, dict):
         raise ValueError("The reviewed delivery preview is missing.")
-    validate_delivery_preview(
-        preview,
-        send_candidates=candidates,
-        expected_platform=platform,
-        expected_discover_id=str(review.get("discover_id") or ""),
-        expected_preview_id=str(context.get("preview_id") or ""),
-    )
-    if digest_payload(candidates) != str(context.get("candidate_digest") or ""):
-        raise ValueError("The delivery candidate list changed after it was shown.")
     workflow = rounds.round_status()
     round_id = str(workflow.get("round_id") or "")
     if not round_id or round_id != str(context.get("round_id") or ""):
@@ -172,7 +168,45 @@ def _load_context(
         raise ValueError("The active AgentMesh account is not bound to local state.")
     if expected_account_ref and account_ref != expected_account_ref:
         raise ValueError("The AgentMesh account changed after the list was shown.")
+    try:
+        validate_delivery_preview(
+            preview,
+            send_candidates=candidates,
+            expected_platform=platform,
+            expected_discover_id=str(review.get("discover_id") or ""),
+            expected_preview_id=str(context.get("preview_id") or ""),
+        )
+        if digest_payload(candidates) != str(context.get("candidate_digest") or ""):
+            raise ValueError("The delivery candidate list changed after it was shown.")
+    except ValueError as exc:
+        # Exclusions are saved before their cloud acknowledgement. A lost
+        # response must refresh this saved list, not replay an old confirmation.
+        raise DeliveryPreviewError(preview_required_payload(platform, review_path)) from exc
     return context, review, preview, round_id, account_ref
+
+
+def resume_pending_confirmation() -> dict[str, Any] | None:
+    """Restore the same verified preview/answer step after a host restart."""
+    from jobagent.infra.interaction_state import load_pending_interaction
+    from jobagent.application.delivery_followup import pending as after_cancel_pending
+    after_cancel = after_cancel_pending()
+    if after_cancel:
+        return after_cancel
+
+    pending = load_pending_interaction()
+    if not pending or pending.get("stage") not in {"delivery_choice", "delivery_exclusions"}:
+        return None
+    context, _review, preview, _round_id, _account = _load_context(pending)
+    if pending["stage"] == "delivery_choice":
+        return _interaction_response(preview=preview, review_path=context["review_path"])
+    interaction = pending["interaction"]
+    return {
+        "ok": False, "error": "interaction_required", "event": "delivery_exclusions",
+        "requires_user_action": True, "request_preserved": True,
+        "platform": context["platform"], "interaction": interaction,
+        "host_presentations": build_host_presentations(interaction),
+        "next_suggested": f'jobagent interaction respond --interaction-id "{interaction["interaction_id"]}" --exclude-index <job number>',
+    }
 
 
 def _exclusion_request(
@@ -234,31 +268,17 @@ def _cancel_delivery(
     review_path: str,
     reason: str,
 ) -> dict[str, Any]:
+    from jobagent.application.delivery_followup import register
+    from jobagent.application.workflow_delivery import answer as server_answer
+    server_answer(review, "cancel_delivery")
+    response = register(platform, review, review_path, reason)
     review.pop("delivery_authorization", None)
     review["delivery_cancellation"] = {
         "reason": reason,
         "candidate_digest": digest_payload(list(review.get("send_candidates") or [])),
     }
     save_review(review, review_path)
-    clear_pending_interaction()
-    rounds.set_platform_status(
-        platform,
-        "skipped_this_round",
-        command="jobagent interaction respond",
-        evidence={
-            "discover_id": review.get("discover_id"),
-            "delivery_cancelled": True,
-            "reason": reason,
-        },
-    )
-    return {
-        "ok": True,
-        "event": "delivery_cancelled",
-        "platform": platform,
-        "delivered": 0,
-        "message": "本轮已取消该平台投递，没有执行任何真实平台动作。",
-        "workflow": rounds.round_status(),
-    }
+    return response
 
 
 def respond_delivery_confirmation(
@@ -330,6 +350,9 @@ def respond_delivery_confirmation(
         )
         review["delivery_preview"] = refreshed
         save_review(review, review_path)
+        from jobagent.application.workflow_delivery import register as register_server_preview
+        register_server_preview(review)
+        save_review(review, review_path)
         response = register_delivery_confirmation(
             platform=platform,
             review_path=review_path,
@@ -359,6 +382,8 @@ def respond_delivery_confirmation(
         authorization_id = str(authorization.get("authorization_id") or "")
         idempotent = True
     else:
+        from jobagent.application.workflow_delivery import answer as server_answer
+        server_authorization = server_answer(review, "confirm_all")
         authorization = build_delivery_authorization(
             account_ref=account_ref,
             round_id=round_id,
@@ -368,6 +393,8 @@ def respond_delivery_confirmation(
             send_candidates=list(review.get("send_candidates") or []),
             interaction_id=str(pending.get("interaction_id") or ""),
         )
+        if server_authorization is not None:
+            authorization["server_authorization"] = server_authorization
         authorization_id = str(authorization["authorization_id"])
         review["delivery_authorization"] = authorization
         review.pop("delivery_cancellation", None)

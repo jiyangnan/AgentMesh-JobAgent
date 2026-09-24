@@ -4,6 +4,53 @@
 
 关联文档：[用户指南](../README.md)、[Agent 工作流](./agent-onboarding.md)、[Codex 原生操作 Skill](../skills/codex-job-agent/SKILL.md)。
 
+## 工作流协议的兼容性
+
+工作流协议 V2 新增 `action` 和 `workflow contract/submit/next/advance/status`，
+保留 V1 `agent_action` 与 `workflow-contract`。旧签名协议和 BrowserWork 许可不改变。
+新 `state/workflow.json` 记录账户、需求、动作版本、执行意图和结果；与
+`round_criteria_input.json` 一同加入账户切换归档。动作在 dispatch 前持久化领取；
+丢失结果不重发原动作，已有 nonce 不作为新许可返回。只读查询不创建求职轮次。
+
+当前 round 可增加 `round_criteria`、`criteria_history`、`direction_change`、
+`delivery_followup`、`cancelled_delivery_lists`。缺少字段的旧 round 按原合同读取。
+条件版本绑定新的完整预览；旧清单和历史回执保留，但不能继续使用旧授权。
+新增取消记录只影响取消当时的清单，旧版已经跳过的平台不会复活。
+同步记录新增 `policy_version=2`、平台账号与 `basis=user_attested`。
+旧记录缺少 policy_version 时按 V1 的可恢复 hold 处理；不自动转换成跳过。
+不清除凭据、浏览器 profile、候选、审计或未知投递结果。
+
+猎聘附件选择增加只读准备任务 `prepare_resume` 和轮次内的 `native_resume_choices`。
+选择框里的默认附件不是用户答案。`platform_resume_choice` 交互接受
+`interaction respond --attachment-id`，或只含 `attachment_id` 的答案文件。
+已确认附件随原岗位／预览／授权绑定到后续提交任务；暂停或重启恢复同一张卡。
+旧版本已完成的简历提交保持原成功回执，不追加选择、不重新投递；已签发或未决的
+旧任务也不会被新准备步骤替代。答案提交后响应丢失，通过原工作流续跑，不重新签发
+执行许可。新增字段仍在原账号绑定的 round 中归档，不提升本地 schema 或清空状态。
+
+Boss／猎聘的 `preview/review --refresh-greetings` 是显式的云端更新请求，不在升级时
+自动执行。仅未授权且无投递工作项的清单可更新；原签名和人工选择归档到
+`state/archive/greeting-revisions/`，新文案经服务器重签，完整预览重新确认。
+新 Boss／猎聘预览以 `content_bound=true` 标记，展示并绑定招呼原文；文案变化会改变
+预览与交互 ID。缺少标记的存量预览保持旧校验及完整候选摘要授权校验，不重签既有工作项。
+保留 round、Discover、候选、简历、筛选、提升／排除以及收费；不修改旧发送许可、
+回执或未决终态。服务器拒绝旧预览授权；断线重放相同请求复用同一结果。该归档位于
+现有账户 state 范围内，账户切换仍走原归档合同。
+
+Server 的新表均以 CREATE TABLE IF NOT EXISTS 增量初始化；既有轮次、绑定与
+收费表不重写。新接口未部署时明确报错并保留用户输入，不回退绕过新分支。
+此扩展不授权旧客户端继续处理已经使用 V2 条件或取消分支的轮次；应使用当前版本。
+
+`agent_action` 为新增输出字段；现有 `next_suggested`、交互协议、签名、
+BrowserWork nonce/binding 及投递授权保持原有校验。
+`jobagent workflow-contract` 不联网、不迁移、不读取账户状态。
+
+`pending_round_binding.json` 可新增可选 `round_request`，保存当前用户明确提供的
+岗位、城市和本地档案选择。文件继续受既有账户隔离与归档规则保护；旧文件缺少
+该字段时按原样读取，不补造用户意图。新轮次成功创建后清除暂存请求；换简历时
+保留本轮已给出的输入。未发生配置清空或简历重写，不需要提高状态 schema。
+旧客户端不认识的新字段不可作为业务事实另行推断；继续已有交互时应使用当前版本。
+
 ## 目标
 
 已安装旧版的客户升级后，应当直接得到一个可继续工作的客户端，而不是由宿主 Agent 猜测是否需要清缓存、重登平台或删除目录。升级过程必须满足：
@@ -161,3 +208,53 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 - **preserve**：API Key、账户归属、所有 BrowserWork/nonce/回执、简历、轮次、预览授权、审计及 Chrome profile 原样保留；无 schema 或状态迁移。
 - **additive**：安装环境增加 certifi 根证书依赖；只在进程内补充默认 TLS 信任，不写系统钥匙串或 shell 配置。用户显式 SSL_CERT_FILE/SSL_CERT_DIR 保持权威。安装器附加无账号 HTTPS 检查，普通 onboarding 仍离线。
 - **block**：过期、域名不符、未知颁发者或损坏自定义证书仍阻断，不因证书失败重试业务请求或使用离线账户证明。doctor tls 不更新程序、不迁移或写业务状态。
+
+### Liepin prerequisite continuation
+
+The native Liepin delivery order is inspection → communication → read-only
+conversation inspection → resume submission if needed → personalized greeting.
+Existing successful receipts remain authoritative and are never clicked again.
+The additional conversation inspection detects a resume already sent by the
+platform's communication action; a default greeting remains a separate fact.
+
+`work continue --work-id ID --result FILE` is an additive recovery command for
+the old resume-before-communication ordering only. It accepts the original nonce
+and full binding, revalidates the unchanged signed list/authorization/session,
+and requires every preserved receipt to explicitly attest no attempted external
+action and the missing communication prerequisite. Unknown, attempted, conflicting
+or terminal delivery outcomes cannot use it. A validated `not_attempted` receipt
+closes the original intent without deleting its history, then the scheduler offers
+the missing step. It does not reset any nonce, observation count, account or round.
+An identical receipt replay repairs a lost response or interruption after commit.
+There is no ledger schema migration and no expansion of collection `work recover`.
+
+### TLS and exhausted native observation continuity
+
+TLS repair preserves every work ID, nonce, account binding and observation count.
+A successful `doctor tls` offers `doctor env` as a safe continuation, without
+accessing business state during the TLS probe itself. The original task's actual
+permissions remain authoritative after that check.
+
+Native responses add a `recovery` object for exhausted read-only tasks. This is
+an additive presentation contract, not a ledger migration or attempt reset.
+Eligible search-page collection exposes the existing explicitly confirmed
+`work recover` path consistently from next/status and rejected begin responses.
+Other exhausted tasks retain `receipt_only`; recovery tasks and delivery work
+cannot use this addition to obtain another execution budget. The last newly
+issued observation permit remains usable for that observation; later reads
+never reissue it.
+
+### Boss message-center preflight
+
+New Boss greetings add a read-only `inspect_delivery` phase after communication
+opens, bound to the same signed list, job, account and browser. Only verified
+message-center evidence can complete that phase or a newly issued greeting.
+Detail popups and pending bubbles cannot prove delivery. Uncertain/unresolved
+receipts can still describe their actual official page without inventing success.
+
+Existing issued greeting work retains its original immutable task and nonce.
+Completed, unavailable and terminal unresolved sends never gain an extra preflight
+or write permission. Older completed rounds remain completed. There is no ledger
+migration, permission reset, replacement round or additional cloud charge.
+Reconciliation presentation explicitly gives read-only instructions without
+rewriting the persisted task.

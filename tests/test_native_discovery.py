@@ -299,8 +299,13 @@ def _bound_env(env, monkeypatch, *, material=None, material_error=None):
     return binding, material
 
 
-def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypatch):
+@pytest.mark.parametrize("local_profile_available", [True, False])
+def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypatch, local_profile_available):
     binding, material = _bound_env(env, monkeypatch)
+    if not local_profile_available:
+        # Workbench-only installations must not read an absent or unrelated
+        # classic profile before using the verified bound material.
+        monkeypatch.setattr(existing, "load_json", lambda path: pytest.fail("Read classic profile for bound round"))
 
     # Sign the plan against the MATERIAL profile, not the local snapshot the
     # fixture's make_plan would use — otherwise this test cannot tell them apart.
@@ -327,6 +332,13 @@ def test_bound_round_discovery_sends_binding_and_material_profile(env, monkeypat
     # stale local snapshot (which differs in content).
     assert captured["profile"] == material
     assert captured["profile"] != env.profile
+
+
+def test_unbound_native_discovery_still_requires_local_profile(env, monkeypatch):
+    monkeypatch.setattr(existing, "load_json", lambda path: None)
+    with pytest.raises(ValueError, match="No resume profile found"):
+        native.start_discovery("boss", "session-test")
+    assert env.starts == []
 
 
 def test_bound_discovery_preparation_required_unwinds_binding(env, monkeypatch):
@@ -1057,3 +1069,41 @@ def test_bound_discovery_profile_incomplete_keeps_binding(env, monkeypatch):
     assert details["next_suggested"] == "jobagent boss discover"
     assert "工作台" in details["message"]
     assert env.active.get("resume_binding", {}).get("id") == "binding-1"
+
+
+def test_boss_tilde_survives_checkpoint_signed_decision_and_replay(env):
+    first = native.start_discovery('boss', 'session-test')['work']
+    first_candidate = candidate('boss', 'synthetic_first')
+    next_response = submit(env, first, receipt(first, jobs=[first_candidate], final=False))
+    second = next_response['work']
+    raw = candidate('boss', 'synthetic_second~')
+    result = receipt(second, jobs=[raw])
+    rejected = copy.deepcopy(result)
+    rejected['candidates'][0]['url'] = raw['url'].replace('~.html', '.html')
+    before = storage.pending_start_path('boss').read_bytes()
+    with pytest.raises(CollectionError) as error:
+        native.validate_page(second, rejected)
+    assert error.value.code == 'native_candidate_route_mismatch'
+    assert storage.pending_start_path('boss').read_bytes() == before
+    assert env.decisions == []
+    completed = submit(env, second, result)
+    assert completed['ok'] is True
+    assert env.decisions == [[dict(item, skills='产品规划') for item in (first_candidate, raw)]]
+    assert native.validate_job_url('boss', raw['url'], raw['id']) == raw['url']
+    assert native.accept_page(second, result)['discover_id'] == completed['discover_id']
+    assert len(env.decisions) == 1 and len(env.starts) == 1
+
+
+@pytest.mark.parametrize('identifier', ['unsafe/id', 'unsafe%7E', '../unsafe', 'unsafe?x', 'unsafe#x', 'unsafe\\x', 'x' * 161])
+def test_boss_tilde_support_still_rejects_unsafe_identifiers(identifier):
+    with pytest.raises(CollectionError) as error:
+        native.validate_job_url('boss', f'https://www.zhipin.com/job_detail/{identifier}.html', identifier)
+    assert error.value.code == 'native_candidate_id_invalid'
+
+
+@pytest.mark.parametrize('platform', ['liepin', 'zhilian', '51job'])
+def test_boss_tilde_support_does_not_expand_other_platform_ids(platform):
+    raw = candidate(platform, 'synthetic~')
+    with pytest.raises(CollectionError) as error:
+        native.validate_job_url(platform, raw['url'], raw['id'])
+    assert error.value.code == 'native_candidate_id_invalid'

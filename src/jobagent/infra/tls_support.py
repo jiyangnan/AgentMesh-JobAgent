@@ -79,7 +79,10 @@ def _probe(service: str, base: str) -> dict[str, Any]:
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
             return {'service': service, 'ok': False, 'error': 'https_endpoint_required'}
         request = urllib.request.Request(base.rstrip('/') + '/v1/health', headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(request, timeout=5, context=verified_context()) as response:
+        # Public health endpoints can take several seconds on a healthy route.
+        # Both probes run in parallel; retain a bounded wait without mistaking
+        # ordinary network latency for an unusable HTTPS connection.
+        with urllib.request.urlopen(request, timeout=15, context=verified_context()) as response:
             return {'service': service, 'ok': response.status == 200, 'http_status': response.status,
                     'tls_verified': urllib.parse.urlsplit(response.geturl()).scheme == 'https'}
     except urllib.error.HTTPError as exc:
@@ -126,6 +129,10 @@ def transport_preflight() -> dict[str, Any]:
         'user_prompt': ('HTTPS 连接检查通过，继续原操作。' if ok else
                         '客户端已安装，但 HTTPS 连接检查未通过。现有任务已保留，请按具体诊断处理证书或网络配置。'),
     }
+    if ok:
+        # The probe reads no business state and grants no browser permission.
+        # Recheck the account/workflow through a safe CLI entry after repair.
+        result['next_suggested'] = 'jobagent doctor env'
     if any(item.get('tls_diagnostic', {}).get('reason') == 'bundled_ca_unavailable' for item in results):
         import sys
         if sys.prefix != sys.base_prefix:

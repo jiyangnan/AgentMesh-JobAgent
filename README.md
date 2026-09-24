@@ -6,6 +6,11 @@ AgentMesh360 Job Agent is an Agent-native job-search product. Its open-source CL
 
 The cloud turns the resume into a recruiter-side 36-dimension candidate profile, creates profile-driven search plans, classifies every deduplicated job into signed `selected / review / rejected` results with reasons and risks, and generates evidence-grounded personalized greetings where the platform supports them. The CLI verifies those official results before delivery.
 
+Liepin opens the approved conversation before submitting a resume, then checks
+the actual resume receipt and personalized message separately. A preserved
+pre-action ordering failure follows the CLI's offered `work continue` contract;
+an uncertain send remains read-only and is never clicked again.
+
 It supports four independent recruiting-platform workflows:
 
 1. Boss直聘
@@ -16,6 +21,19 @@ It supports four independent recruiting-platform workflows:
 Each platform is isolated from the others. A page change on one platform does not disable the remaining workflows.
 
 ## Product Flow
+
+Hosts enter the standard loop with `jobagent workflow contract` and
+`jobagent workflow next`. New user intent goes through `workflow submit`; the
+CLI returns one exact command, interaction, handoff or native task at a time.
+Boss/Liepin greetings use cloud-selected resume evidence for each job. Before authorizing a list, you can ask the agent to refresh its greetings with the existing preview/review command plus `--refresh-greetings`, without a new search or extra credits. The new complete preview needs your confirmation.
+
+See the [host workflow contract](docs/workflow-host-loop.md). City, salary and
+company filters can change within a round; changing a bound resume's direction
+requires an explicit old-round finish and a matching resume.
+
+When Liepin asks for an attachment, the CLI presents the actual available
+resumes for your explicit choice before the final submission. A platform's
+default attachment is never selected on your behalf; pausing preserves progress.
 
 ```text
 Resume profile
@@ -42,7 +60,7 @@ cloud decisions, final-list confirmation, progress and audit in the CLI. Read
 the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
 
 ```bash
-jobagent work next
+jobagent workflow next
 ```
 
 Read each returned task and result schema. When the current response offers
@@ -169,6 +187,27 @@ Do not delete `~/.jobagent` or the Job Agent Chrome profile as a general upgrade
 
 The resume original and recruiting-site cookies remain on the user's machine. The profile and candidate job fields needed for Discover are sent to the Job Agent cloud service for decision.
 
+## Stable workflow across host agents
+
+The CLI owns workflow transitions for Codex, Claude Code and OpenClaw. Read
+`jobagent workflow-contract` for the installed commands and full workflow.
+Every terminal JSON result includes `agent_action`, distinguishing CLI execution, user
+input, issued native browser work, waiting, reporting and blockers. Host card
+availability changes presentation only. Missing browser capability pauses the
+same task; it does not permit another browser driver or a workbench UI fallback.
+See the [workflow contract](docs/agent-onboarding.md#host-independent-workflow-contract).
+
+Resume metadata is available through `jobagent resume status --id <resume-id>`.
+A user's already stated round inputs can be passed directly:
+
+```bash
+jobagent round start --target-role "产品经理" --target-city "武汉"
+```
+
+Selection and interruption preserve these inputs. A different bound resume
+direction requires the explicit choice returned by the CLI. Changing this
+round's city never requires reanalyzing or editing the confirmed resume.
+
 ## Platform Commands
 
 Start a new round explicitly. Reading status never creates a round:
@@ -268,6 +307,8 @@ jobagent interaction respond --interaction-id "<id>" --choice confirm_all
 jobagent boss greet send --input <review_file> --preview-id <preview_id> --authorization-id <authorization_id>
 jobagent boss audit
 ```
+
+Boss requires a read-only check of the existing job conversation in the official message center before issuing a new personalized-send permission. New personalized greetings are sent from that verified message center; pending messages require read-only receipt checks and are never automatically resent.
 
 Boss uses a personalized greeting. `greet preview` shows the signed decision and greeting before any real send. A platform-generated default introduction may establish the conversation, but it does not count as delivery until the reviewed personalized greeting is also verified in the chat.
 

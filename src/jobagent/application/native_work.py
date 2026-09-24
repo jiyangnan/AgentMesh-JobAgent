@@ -128,11 +128,33 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
             message_state="sent|delivered for success; use uncertain/unresolved if unknown, with no fabricated success fields",
             conversation_job_verified="boolean; must be true for success")
         success.update(outgoing_text=job["cloud_greeting"], message_state="sent", conversation_job_verified=True)
+    elif action == "prepare_resume":
+        fields.update(resume_reference="exact task.resume_reference for the existing online resume",
+            resume_state="not_sent", communication_state="open", conversation_job_verified="boolean true",
+            submission_attempted="boolean false; no final submit click",
+            dialog_cancellable="boolean true", options_complete="boolean true",
+            submission_mode="online_only|online_and_attachment; actual visible mode",
+            attachment_options="list of {reference: exact visible name plus distinguishing upload time, selected: boolean}; all observed options, no guessed IDs")
+        success.update(resume_reference=task.get("resume_reference"), resume_state="not_sent",
+            communication_state="open", conversation_job_verified=True, submission_attempted=False,
+            dialog_cancellable=True, options_complete=True, submission_mode="online_and_attachment",
+            attachment_options=[{"reference": "Replace with an actual visible attachment reference", "selected": False}])
     elif action == "submit_resume":
         fields.update(resume_state="sent for success", resume_reference="string; exact task.resume_reference observed in receipt",
             receipt_kind="application_history|resume_card|application_success_and_history")
         success.update(resume_state="sent", resume_reference=task.get("resume_reference"),
                        receipt_kind="application_history", receipt_checked=True)
+        if "submission_mode" in task:
+            fields.update(submission_mode="exact task.submission_mode verified before submission",
+                attachment_reference="exact task.attachment_reference; null for online-only",
+                attachment_selection_verified="boolean true only after actual pre-submit selection inspection")
+            success.update(submission_mode=task["submission_mode"], attachment_reference=task["attachment_reference"],
+                           attachment_selection_verified=True)
+    if task.get("conversation_surface") == "boss_message_center":
+        fields["page_url"] = "actual official HTTPS www.zhipin.com/web/geek/chat URL; detail popups do not satisfy success"
+        success["page_url"] = "https://www.zhipin.com/web/geek/chat"
+        if action == "inspect_delivery":
+            success.update(communication_state="open", conversation_job_verified=True)
     task["result_schema"] = {**task.get("result_schema", {}), "outcome": "success|uncertain|unresolved|unavailable",
         "evidence": fields,
         "outcome_rules": {
@@ -165,6 +187,10 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     # The ledger specification, nonce and observation budget remain immutable.
     if work["action"] == "bind_session":
         task.update(native_window.binding_task())
+    elif work["action"] == "collect_search_page":
+        from jobagent.application.native_discovery import candidate_id_pattern
+        task.setdefault("result_schema", {}).setdefault("candidate_properties", {}).setdefault("id", {}).update(
+            pattern=f"^{candidate_id_pattern(work['binding']['platform'])}$")
     elif work["action"] == "recover_session":
         task["instruction"] = task.get("instruction", "").replace(
             "Use an actual stable native window ID or host window handle, never a page/window title.",
@@ -281,7 +307,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     can_execute = bool(execution and work.get("execution_permitted"))
     # A read-only work that exhausted its observation attempts can no longer
     # begin; its only settlement is a final receipt or explicit cancellation.
-    observation_locked = bool(not work.get("side_effect")
+    observation_locked = bool(not work.get("side_effect") and not can_execute
                               and work.get("observation_attempts", 0) >= store.MAX_OBSERVATION_ATTEMPTS)
     reconcile = work.get("state") in {"intent_recorded", "reconcile_only"} and not can_execute
     if work.get("side_effect"):
@@ -289,6 +315,12 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             "execute_once" if can_execute else "observe")
     else:
         work["allowed_mode"] = "reconcile_only" if observation_locked else "observe"
+    if work.get("side_effect") and work["allowed_mode"] == "reconcile_only":
+        task["instruction"] = (
+            "Read-only reconciliation of the existing action. Inspect this exact job's official "
+            "conversation/application history and report the actual receipt. Do not type a message, "
+            "click communicate/send/apply, upload a resume, or repeat the action. "
+            "A missing or pending receipt remains uncertain/unresolved; it is never permission to retry.")
     result = work.get("result") or {}
     paused = bool(result.get("requires_user_action")) and not execution
     host_window_issue = native_window.host_window_issue(result) if paused else None
@@ -298,6 +330,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     safe_url = page_url if _official(platform, page_url) else ENTRY_URLS[platform]
     response = {"ok": True, "event": "browser_work_required", "executor": EXECUTOR,
             "protocol": "jobagent.browser_work", "protocol_version": 1,
+            "native_step_issued": bool(execution and work.get("state") != "closed" and not paused and not blocked),
             "host_contract": skill_contract(),
             "work": work, "requires_user_action": paused,
             **({"user_prompt": _pause_prompt(result.get("reason"), safe_url, host_window_issue)} if paused else {}),
@@ -311,6 +344,16 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                                if execution or observation_locked else "jobagent work status" if blocked
                                else f"jobagent work begin --work-id {work['work_id']}"),
             "workflow": rounds.round_status()}
+    if observation_locked:
+        response["recovery"] = {
+            "status": "receipt_only", "work_id": work["work_id"], "action": work["action"],
+            "reason": "observation_budget_exhausted", "automatic_retry_allowed": False,
+            "observation_attempts": work["observation_attempts"],
+            "observation_limit": store.MAX_OBSERVATION_ATTEMPTS,
+            "new_observation_permitted": False,
+            "existing_evidence_submission_allowed": True,
+            "instruction": "Submit only already observed complete evidence with the preserved nonce. TLS repair, next, status and repeated recover do not reset this budget. No new browser action is permitted without an explicit CLI grant.",
+        }
     if observation_locked and work["action"] == "collect_search_page" and not work["task"].get("delivery_source"):
         command = f"jobagent work recover --work-id {work['work_id']} --confirm-recover"
         response.update(recovery_command=command, next_suggested=command,
@@ -319,12 +362,22 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             cancel_command=f"jobagent work cancel --work-id {work['work_id']} --confirm-cancel",
             user_prompt="当前只读采集的观察次数已用完。是否恢复这项采集？恢复会取消当前失败任务并重新核验同一浏览器 profile 和账号，保留原轮次、请求及已采集岗位，不执行投递。请明确回复同意恢复；助手不得替你确认。",
             recovery_instructions="Do not submit invented completion or loop begin/next. Submit a final receipt only if actual complete evidence exists. Otherwise obtain explicit recovery confirmation once, then run recovery_command. Cancelling this read-only work does not require the old browser window to remain available.")
+        response["recovery"].update(status="confirmation_required", kind="read_only_collection",
+            confirmation_required=True,
+            after_confirmation_argv=["jobagent", "work", "recover", "--work-id", work["work_id"], "--confirm-recover"],
+            preserves=["round", "request", "discover", "completed_pages", "candidates", "profile", "platform_account"])
         if host_window_issue:
             response["user_prompt"] = (
                 "宿主暂时无法操作原窗口，或辅助功能信息与截图未能对应。请先将原来的 Chrome 窗口前置并保持可见一次，完成后回复“已前置”。"
                   "\n本只读任务的观察次数已用完，前置窗口不会恢复观察额度。已有完整真实证据时可按 completion_command 提交；"
                   "若还需新的观察或采集，必须先明确确认下面的只读恢复范围，不能自动恢复或重复 begin。\n"
                 + response["user_prompt"])
+    from jobagent.application.native_continuation import contract as continuation_contract
+    continuation = continuation_contract(work)
+    if continuation:
+        response["continuation"] = continuation
+        response["recovery_command"] = continuation["command_template"]
+        response["next_suggested"] = continuation["command_template"]
     return response
 
 
@@ -459,6 +512,10 @@ def request_discovery(platform: str) -> dict[str, Any]:
                                 f"若要恢复本平台，可重新运行 jobagent {platform} login。已有回执与本轮进度会保留。"),
                 "workflow": rounds.round_status(), "next_suggested": "jobagent round status"}
     from jobagent.application.native_discovery import start_discovery
+    from jobagent.application.resume_freshness import gate_search
+    gate = gate_search(platform)
+    if gate:
+        return gate
     response = start_discovery(platform, session["id"])
     return present(response["work"]) if response.get("work") else response
 
@@ -650,7 +707,16 @@ def begin(work_id: str) -> dict[str, Any]:
                 return {"ok": True, "event": "browser_work_wait", "retryable": True,
                         "requires_user_action": False, "wait_seconds": round(remaining, 3),
                         "request_preserved": True, "next_suggested": f"jobagent work begin --work-id {work_id}"}
-    return present(store.begin_work(work_id, binding), execution=True)
+    try:
+        issued = store.begin_work(work_id, binding)
+    except store.BrowserWorkError as exc:
+        if exc.payload.get("error") == "browser_work_observation_limit":
+            # The rejected begin must expose the same recovery as next/status.
+            # Presentation grants no permission and never changes the ledger.
+            exc.payload = {**exc.payload, **present(work), "ok": False,
+                           "error": "browser_work_observation_limit", "work_id": work_id}
+        raise
+    return present(issued, execution=True)
 
 
 def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str, Any]) -> None:
@@ -673,6 +739,10 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
         return
     if result["outcome"] != "success":
         _error("native_outcome_invalid", "Unsupported delivery outcome.")
+    if work["task"].get("conversation_surface") == "boss_message_center":
+        page = urlsplit(str(e.get("page_url") or ""))
+        if page.hostname != "www.zhipin.com" or page.path.rstrip("/") != "/web/geek/chat":
+            _error("native_message_center_required", "Verify the exact job's existing conversation in the official Boss message center; a detail popup is insufficient. Do not repeat an attempted send.")
     action = work["action"]
     if action == "inspect_delivery":
         if e.get("history_checked") is not True or e.get("login_state") != "authenticated":
@@ -687,12 +757,18 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             _error("native_resume_state_unknown", "Use an uncertain/unresolved receipt until the existing application state is verified; do not submit again.")
         if platform in {"boss", "liepin"} and (e.get("communication_state") == "unknown" or e.get("message_state") == "unknown"):
             _error("native_message_state_unknown", "Use an uncertain/unresolved receipt while conversation/message delivery is unknown; do not send again.")
+        if work["task"].get("inspection_phase") == "after_communication" and (
+                e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True):
+            _error("native_conversation_unverified", "Inspect the already opened exact job-bound conversation without another communication click.")
     elif action == "open_communication":
         if e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True:
             _error("native_conversation_unverified", "Verify the job-bound conversation; a default greeting is not personalized delivery.")
     elif action == "send_greeting":
         if e.get("outgoing_text") != job["cloud_greeting"] or e.get("message_state") not in {"sent", "delivered"} or e.get("conversation_job_verified") is not True:
             _error("native_greeting_unverified", "The exact approved personalized text must be visible as an outgoing sent message in the job-bound conversation.")
+    elif action == "prepare_resume":
+        from jobagent.application.native_resume_choice import validate_preparation
+        validate_preparation(work, e)
     elif action == "submit_resume":
         if e.get("resume_state") != "sent" or not str(e.get("resume_reference") or "").strip() or e.get("receipt_checked") is not True:
             _error("native_resume_unverified", "A named account resume and official application receipt/history are required.")
@@ -700,6 +776,11 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             _error("native_resume_receipt_required", "A click or a generic success page alone does not verify the resume submission.")
         if e.get("resume_reference") != work["task"].get("resume_reference"):
             _error("native_resume_changed", "The submitted account resume must match the preflight task; do not replace or upload a different resume.")
+        if "submission_mode" in work["task"] and (
+                e.get("submission_mode") != work["task"]["submission_mode"]
+                or e.get("attachment_reference") != work["task"]["attachment_reference"]
+                or e.get("attachment_selection_verified") is not True):
+            _error("native_attachment_changed", "Verify the exact user-selected attachment before submission and preserve its receipt; do not submit again to fix a mismatch.")
 
 
 def submit(work_id: str, result_path: str) -> dict[str, Any]:
@@ -857,6 +938,18 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_work() -> dict[str, Any]:
+    from jobagent.application.native_resume_choice import pending as resume_choice_pending
+    pending = resume_choice_pending()
+    if pending:
+        return pending
+    from jobagent.application.round_request import pending_setup
+    pending = pending_setup()
+    if pending:
+        return pending
+    from jobagent.application.delivery_confirmation import resume_pending_confirmation
+    confirmation = resume_pending_confirmation()
+    if confirmation:
+        return confirmation
     workflow = rounds.round_status()
     if workflow.get("workflow_complete") or not workflow.get("round_id"):
         return {"ok": True, "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
@@ -1011,8 +1104,10 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         own = [w for w in all_work if all(w["binding"].get(k) == v for k, v in job_binding.items())]
         previous = [w for w in all_work if w.get("side_effect") and w["binding"].get("platform") == platform
                     and w["binding"].get("job_id") == str(job["id"]) and w not in own]
-        inspection = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"), None)
+        inspection = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"
+                           and w["task"].get("inspection_phase") != "after_communication"), None)
         task = {"job": job, "session": session, "delivery_source": source,
+                "delivery_order_version": 2,
                 "required_evidence": ["job_id", "job_url", "title", "company", "page_url", "account_label", "window_reference", "profile_label", "observation", "observed_at"],
                 "result_schema": {"outcome": "success|uncertain|unresolved|unavailable",
                                   "evidence": {"source": "host_ui_observation", "receipt_checked": "boolean"}}}
@@ -1031,12 +1126,41 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         resume_done = e.get("resume_state") == "sent"
         greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"}) if needs_greeting else False
         communication_done = e.get("communication_state") == "open" or any(w["state"] == "closed" and w["result"].get("outcome") == "success" and w["result"].get("evidence", {}).get("communication_state") == "open" for w in own)
-        steps = (["submit_resume"] if needs_resume else []) + (["open_communication", "send_greeting"] if needs_greeting else [])
+        # Existing send work keeps its original immutable contract, including
+        # terminal unresolved results. This gate can never reopen an old send.
+        boss_message_preflight = platform == "boss" and communication_done and not greeting_done and not any(
+            w["action"] == "send_greeting" for w in own)
+        # Liepin exposes its resume control inside the conversation. Opening it
+        # may itself emit a default greeting or a resume: inspect those effects
+        # before issuing a separate resume permission, including on old rounds.
+        if (platform == "liepin" and communication_done) or boss_message_preflight:
+            post = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"
+                         and w["task"].get("inspection_phase") == "after_communication"), None)
+            if not post:
+                task.update(inspection_phase="after_communication",
+                    instruction="Read the already open exact job-bound conversation, existing account resume choice and official application/history receipts. Do not click communicate, apply or send. Report whether opening the conversation already submitted the resume, and record default versus exact personalized outgoing text separately. Identify the actual resume choice before any submission; never infer it from an attachment filename or a default greeting.")
+                if platform == "boss":
+                    task.update(conversation_surface="boss_message_center",
+                        instruction="Read only: leave the job-detail popup, follow the official Messages entry to https://www.zhipin.com/web/geek/chat in the same task tab, and select the already established conversation. Verify the same account, recruiter, company and approved job against the detail route and conversation job card. Inspect existing history, recording default versus exact signed text separately. Do not click communicate again, type or send a message, submit a resume, or treat a detail popup as the message center. If identity or history is inconclusive, report the declared non-success branch.")
+                return present(store.ensure_work(action="inspect_delivery", task=task, binding=job_binding))
+            if post["result"]["outcome"] != "success":
+                if post["result"]["outcome"] != "unavailable" and source.get("stop_on_failure", True):
+                    return _delivery_paused(platform)
+                continue
+            e = post["result"].get("evidence", {})
+            resume_done = e.get("resume_state") == "sent"
+            greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting")
+                             and e.get("message_state") in {"sent", "delivered"})
+            if platform == "boss":
+                task["conversation_surface"] = "boss_message_center"
+        steps = (["open_communication", "submit_resume", "send_greeting"] if platform == "liepin"
+                 else (["submit_resume"] if needs_resume else []) + (["open_communication", "send_greeting"] if needs_greeting else []))
         terminal_problem = False
         for action in steps:
             if (action == "submit_resume" and resume_done) or (action == "send_greeting" and greeting_done) or (action == "open_communication" and (communication_done or greeting_done)):
                 continue
-            done = next((w for w in own if w["action"] == action and w["state"] == "closed"), None)
+            done = next((w for w in own if w["action"] == action and w["state"] == "closed"
+                         and w["result"].get("outcome") != "not_attempted"), None)
             if done:
                 if done["result"]["outcome"] != "success":
                     terminal_problem = True
@@ -1052,12 +1176,29 @@ def _delivery_next(platform: str) -> dict[str, Any]:
             if action == "submit_resume" and not str(e.get("resume_reference") or "").strip():
                 _error("native_resume_selection_unverified", "Identify the existing account resume in read-only preflight before submitting.", requires_user_action=True)
             task["resume_reference"] = e.get("resume_reference")
+            if platform == "liepin" and action == "submit_resume":
+                prepared = next((w for w in own if w["action"] == "prepare_resume" and w["state"] == "closed"), None)
+                if not prepared:
+                    task["instruction"] = "In this exact verified job conversation, open only the cancellable resume-choice dialog (发简历). Do not click final submit/apply, send any message, upload or replace files. Inspect the online resume, actual submission mode, and every existing attachment's distinguishable name/upload time and selected state. If this control would submit immediately or its effect is uncertain, stop with a technical observation; do not click it. Defaults are not user choices. Leave the dialog open for the product's selection interaction."
+                    return present(store.ensure_work(action="prepare_resume", task=task, binding=job_binding))
+                if prepared["result"]["outcome"] != "success":
+                    terminal_problem = True
+                    break
+                from jobagent.application.native_resume_choice import selection
+                target, question = selection(prepared)
+                if question:
+                    return question
+                task.update(target)
             instructions = {
                 "submit_resume": "Verify the exact job and account again, then submit the existing account resume once. Do not upload or replace a file. Verify the visible resume name and job-bound official history or resume card. A generic success page alone is insufficient.",
                 "open_communication": "Open this exact job's communication once. It may emit a platform default greeting: record that separately, never as personalized delivery. Verify conversation-job identity; do not send custom text in this work.",
                 "send_greeting": "In the verified job-bound conversation, send job.cloud_greeting exactly once without rewriting. Read the exact outgoing message and sent/delivered state. Do not send a default template or a second message if uncertain.",
             }
             task["instruction"] = instructions[action]
+            if platform == "boss" and action == "send_greeting":
+                task["instruction"] += " Use only the preflight-verified existing conversation in the official https://www.zhipin.com/web/geek/chat message center. Reverify its account, company, recruiter and approved job before typing. Never send from a job-detail popup. A sending/pending bubble is not success; inspect persisted message-center history read-only and never resend after an uncertain click."
+            if "submission_mode" in task:
+                task["instruction"] += " Reinspect the exact online resume and task.attachment_reference in the existing cancellable dialog before the final click. Select only the user's declared attachment; a platform default is not authorization. If the dialog was dismissed, reopen only its cancellable chooser and reverify the same target. If options, resume, account or job changed, stop and report; never substitute another attachment or click again after an uncertain result."
             task["required_evidence"] += {"submit_resume": ["resume_state=sent", "resume_reference", "receipt_kind", "receipt_checked"],
                 "open_communication": ["communication_state=open", "conversation_job_verified"],
                 "send_greeting": ["outgoing_text", "message_state", "conversation_job_verified"]}[action]
@@ -1140,7 +1281,8 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
     for works in by_job.values():
         closed = [w for w in works if w["state"] == "closed"]
         observations = [w["result"].get("evidence", {}) for w in closed if w["result"].get("outcome") == "success"]
-        if any(w["action"] == "send_greeting" and w["result"].get("outcome") == "success" for w in closed) or any(e.get("existing_outgoing_text") == works[0]["task"]["job"].get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"} for e in observations if works[0]["task"]["job"].get("cloud_greeting")):
+        greeting_verified = any(w["action"] == "send_greeting" and w["result"].get("outcome") == "success" for w in closed) or any(e.get("existing_outgoing_text") == works[0]["task"]["job"].get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"} for e in observations if works[0]["task"]["job"].get("cloud_greeting"))
+        if greeting_verified:
             summary["greeting_sent"] += 1
         if any(e.get("resume_state") == "sent" for e in observations):
             summary["resume_submitted"] += 1
@@ -1148,7 +1290,12 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
             summary["unavailable"] += 1
         if any(w["result"].get("outcome") == "unresolved" for w in closed):
             summary["unresolved"] += 1
-        if any(w["state"] != "closed" for w in works):
+        resumed_unattempted = any(w["result"].get("outcome") == "not_attempted" or w["action"] == "prepare_resume" for w in closed)
+        incomplete_continuation = resumed_unattempted and not (
+            any(e.get("resume_state") == "sent" for e in observations)
+            and greeting_verified)
+        terminal = any(w["result"].get("outcome") in {"unavailable", "unresolved"} for w in closed)
+        if any(w["state"] != "closed" for w in works) or (incomplete_continuation and not terminal):
             summary["pending"] += 1
     workflow = rounds.complete_platform_after_audit(platform) if complete and not summary["pending"] else rounds.round_status()
     _record_completed_native_delivery_fact(platform, by_job, completed=bool(
@@ -1180,7 +1327,8 @@ def status() -> dict[str, Any]:
     if pending_recovery:
         return present(pending_recovery)
     blocked = next((w for w in works if w["state"] != "closed"
-                    and (w.get("result") or {}).get("requires_technical_recovery")), None)
+                    and ((w.get("result") or {}).get("requires_technical_recovery")
+                         or (not w.get("side_effect") and w.get("observation_attempts", 0) >= store.MAX_OBSERVATION_ATTEMPTS))), None)
     if blocked:
         # Pure presentation: status must expose the technical stop, not send
         # the host back around next -> status without explaining the boundary.

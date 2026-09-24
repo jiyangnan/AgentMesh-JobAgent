@@ -8,6 +8,7 @@ import json
 import os
 import ssl
 import threading
+import time
 
 import certifi
 from cryptography import x509
@@ -37,7 +38,7 @@ def tls_server(tmp_path):
     ca_path.write_bytes(root.public_bytes(serialization.Encoding.PEM))
 
     @contextmanager
-    def serve(*, expired=False, wrong_host=False):
+    def serve(*, expired=False, wrong_host=False, response_delay=0):
         key = ec.generate_private_key(ec.SECP256R1())
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
         cert = (x509.CertificateBuilder().subject_name(name).issuer_name(root_name)
@@ -59,6 +60,8 @@ def tls_server(tmp_path):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 seen.append((self.path, self.headers.get('Authorization')))
+                if response_delay:
+                    time.sleep(response_delay)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
@@ -148,6 +151,9 @@ def test_read_only_transport_probe_uses_no_credentials_and_preserves_state(monke
         assert callable(probe), 'installation needs a bounded read-only transport preflight'
         result = probe()
         assert result['ok'] is True and result['account_verified'] is False
+        assert result['next_suggested'] == 'jobagent doctor env'
+        from jobagent.infra.workflow_protocol import with_contract
+        assert with_contract(result)['action'] == {'type': 'run', 'argv': ['jobagent', 'doctor', 'env']}
         assert len(seen) == 2 and all(auth is None for _, auth in seen)
         assert before == {p: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
         assert 'secret-must-not-be-sent' not in json.dumps(result)
@@ -164,6 +170,20 @@ def test_doctor_tls_bypasses_account_update_and_migrations(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['jobagent', 'doctor', 'tls'])
     cli.main()
     assert json.loads(capsys.readouterr().out)['event'] == 'tls_preflight'
+
+
+def test_slow_healthy_tls_response_reaches_safe_continuation(monkeypatch, tls_server):
+    # Reproduce a healthy endpoint that exceeds the old five-second timeout.
+    with tls_server(response_delay=5.2) as (url, ca, seen):
+        empty_default_store(monkeypatch)
+        monkeypatch.setattr(certifi, 'where', lambda: str(ca))
+        monkeypatch.setenv('JOBAGENT_API_BASE', url)
+        monkeypatch.setenv('JOBAGENT_CORE_API_BASE', url)
+        result = tls_support.transport_preflight()
+        assert result['ok'] is True
+        assert all(check['tls_verified'] for check in result['checks'])
+        assert result['next_suggested'] == 'jobagent doctor env'
+        assert len(seen) == 2 and all(auth is None for _, auth in seen)
 
 
 @pytest.mark.parametrize('isolated', [True, False])

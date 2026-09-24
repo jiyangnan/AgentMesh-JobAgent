@@ -122,7 +122,8 @@ def test_search_schema_exposes_state_sources_and_candidate_types(search_env, pla
             assert declaration["maxLength"] == (20000 if field == "jd" else 2000)
         if field in schema["candidate_required"]:
             assert declaration["minLength"] == 1
-    assert properties["id"]["pattern"] == "^[A-Za-z0-9_-]{1,160}$"
+    assert properties["id"]["pattern"] == (
+        "^[A-Za-z0-9_~-]{1,160}$" if platform == "boss" else "^[A-Za-z0-9_-]{1,160}$")
     assert schema["state_combinations"] == {
         "results": {"page_state": "results", "candidate_min_items": 1,
                     "has_next_page": True, "exhaustion": None},
@@ -245,3 +246,19 @@ def test_source_contract_does_not_allow_hidden_or_duplicate_sources(search_env, 
         discovery.validate_page(work, result)
     assert error.value.code == code
     assert_validation_is_read_only(search_env, platform, before)
+
+
+def test_pending_boss_schema_refreshes_without_reissuing_permission(search_env):
+    work = discovery.start_discovery('boss', 'session-test')['work']
+    work['task']['result_schema']['candidate_properties']['id']['pattern'] = '^[A-Za-z0-9_-]{1,160}$'
+    work.update(state='intent_recorded', nonce='preserved-nonce', observation_attempts=1)
+    frozen = copy.deepcopy(work)
+    shown = native_work.present(work)['work']
+    assert shown['task']['result_schema']['candidate_properties']['id']['pattern'] == '^[A-Za-z0-9_~-]{1,160}$'
+    assert work == frozen
+    assert shown['nonce'] == frozen['nonce']
+    assert shown['observation_attempts'] == frozen['observation_attempts']
+    raw = candidate('boss', 'synthetic_boss~')
+    result = observed_example(shown, 'results')
+    result['candidates'] = [raw]
+    assert discovery.validate_page(shown, result)['candidates'] == [raw]

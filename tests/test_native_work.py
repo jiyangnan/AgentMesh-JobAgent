@@ -69,8 +69,18 @@ def observation(work, **changes):
             "resume_state": "not_sent", "resume_reference": "Synthetic online resume", "communication_state": "not_open",
             "conversation_job_verified": True, "message_state": "not_sent"}}
     result["evidence"].update(changes)
+    if work["task"].get("inspection_phase") == "after_communication":
+        result["evidence"]["communication_state"] = "open"
+    if work["task"].get("conversation_surface") == "boss_message_center":
+        result["evidence"]["page_url"] = "https://www.zhipin.com/web/geek/chat?ka=header-message"
     if work["action"] == "submit_resume":
         result["evidence"].update(resume_state="sent", receipt_kind="application_history")
+        if "submission_mode" in work["task"]:
+            result["evidence"].update(submission_mode=work["task"]["submission_mode"],
+                attachment_reference=work["task"]["attachment_reference"], attachment_selection_verified=True)
+    elif work["action"] == "prepare_resume":
+        result["evidence"].update(communication_state="open", submission_attempted=False,
+            dialog_cancellable=True, options_complete=True, submission_mode="online_only", attachment_options=[])
     elif work["action"] == "open_communication":
         result["evidence"].update(communication_state="open", default_greeting_observed=True)
     elif work["action"] == "send_greeting":
@@ -87,8 +97,8 @@ def submit(env, work, result=None):
 
 
 @pytest.mark.parametrize("platform,actions", [
-    ("boss", ["inspect_delivery", "open_communication", "send_greeting"]),
-    ("liepin", ["inspect_delivery", "submit_resume", "open_communication", "send_greeting"]),
+    ("boss", ["inspect_delivery", "open_communication", "inspect_delivery", "send_greeting"]),
+    ("liepin", ["inspect_delivery", "open_communication", "inspect_delivery", "prepare_resume", "submit_resume", "send_greeting"]),
     ("zhilian", ["inspect_delivery", "submit_resume"]),
     ("51job", ["inspect_delivery", "submit_resume"]),
 ])
@@ -99,7 +109,12 @@ def test_complete_serial_platform_chain(env, platform, actions):
     while response.get("work"):
         pending = response["work"]
         assert pending["allowed_mode"] == "observe"
-        work = native.begin(pending["work_id"])["work"]
+        from jobagent.infra.workflow_protocol import with_contract
+        assert with_contract(response)["agent_action"]["type"] == "run_cli"
+        issued = native.begin(pending["work_id"])
+        assert with_contract(issued)["agent_action"]["type"] == "native_work"
+        assert with_contract(issued)["agent_action"]["allowed_mode"] == issued["work"]["allowed_mode"]
+        work = issued["work"]
         actual.append(work["action"])
         assert work["task"]["result_example"]["nonce"] == work["nonce"]
         if work["side_effect"]:
@@ -129,6 +144,9 @@ def test_resume_does_not_count_as_greeting_or_cause_duplicate_communication(env)
     response = submit(env, work)
     work = native.begin(response["work"]["work_id"])["work"]
     response = submit(env, work, observation(work, communication_state="open"))
+    assert response["work"]["task"]["inspection_phase"] == "after_communication"
+    work = native.begin(response["work"]["work_id"])["work"]
+    response = submit(env, work, observation(work, resume_state="sent", receipt_kind="resume_card"))
     assert response["work"]["action"] == "send_greeting"
     assert native.audit("liepin", complete=False)["summary"]["greeting_sent"] == 0
 
@@ -136,7 +154,7 @@ def test_resume_does_not_count_as_greeting_or_cause_duplicate_communication(env)
 def test_default_greeting_cannot_close_custom_message(env):
     env.choose("boss")
     response = env.start("boss")
-    for _ in range(2):
+    for _ in range(3):
         work = native.begin(response["work"]["work_id"])["work"]
         response = submit(env, work)
     work = native.begin(response["work"]["work_id"])["work"]
@@ -368,6 +386,9 @@ def test_observation_limit_recovery_still_accepts_final_receipt(env):
     status = native.request_login("boss")
     assert status["next_suggested"].startswith("jobagent work submit")
     assert status["work"]["allowed_mode"] == "reconcile_only"
+    assert status["recovery"]["status"] == "receipt_only"
+    assert "after_confirmation_argv" not in status["recovery"]
+    assert native.status()["recovery"] == status["recovery"]
     assert "无需关闭其他窗口" in status["user_prompt"]
     submit(env, status["work"], _bind_receipt(status["work"]))
     assert rounds.ensure_current_round()["native_session"]["window_reference"] == "chrome-window-9"
@@ -492,3 +513,108 @@ def test_collection_identity_block_does_not_advance_or_decide(env, monkeypatch):
     assert paused["recovery_requires_confirmation"] is True
     assert paused["completion_command"].startswith("jobagent work submit")
     assert native.status()["recovery_command"] == paused["recovery_command"]
+
+
+def test_closed_native_work_never_reissues_host_action(env):
+    from jobagent.infra.workflow_protocol import with_contract
+    env.choose('zhilian')
+    response = env.start('zhilian')
+    work_id = response['work']['work_id']
+    work = native.begin(work_id)['work']
+    submit(env, work)
+    # The inspection work is closed; the following work owns any new action.
+    closed = store.get_work(work_id, work['binding'])
+    assert closed['state'] == 'closed'
+    assert with_contract(native.present(closed, execution=True))['agent_action']['type'] != 'native_work'
+
+
+def boss_message_preflight(env):
+    env.choose('boss')
+    response = env.start('boss')
+    for _ in range(2):
+        work = native.begin(response['work']['work_id'])['work']
+        response = submit(env, work)
+    work = native.begin(response['work']['work_id'])['work']
+    assert work['action'] == 'inspect_delivery'
+    assert work['task']['inspection_phase'] == 'after_communication'
+    return work
+
+
+def test_boss_message_center_gate_preserves_permission_after_wrong_page(env):
+    work = boss_message_preflight(env)
+    assert work['side_effect'] is False
+    before = copy.deepcopy(store.get_work(work['work_id'], native._binding()))
+    with pytest.raises(store.BrowserWorkError) as error:
+        submit(env, work, observation(work, page_url=work['task']['job']['url']))
+    assert error.value.payload['error'] == 'native_message_center_required'
+    assert store.get_work(work['work_id'], native._binding()) == before
+    # Resume the same read-only task; only verified main-chat evidence grants send.
+    response = submit(env, work)
+    send = native.begin(response['work']['work_id'])['work']
+    assert send['action'] == 'send_greeting' and send['allowed_mode'] == 'execute_once'
+    assert send['task']['conversation_surface'] == 'boss_message_center'
+    assert send['binding'] == work['binding']
+    with pytest.raises(store.BrowserWorkError) as error:
+        submit(env, send, observation(send, page_url=send['task']['job']['url']))
+    assert error.value.payload['error'] == 'native_message_center_required'
+    # A rejected receipt is never a fresh send permission.
+    resumed = native.begin(send['work_id'])['work']
+    assert resumed['allowed_mode'] == 'reconcile_only'
+    assert 'Read-only reconciliation' in resumed['task']['instruction']
+    assert 'send job.cloud_greeting exactly once' not in resumed['task']['instruction']
+    # Non-success receipts may faithfully report the actual detail popup.
+    result = observation(resumed, page_url=send['task']['job']['url'])
+    result.update(outcome='unresolved', receipt_id='boss-unresolved')
+    completed = submit(env, resumed, result)
+    assert completed['completion_state'] == 'completed_with_unresolved'
+    assert completed['summary']['greeting_sent'] == 0
+    assert completed['summary']['unresolved'] == 1
+    count = len(store.list_account_work('account-test'))
+    assert env.start('boss')['summary']['unresolved'] == 1
+    assert len(store.list_account_work('account-test')) == count
+
+
+def test_boss_existing_signed_message_in_center_never_creates_send(env):
+    work = boss_message_preflight(env)
+    completed = submit(env, work, observation(work,
+        existing_outgoing_text=work['task']['job']['cloud_greeting'], message_state='delivered'))
+    assert completed['summary']['greeting_sent'] == 1
+    assert not any(w['action'] == 'send_greeting' for w in store.list_account_work('account-test'))
+
+
+@pytest.mark.parametrize('outcome', ['success', 'unresolved', 'inflight'])
+def test_boss_older_send_contract_is_not_reissued_or_reopened(env, outcome):
+    env.choose('boss')
+    response = env.start('boss')
+    for _ in range(2):
+        work = native.begin(response['work']['work_id'])['work']
+        if work['action'] == 'open_communication':
+            # Persist the old communication result without scheduling new work.
+            result = observation(work)
+            native._validate_delivery(work, result, result['evidence'])
+            store.submit_work(work['work_id'], native._binding(), result)
+        else:
+            response = submit(env, work)
+    legacy_task = copy.deepcopy(work['task'])
+    legacy_task['instruction'] = 'Send the original signed text once.'
+    legacy_task.pop('conversation_surface', None)
+    legacy_task.pop('inspection_phase', None)
+    old = store.ensure_work(action='send_greeting', task=legacy_task, binding=work['binding'], side_effect=True)
+    begun = native.begin(old['work_id'])['work']
+    assert 'conversation_surface' not in begun['task']
+    if outcome == 'inflight':
+        shown = env.start('boss')['work']
+        assert shown['work_id'] == old['work_id'] and shown['nonce'] == begun['nonce']
+        assert shown['allowed_mode'] == 'reconcile_only'
+        assert 'Read-only reconciliation' in shown['task']['instruction']
+    else:
+        result = observation(begun)
+        result['outcome'] = outcome
+        result['receipt_id'] += '-legacy'
+        completed = submit(env, begun, result)
+        assert completed['summary']['greeting_sent'] == int(outcome == 'success')
+        assert completed['summary']['unresolved'] == int(outcome == 'unresolved')
+        env.start('boss')
+    all_work = store.list_account_work('account-test')
+    assert sum(w['action'] == 'send_greeting' for w in all_work) == 1
+    assert not any(w['task'].get('conversation_surface') for w in all_work)

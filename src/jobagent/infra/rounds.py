@@ -271,7 +271,9 @@ def _same_intent(current: Any, requested: dict[str, Any]) -> bool:
         for role in requested.get("target_roles", [])
         if str(role).strip()
     ]
-    return current_roles == requested_roles
+    current_cities = (current or {}).get("target_cities")
+    requested_cities = requested.get("target_cities")
+    return current_roles == requested_roles and (not current_cities or not requested_cities or current_cities == requested_cities)
 
 
 _PROFILE_REFRESH_SAFE_STATUSES = {"pending", "login_verified", "active", "blocked"}
@@ -717,6 +719,8 @@ def round_status() -> dict[str, Any]:
         "native_session": deepcopy(state.get("native_session")),
         "intent": state.get("intent"),
         "resume_binding": state.get("resume_binding"),
+        "round_criteria": state.get("round_criteria"),
+        "criteria_revision": (state.get("round_criteria") or {}).get("criteria_revision", 0),
         "profile_reconciliation": state.get("profile_reconciliation"),
         "resume_freshness": freshness,
         "platforms": platforms,

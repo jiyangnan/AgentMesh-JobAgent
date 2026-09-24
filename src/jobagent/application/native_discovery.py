@@ -67,13 +67,19 @@ def _official_url(url: Any, hosts: set[str], *, platform: str) -> Any:
     return parsed
 
 
+def candidate_id_pattern(platform: str) -> str:
+    # Boss opaque detail identifiers may contain a literal URL-safe tilde.
+    # Keep it intact: dropping it would identify a different signed job.
+    return r"[A-Za-z0-9_~-]{1,160}" if platform == "boss" else r"[A-Za-z0-9_-]{1,160}"
+
+
 def validate_job_url(platform: str, url: str, job_id: str) -> str:
     """Validate an observed exact job route; never manufacture a search URL/ID.
 
     Returns the observed route with irrelevant tracking query/fragment removed.
     IDs may be opaque strings; a route must still contain that exact identifier.
     """
-    if platform not in _ENTRY_URLS or not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", job_id):
+    if platform not in _ENTRY_URLS or not isinstance(job_id, str) or not re.fullmatch(candidate_id_pattern(platform), job_id):
         _fail("native_candidate_id_invalid", "Candidate needs an exact platform job ID", platform=platform)
     hosts = {
         "boss": {"www.zhipin.com"}, "liepin": {"www.liepin.com"},
@@ -213,16 +219,16 @@ def _binding_material_or_pause(platform: str, binding: dict, *, preserve_binding
 def _context(platform: str, session_id: str, *, recovery: bool = False) -> tuple[dict, dict, dict]:
     if platform not in _ENTRY_URLS or not isinstance(session_id, str) or not session_id:
         _fail("native_discovery_context_invalid", "Platform and host session are required", platform=platform)
-    profile = existing.load_json(existing.profile_path())
-    if not profile:
-        raise ValueError("No resume profile found. Run `jobagent resume analyze --file <resume>` first.")
-    existing.require_compatible_profile(profile)
     active = existing.rounds.ensure_current_round()
     existing.rounds.assert_platform_turn(platform)
     round_binding = active.get("resume_binding") or {}
     if round_binding.get("id"):
         profile = _binding_material_or_pause(platform, round_binding, preserve_binding=recovery)
-        existing.require_compatible_profile(profile)
+    else:
+        profile = existing.load_json(existing.profile_path())
+        if not profile:
+            raise ValueError("No resume profile found. Run `jobagent resume analyze --file <resume>` first.")
+    existing.require_compatible_profile(profile)
     session = active.get("native_session") or {}
     if session.get("id") != session_id:
         _fail("native_session_mismatch", "Host session does not match the current round", platform=platform)
@@ -296,6 +302,8 @@ def _verify_checkpoint(platform: str, *, profile: dict, active: dict, context: d
                 _fail("collection_checkpoint_plan_mismatch", "Renewal changed the saved collection scope", platform=platform)
     if any(not str(query.get("city") or "").strip() for query in verified["queries"]):
         _fail("native_target_city_required", "Every native query requires a signed readable target city", platform=platform)
+    if plan.get("round_criteria") != active.get("round_criteria"):
+        _fail("criteria_search_plan_mismatch", "The signed search plan does not match this round's current criteria revision", platform=platform)
     progress = _progress(platform, checkpoint, session_id)
     binding = _binding(context, session_id, pending["request_id"], plan)
     # Bind work to the ORIGINAL scope digest so a renewal never invalidates
@@ -435,7 +443,7 @@ def _task(plan: dict, progress: dict, index: int, page: int) -> dict:
                             for field in candidate_fields if field != "skills"}
     candidate_properties["skills"] = {"type": "array", "maxItems": 100,
         "items": {"type": "string", "maxLength": 200}}
-    candidate_properties["id"].update(pattern="^[A-Za-z0-9_-]{1,160}$")
+    candidate_properties["id"].update(pattern=f"^{candidate_id_pattern(plan['platform'])}$")
     for field in ("id", "title", "company", "area", "url"):
         candidate_properties[field]["minLength"] = 1
     return {"query": query["keyword"], "city": query["city"], "query_index": index,
@@ -612,7 +620,8 @@ def start_discovery(platform: str, session_id: str) -> dict[str, Any]:
                 request_id=request_id, round_intent=active.get("intent"),
                 resume_binding_id=str(round_binding.get("id")) if round_binding.get("id") else None,
                 context_id=str(round_binding.get("context_id")) if round_binding.get("context_id") else None,
-                round_id=str(active.get("round_id")) if round_binding.get("id") else None)
+                round_id=str(active.get("round_id")),
+                **({"criteria_revision": active["round_criteria"]["criteria_revision"]} if active.get("round_criteria") else {}))
         except existing.cloud_client.CloudError as exc:
             from jobagent.application.round_resume_binding import (
                 BINDING_PROFILE_INCOMPLETE_CODE,

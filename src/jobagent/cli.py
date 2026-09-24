@@ -16,7 +16,8 @@ _UPDATE_RESUME_ENV = "JOBAGENT_UPDATE_RESUME"
 
 
 def _print(payload: Any, *, stream=None) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2), file=stream or sys.stdout)
+    from jobagent.infra.workflow_protocol import with_contract
+    print(json.dumps(with_contract(payload), ensure_ascii=False, indent=2), file=stream or sys.stdout)
 
 
 def _add_login(parser: argparse.ArgumentParser) -> None:
@@ -33,6 +34,7 @@ def _add_discover(parser: argparse.ArgumentParser) -> None:
 def _add_review(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", "-i", help="Signed decision file; defaults to latest")
     parser.add_argument("--promote", nargs="*", default=[], metavar="JOB_ID")
+    parser.add_argument("--refresh-greetings", action="store_true", help="Refresh cloud greetings on an unapproved Boss/Liepin list without a new search or charge")
     parser.add_argument("--confirm-promote", action="store_true")
     parser.add_argument("--output", "-o", help="Reviewed decision output path")
 
@@ -52,11 +54,39 @@ def _add_send(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--continue-on-failure", action="store_true")
 
 
+class CommandParser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse diagnostics can include user arguments (including secrets).
+        _print({"ok": False, "error": "invalid_cli_arguments",
+                "message": "Command or arguments are unsupported; read the installed command catalog.",
+                "next_suggested": "jobagent workflow-contract"}, stream=sys.stderr)
+        raise SystemExit(2)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="jobagent", description="AgentMesh 360 Job Agent")
+    parser = CommandParser(prog="jobagent", description="AgentMesh 360 Job Agent")
     parser.add_argument("--version", action="version", version=f"jobagent {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("workflow-contract", help="Read the complete host-independent workflow and CLI command catalog offline")
+    workflow = sub.add_parser("workflow", help="Follow the persisted product workflow")
+    workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
+    for name in ("contract", "next"):
+        workflow_sub.add_parser(name)
+    workflow_submit = workflow_sub.add_parser("submit")
+    workflow_submit.add_argument("--input", required=True, help="User intent JSON; never a command or receipt")
+    workflow_advance = workflow_sub.add_parser("advance")
+    workflow_advance.add_argument("--action-id", required=True)
+    workflow_advance.add_argument("--expected-revision", type=int, required=True)
+    workflow_status = workflow_sub.add_parser("status")
+    workflow_status.add_argument("--operation-id")
+    credits = sub.add_parser("credits", help="Read current account credits and action prices")
+    credits_sub = credits.add_subparsers(dest="credits_command", required=True)
+    credits_sub.add_parser("status")
+    quote = credits_sub.add_parser("quote")
+    quote.add_argument("--action", choices=["discover", "analysis"], required=True)
+    quote.add_argument("--request-id", required=True)
+    quote.add_argument("--scope-digest", required=True)
     sub.add_parser("onboarding", help="Show the next setup step without network access or state changes")
 
     init = sub.add_parser("init", help="Configure an AgentMesh API Key")
@@ -89,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_status = resume_sub.add_parser(
         "status", help="Summarize online resume preparation state"
     )
-    resume_status.add_argument("--id", help="Reserved for a single-resume view (planned)")
+    resume_status.add_argument("--id", help="Read one online resume's confirmed status")
 
     profile = sub.add_parser("profile", help="View the current resume profile")
     profile.add_subparsers(dest="profile_command", required=True).add_parser("show")
@@ -109,10 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
     work_sub = work.add_subparsers(dest="work_command", required=True)
     for name in ("next", "status", "contract"):
         work_sub.add_parser(name)
-    for name in ("begin", "submit", "cancel", "recover"):
+    for name in ("begin", "submit", "cancel", "recover", "continue"):
         action = work_sub.add_parser(name)
         action.add_argument("--work-id", required=True)
-        if name == "submit":
+        if name in {"submit", "continue"}:
             action.add_argument("--result", required=True, help="Local typed UI-observation JSON")
         if name == "cancel":
             action.add_argument("--confirm-cancel", action="store_true")
@@ -129,6 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_sub = interaction.add_subparsers(dest="interaction_command", required=True)
     interaction_respond = interaction_sub.add_parser("respond")
     interaction_respond.add_argument("--interaction-id", required=True)
+    interaction_respond.add_argument("--answer-file", help="JSON containing only the user's explicit answer fields")
+    interaction_respond.add_argument("--attachment-id", help="Exact option ID from the platform resume attachment card")
     interaction_respond.add_argument(
         "--choice",
         choices=[
@@ -141,6 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
             "cancel_delivery",
             "synced",
             "pause_platform",
+            "skip_platform",
+            "search_again",
+            "finish_round_and_rebind",
+            "keep_round",
             "pause_round",
         ],
     )
@@ -182,6 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Explicit target role for this round; repeat for multiple roles",
     )
+    round_start.add_argument("--target-city", action="append", default=[],
+                             help="Confirmed city for this round; repeat for up to three cities")
     round_start.add_argument(
         "--resume-binding",
         metavar="BINDING_ID",
@@ -193,6 +231,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip resume binding and use the local profile for this round",
     )
     round_sub.add_parser("status")
+    round_update = round_sub.add_parser("update")
+    round_update.add_argument("--input", required=True, help="JSON request_id and criteria patch")
+    round_update.add_argument("--expected-revision", type=int, required=True)
     round_audit = round_sub.add_parser("audit")
     round_audit.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
     round_audit.add_argument("--recent", "-n", type=int, default=20)
@@ -245,7 +286,13 @@ def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool) -> 
             numeric_credit = int(credit)
         except (TypeError, ValueError):
             numeric_credit = None
-    required_credits = 10 if profile_exists else 5
+    required_action = "discover" if profile_exists else "analysis"
+    prices = account_response.get("workflow_prices")
+    required_credits = (prices.get(required_action) if isinstance(prices, dict) else (10 if profile_exists else 5))
+    if required_credits is None:
+        return {"usable": False, "reason": "credit_price_unavailable", "credit": credit,
+                "source": account.get("source"), "expires_at": account.get("expires_at"),
+                "required_credits": None, "paid_pass_required": None}
     usable = unlimited or (numeric_credit is not None and numeric_credit >= required_credits)
     source = account.get("source") or "none"
     if unlimited:
@@ -540,6 +587,18 @@ def _doctor_env() -> dict[str, Any]:
         from jobagent.infra.state import profile_path
 
         profile_exists = profile_path().exists()
+    credit_quotes = {}
+    capabilities = ((account_response or {}).get("server") or {}).get("capabilities") or {}
+    if account_response and capabilities.get("workflow_protocol_version", 0) >= 2:
+        from jobagent.infra.protocol import digest_payload
+        account_response["workflow_prices"] = {}
+        for action in ("analysis", "discover"):
+            try:
+                quote = cloud_client.credits_quote(action, "setup_price_" + action, digest_payload({"scope": "setup", "action": action}))
+                credit_quotes[action] = quote["quote"]
+                account_response["workflow_prices"][action] = quote["quote"]["credits_required"]
+            except cloud_client.CloudError as exc:
+                credit_quotes[action] = {"error": exc.code or "credit_quote_unavailable", "charged": False}
     access = (
         _cloud_access(account_response, profile_exists=profile_exists)
         if account_response is not None
@@ -556,6 +615,14 @@ def _doctor_env() -> dict[str, Any]:
     from jobagent.infra.rounds import round_status
 
     workflow = round_status() if local_state.get("ready") else None
+    pending_native_work = False
+    if workflow and workflow.get("round_id"):
+        from jobagent.infra.account_state import current_account_ref
+        from jobagent.infra.browser_work import list_work
+        account_ref = current_account_ref()
+        if account_ref:
+            pending_native_work = any(work["state"] != "closed" for work in list_work(
+                {"account_ref": account_ref, "round_id": workflow["round_id"]}))
     blocked_by: list[str] = []
     if not environment_healthy:
         blocked_by.append("environment")
@@ -573,8 +640,10 @@ def _doctor_env() -> dict[str, Any]:
         next_suggested = "https://agentmesh360.com/app/?lang=zh-CN#pricing"
     elif not access.get("usable"):
         next_suggested = "jobagent doctor env"
+    elif pending_native_work:
+        next_suggested = "jobagent work next"
     elif not profile_exists:
-        next_suggested = "jobagent resume analyze --file <resume>"
+        next_suggested = "jobagent resume status"
     else:
         next_suggested = str((workflow or {}).get("next_suggested") or "jobagent round start")
     payload = {
@@ -595,6 +664,7 @@ def _doctor_env() -> dict[str, Any]:
         "account": account_response.get("account") if account_response else None,
         "local_state": local_state,
         "cloud_access": access,
+        "credit_quotes": credit_quotes,
         "round": workflow,
         "workflow": {
             "ready": not blocked_by,
@@ -636,17 +706,15 @@ def _doctor_env() -> dict[str, Any]:
             "账户已连接，但暂时无法确认可用额度。当前结果不代表额度不足；"
             "恢复后运行 jobagent doctor env 继续检查。"
         )
+    elif environment_healthy and local_state.get("ready") and access.get("usable") and pending_native_work:
+        payload["onboarding"] = {"stage": "preserved_work_pending"}
+        payload["requires_user_action"] = False
+        payload["request_preserved"] = True
+        payload["message"] = "连接和账户检查通过，继续读取原任务的当前许可或恢复要求；观察次数及投递权限保持原状。"
     elif environment_healthy and local_state.get("ready") and access.get("usable") and not profile_exists:
-        payload["onboarding"] = {"stage": "resume_required", "workbench_url": WORKBENCH_URL}
-        payload["requires_user_action"] = True
-        payload["user_prompt"] = (
-            f"账户和环境检查通过。你的求职工作台：{WORKBENCH_URL}，"
-            "可管理简历画像、练习面试和跟踪求职进展。"
-            "下一步请提供简历文件及你确认的目标城市，Agent 会继续引导简历分析；"
-            "也可以在工作台准备并确认简历画像，完成后回到当前对话回复"
-            "“简历已准备好，请继续”，Agent 会通过 jobagent resume list 检查已有在线简历。"
-            "请勿重复分析已准备好的简历；新的云端简历分析需 5 credits。"
-        )
+        payload["onboarding"] = {"stage": "resume_check_required", "workbench_url": WORKBENCH_URL}
+        payload["requires_user_action"] = False
+        payload["message"] = "账户和环境检查通过。接下来通过 CLI 检查工作台已有简历，再给出需要你完成的步骤。"
     if transport_details:
         for field in ("tls_diagnostic", "network_diagnostic", "request_preserved", "agent_instructions"):
             if field in transport_details:
@@ -655,6 +723,7 @@ def _doctor_env() -> dict[str, Any]:
             payload["next_suggested"] = "jobagent doctor tls"
             payload["workflow"]["next_suggested"] = "jobagent doctor tls"
             payload["api_key_action"] = None
+
     return payload
 
 
@@ -683,7 +752,9 @@ def _resume_center_overview() -> dict[str, Any]:
         "ready": bool(preparation.get("ready")),
         "resumes": resumes,
         "receipt": preparation.get("receipt"),
-        "next_suggested": preparation.get("next_suggested"),
+        "next_suggested": "jobagent round start" if preparation.get("ready") else "jobagent resume status",
+        "requires_user_action": not bool(preparation.get("ready")),
+        **({"user_prompt": "请在工作台准备并确认简历，完成后回到当前对话回复“简历已准备好”，继续检查简历状态。"} if not preparation.get("ready") else {}),
         "workbench_url": preparation.get("workbench_url"),
     }
 
@@ -878,6 +949,23 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     interaction_id = str(args.interaction_id or "").strip()
+    from jobagent.application.native_resume_choice import respond as respond_attachment
+    if getattr(args, "attachment_id", None) and any(getattr(args, field, None) for field in
+            ("choice", "resume_id", "target_role", "target_city", "exclude_index")):
+        return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current attachment card."}
+    attachment = respond_attachment(interaction_id, str(getattr(args, "attachment_id", None) or ""))
+    if attachment is not None:
+        return attachment
+    if getattr(args, "attachment_id", None):
+        return {"ok": False, "error": "interaction_not_pending"}
+    from jobagent.application.round_direction import respond as respond_direction
+    direction = respond_direction(interaction_id, str(args.choice or ""))
+    if direction is not None:
+        return direction
+    from jobagent.application.delivery_followup import respond as respond_after_cancel
+    after_cancel = respond_after_cancel(interaction_id, str(args.choice or ""))
+    if after_cancel is not None:
+        return after_cancel
     pending = load_pending_interaction()
     # 投递前平台简历新鲜度门禁的应答（含挂起后按 id 应答的最终 synced）。
     # 该门禁的挂起态记在轮次里，即使 pending 槽位已被其他平台的卡占用，
@@ -958,15 +1046,24 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                 attach_round_resume_binding(binding)
                 result["workflow"] = round_status()
         return result
+    completed = load_json(current_round_path()) or {}
+    completed_receipt = completed.get("interaction_receipt") or {}
+    if interaction_id in completed_receipt.get("interaction_ids", []) and not args.target_role and not args.target_city:
+        if args.choice and args.choice != completed_receipt.get("choice"):
+            return {"ok": False, "error": "interaction_response_conflict",
+                    "message": "This interaction already created a round with a different answer.",
+                    "next_suggested": "jobagent round status"}
+        return {"ok": True, "idempotent_replay": True,
+                "interaction_receipt": completed_receipt, "workflow": round_status()}
     profile = load_json(profile_path())
-    if not profile:
+    if not profile and not _staged_resume_binding():
         return {
             "ok": False,
             "error": "profile_required",
-            "message": "Analyze a resume before answering the target-role interaction.",
+            "message": "Prepare a resume before answering the target-role interaction.",
             "next_suggested": "jobagent resume analyze --file <resume>",
         }
-    local_profile = profile
+    local_profile = profile or {}
     # A pending target-role interaction for a bound round is answered against
     # the bound resume's own material — the same profile the suggestion and
     # digest were built from — never the stale local snapshot.
@@ -974,7 +1071,7 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     respond_cities: list[str] | None = None
     if (
         pending
-        and str(pending.get("stage") or "") in {"choice", "roles"}
+        and str(pending.get("stage") or "") in {"choice", "roles", "cities"}
         and (_staged_resume_binding() or {}).get("id")
     ):
         from jobagent.application.round_resume_binding import binding_material_profile
@@ -990,7 +1087,8 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             )
 
             if exc.code == "preparation_required":
-                _consume_staged_resume_binding()
+                from jobagent.application.round_resume_binding import clear_pending_binding
+                clear_pending_binding(preserve_request=True)
                 clear_pending_interaction()
                 return {
                     "ok": False,
@@ -1007,8 +1105,11 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                     "ok": False,
                     "error": "resume_binding_profile_incomplete",
                     "message": BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                    "requires_user_action": True,
+                    "user_prompt": BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                    "workbench_url": "https://agentmesh360.com/workbench/",
                     "retryable": False,
-                    "next_suggested": "jobagent round start --no-resume-binding",
+                    "next_suggested": "jobagent round start",
                 }
             return {
                 "ok": False,
@@ -1020,8 +1121,11 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                 "next_suggested": "jobagent round start",
             }
         profile = material["profile"]
-        respond_cities = confirmed_target_cities(profile) or confirmed_target_cities(local_profile)
+        from jobagent.application.round_request import request
+        respond_cities = request().get("target_cities") or confirmed_target_cities(profile) or confirmed_target_cities(local_profile)
 
+    from jobagent.application.round_request import request
+    respond_cities = request().get("target_cities") or respond_cities
     current = load_json(current_round_path()) or {}
     receipt = current.get("interaction_receipt") or {}
     receipt_ids = {
@@ -1101,6 +1205,8 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                 profile,
                 list(args.target_city or []),
             )
+            if len(target_cities) > 3:
+                raise ValueError("本轮最多支持 3 个目标城市，请重新选择。")
         except ValueError as exc:
             return {
                 "ok": False,
@@ -1110,6 +1216,12 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
                     (pending.get("interaction") or {}).get("fallback_text") or ""
                 ),
             }
+        from jobagent.application.round_request import remember
+        remember(cities=target_cities)
+        if respond_binding:
+            clear_pending_interaction()
+            return {"ok": True, "target_cities": target_cities,
+                    "request_preserved": True, "next_suggested": "jobagent round start"}
         save_json(profile_path(), updated_profile)
         reconciliation = reconcile_active_round_profile(updated_profile)
         clear_pending_interaction()
@@ -1147,8 +1259,13 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
             ),
         }
     if respond_binding and choice == REBIND_RESUME_CHOICE:
+        from jobagent.application.round_request import request
+        from jobagent.application.round_resume_binding import save_pending_binding
+        original_request = request()
         clear_pending_interaction()
         _consume_staged_resume_binding()
+        if original_request:
+            save_pending_binding({"round_request": original_request})
         return {
             "ok": True,
             "rebind_requested": True,
@@ -1507,7 +1624,7 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
     changes_context = (
         args.command == "init"
         or (args.command == "account" and args.account_command in {"bind", "switch"})
-        or (args.command == "round" and args.round_command in {"start", "skip"})
+        or (args.command == "round" and args.round_command in {"start", "skip", "update"})
         or (args.command == "resume" and args.resume_command == "analyze")
         or args.command == "interaction"
     )
@@ -1529,6 +1646,9 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return native_work.submit(args.work_id, args.result)
         if args.work_command == "recover":
             return native_work.recover(args.work_id, confirmed=args.confirm_recover)
+        if args.work_command == "continue":
+            from jobagent.application.native_continuation import continue_unattempted
+            return continue_unattempted(args.work_id, args.result)
         return native_work.cancel(args.work_id, confirmed=args.confirm_cancel)
     if args.command == "browser":
         return native_work.request_login(args.platform, diagnose=True)
@@ -1556,6 +1676,10 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
     subcommand = getattr(args, "greet_command", None) or getattr(args, "apply_command", None)
     if subcommand in {"preview", "review"}:
         rounds.assert_platform_turn(platform)
+        if getattr(args, "refresh_greetings", False):
+            from jobagent.application.greeting_refresh import refresh
+            return refresh(platform, input_path=args.input, promoted_ids=args.promote,
+                confirm_promote=args.confirm_promote, output_path=args.output)
         from jobagent.application.native_repair import prepare_review
         response = prepare_review(platform, input_path=args.input, promoted_ids=args.promote,
             confirm_promote=args.confirm_promote, output_path=args.output)
@@ -1573,13 +1697,32 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return _dispatch_unlocked(args)
     # Serializes only CLI ledger/checkpoint/round transitions. It is deliberately
     # not held while Codex is operating the external native browser UI.
-    if args.command in {"boss", "liepin", "zhilian", "51job", "browser", "work", "round", "interaction", "resume", "init", "account"} and not (args.command == "work" and args.work_command == "contract"):
+    if args.command in {"boss", "liepin", "zhilian", "51job", "browser", "work", "round", "interaction", "resume", "init", "account", "workflow"} and not (args.command == "work" and args.work_command == "contract"):
         with command_lock():
             return _dispatch_unlocked(args)
     return _dispatch_unlocked(args)
 
 
 def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "workflow":
+        from jobagent.application.workflow import dispatch
+        return dispatch(args)
+    if args.command == "credits":
+        if args.credits_command == "status":
+            return _doctor_env()
+        from jobagent.infra.cloud_client import credits_quote
+        return credits_quote(action=args.action, request_id=args.request_id, scope_digest=args.scope_digest)
+    if args.command == "round" and args.round_command == "update":
+        from jobagent.application.round_criteria import update
+        return update(args.input, args.expected_revision)
+    if args.command == "interaction" and getattr(args, "answer_file", None):
+        from jobagent.application.interaction_answer import apply_answer_file
+        apply_answer_file(args)
+    if args.command in {"boss", "liepin", "zhilian", "51job"}:
+        from jobagent.application.delivery_followup import pending as after_cancel_pending
+        after_cancel = after_cancel_pending()
+        if after_cancel:
+            return after_cancel
     native = _native_dispatch(args)
     if native is not None:
         return native
@@ -1594,20 +1737,17 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             client_state=getattr(args, "_client_upgrade_report", None),
         )
     if args.command == "doctor":
+        if args.doctor_command == "tls":
+            from jobagent.infra.tls_support import transport_preflight
+            return transport_preflight()
         return _doctor_env()
     if args.command == "resume":
         if args.resume_command == "analyze":
             return _resume_analyze(args)
         if args.resume_command in ("list", "status"):
             if getattr(args, "id", None):
-                from jobagent.infra.cloud_client import CloudError
-
-                raise CloudError(
-                    "Single-resume detail arrives in a later release; "
-                    "this version lists every online resume.",
-                    status=400,
-                    code="resume_detail_not_available",
-                )
+                from jobagent.application.resume_status import resume_status
+                return resume_status(args.id)
             return _resume_center_overview()
         raise ValueError(f"unknown resume command: {args.resume_command}")
     if args.command == "profile":
@@ -1657,14 +1797,17 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             from jobagent.infra.state import current_round_path, load_json, profile_path
 
             current = load_json(current_round_path())
-            profile = load_json(profile_path())
-            if not profile:
-                return {
-                    "ok": False,
-                    "error": "profile_required",
-                    "message": "Analyze a resume before confirming target roles.",
-                    "next_suggested": "jobagent resume analyze --file <resume>",
-                }
+            profile = load_json(profile_path()) or {}
+            from jobagent.application.round_request import remember, request, pending_setup
+            stored_request = request()
+            requested_roles = args.target_role or ([] if args.accept_suggested else stored_request.get("target_roles", []))
+            requested_cities = args.target_city or stored_request.get("target_cities", [])
+            accept_suggested = args.accept_suggested or (not args.target_role and stored_request.get("accept_suggested", False))
+            no_binding = args.no_resume_binding or stored_request.get("no_resume_binding", False)
+            remember(roles=requested_roles, cities=requested_cities, accept_suggested=accept_suggested, no_binding=no_binding)
+            waiting = pending_setup()
+            if waiting and not (args.target_role or args.target_city or args.accept_suggested or args.no_resume_binding or args.resume_binding):
+                return waiting
             # --- user-confirmed resume binding for this round (P2) ---
             from jobagent.application.round_resume_binding import (
                 binding_summary,
@@ -1673,13 +1816,13 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
 
             binding_stage = resolve_round_binding(
                 explicit_binding=args.resume_binding,
-                no_binding=args.no_resume_binding,
+                no_binding=no_binding,
                 current_round=current,
             )
             if binding_stage.get("error"):
                 return binding_stage["error"]
             if binding_stage.get("interaction"):
-                return binding_stage["interaction"]
+                return pending_setup() or binding_stage["interaction"]
             round_binding = binding_stage.get("binding")
             resume_notice = binding_stage.get("notice")
             # Bound rounds source the suggestion, digest and delivery profile
@@ -1710,7 +1853,7 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                         # recovery command loops forever.
                         from jobagent.infra.rounds import clear_round_resume_binding
 
-                        clear_pending_binding()
+                        clear_pending_binding(preserve_request=True)
                         clear_round_resume_binding()
                         return {
                             "ok": False,
@@ -1732,8 +1875,11 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                             "ok": False,
                             "error": "resume_binding_profile_incomplete",
                             "message": BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                            "requires_user_action": True,
+                            "user_prompt": BINDING_PROFILE_INCOMPLETE_ROUND_START,
+                            "workbench_url": "https://agentmesh360.com/workbench/",
                             "retryable": False,
-                            "next_suggested": "jobagent round start --no-resume-binding",
+                            "next_suggested": "jobagent round start",
                         }
                     return {
                         "ok": False,
@@ -1748,10 +1894,15 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 intent_profile = binding_material["profile"]
             else:
                 intent_profile = profile
-            effective_cities = confirmed_target_cities(intent_profile) or confirmed_target_cities(profile)
-            if not effective_cities:
+            if not intent_profile:
+                return {"ok": False, "error": "profile_required", "requires_user_action": True,
+                        "user_prompt": "请在工作台准备并确认简历，完成后回到当前对话继续。",
+                        "workbench_url": "https://agentmesh360.com/workbench/",
+                        "next_suggested": "jobagent resume status"}
+            effective_cities = requested_cities or confirmed_target_cities(intent_profile) or confirmed_target_cities(profile)
+            if not effective_cities or len(set(effective_cities)) > 3:
                 confirmation = target_city_input_request(
-                    profile,
+                    intent_profile,
                     previous_round_id=(
                         str(current.get("round_id"))
                         if current and current.get("round_id")
@@ -1761,7 +1912,7 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 save_pending_interaction(
                     confirmation["interaction"],
                     stage="cities",
-                    profile_digest=digest_payload(profile),
+                    profile_digest=digest_payload(intent_profile),
                     previous_round_id=(
                         str(current.get("round_id"))
                         if current and current.get("round_id")
@@ -1783,8 +1934,9 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                 current
                 and current.get("status") == "active"
                 and current.get("round_id")
-                and not args.accept_suggested
-                and not args.target_role
+                and not accept_suggested
+                and not requested_roles
+                and not requested_cities
             ):
                 clear_pending_interaction()
                 active = start_new_round()
@@ -1808,7 +1960,8 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     "resume_notice": resume_notice,
                     "workflow": round_status(),
                 }
-            if not args.accept_suggested and not args.target_role:
+            direction_conflict = bool(round_binding and requested_roles and requested_roles != [round_binding.get("target_role")])
+            if direction_conflict or (not accept_suggested and not requested_roles):
                 confirmation = target_role_confirmation(
                     intent_profile,
                     previous_round_id=(
@@ -1828,21 +1981,27 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     choice=None if confirmation["suggested_roles"] else "replace_roles",
                 )
+                confirmation["round_request"] = request()
+                if direction_conflict:
+                    confirmation["reason"] = "resume_direction_confirmation_required"
                 return confirmation
             try:
                 intent = build_round_intent(
                     intent_profile,
-                    accept_suggested=args.accept_suggested,
-                    target_roles=args.target_role,
+                    accept_suggested=accept_suggested,
+                    target_roles=requested_roles,
                     resume_binding=round_binding,
-                    target_cities=effective_cities,
+                    target_cities=effective_cities if round_binding or requested_cities else None,
                 )
             except ValueError as exc:
                 return {
                     "ok": False,
                     "error": "invalid_round_intent",
                     "message": str(exc),
-                    "next_suggested": "jobagent round start",
+                    "requires_user_action": True,
+                    "user_prompt": str(exc),
+                    "request_preserved": True,
+                    "next_suggested": "jobagent round start --target-role <role> --target-city <city>",
                 }
             created = start_new_round(intent, resume_binding=round_binding)
             clear_pending_interaction()
@@ -1859,7 +2018,7 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     conflict = attach_bound_round(round_binding, intent=intent)
                     if conflict:
                         return conflict
-                _consume_staged_resume_binding()
+            _consume_staged_resume_binding()
             return {
                 "ok": True,
                 "resume_binding": binding_summary(created.get("resume_binding")),
@@ -1893,6 +2052,10 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
 
         skip_state = load_json(current_round_path()) or {}
         skip_item = (skip_state.get("platforms") or {}).get(args.platform) or {}
+        followup = skip_item.get("delivery_followup") or {}
+        if followup.get("status") == "awaiting":
+            from jobagent.application.delivery_followup import respond as respond_after_cancel
+            return respond_after_cancel(followup["interaction"]["interaction_id"], "skip_platform")
         owns_round_hold = (skip_state.get("resume_freshness_round_hold") or {}).get(
             "platform"
         ) == args.platform
@@ -1969,6 +2132,10 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "workflow-contract" or (args.command == "workflow" and args.workflow_command == "contract"):
+        from jobagent.infra.workflow_protocol import contract
+        _print(contract(parser))
+        return
     if args.command == "doctor" and args.doctor_command == "tls":
         from jobagent.infra.tls_support import transport_preflight
 
@@ -1976,6 +2143,7 @@ def main() -> None:
         _print(result)
         if not result["ok"]:
             raise SystemExit(2)
+
         return
     if args.command == "onboarding":
         # Installation handoff must work offline and with active/legacy state.
@@ -2004,6 +2172,9 @@ def main() -> None:
             account_verification = _verify_state_owner_for_command(args)
             _schedule_analytics_flush_safely()
             result = _dispatch(args)
+            if args.command not in {"workflow", "account", "init", "credits", "profile", "platforms", "upgrade-check", "update"}:
+                from jobagent.application.workflow import remember_result
+                remember_result(args, result)
         if skill_installation and skill_installation.get("status") != "current":
             result["codex_skill_installation"] = skill_installation
         if getattr(args, "_native_update_deferred", False):
@@ -2091,6 +2262,12 @@ def main() -> None:
                 "attempts": exc.attempts,
                 **exc.details,
             }
+            if (exc.retryable and exc.details.get("workflow_request_preserved")
+                    and args.command in {"workflow", "round", "interaction", "credits", "doctor", "boss", "liepin", "zhilian", "51job"}):
+                # These parsers contain no credential flags. Replay the same
+                # idempotent/read-only request, never init or paid analysis.
+                import shlex
+                payload["next_suggested"] = shlex.join(["jobagent", *sys.argv[1:]])
         elif isinstance(exc, ProtocolError):
             payload = {"ok": False, "error": "protocol_verification_failed", "message": str(exc)}
         else:

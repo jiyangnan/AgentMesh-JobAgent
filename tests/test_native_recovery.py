@@ -156,6 +156,9 @@ def test_recover_reuses_task_and_never_resets_observation_budget(recovery_env):
         assert same["work_id"] == work["work_id"]
         assert same["observation_attempts"] == attempt + 1
     assert same["allowed_mode"] == "reconcile_only"
+    terminal = r.native.status()
+    assert terminal["recovery"]["status"] == "receipt_only"
+    assert "after_confirmation_argv" not in terminal["recovery"]
     with pytest.raises(r.ledger.BrowserWorkError):
         r.native.begin(work["work_id"])
     r.native.cancel(work["work_id"], confirmed=True)

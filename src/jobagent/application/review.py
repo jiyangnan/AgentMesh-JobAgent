@@ -68,6 +68,8 @@ def review_decision(
     native: bool = False,
 ) -> dict[str, Any]:
     envelope = load_envelope(platform, input_path, reviewed=False if input_path is None else None)
+    from jobagent.application.delivery_followup import assert_list_active
+    assert_list_active(platform, str(envelope.get("discover_id") or ""))
     decision_repair: dict[str, Any] | None = None
     if platform == "zhilian" and not native:
         from jobagent.application.decision_repair import (
@@ -95,6 +97,8 @@ def review_decision(
         confirm_promote=confirm_promote or bool(existing_promoted_ids),
     )
     _preserve_delivery_exclusions(envelope, review)
+    from jobagent.application.round_criteria import apply_filter
+    apply_filter(review)
     if platform == "boss":
         _exclude_delivered_boss_jobs(review)
     if platform in {"boss", "liepin"}:
@@ -125,7 +129,24 @@ def review_decision(
         skipped_delivered_count=len(review.get("skipped_delivered", [])),
     )
     review["delivery_preview"] = delivery_preview
+    from jobagent.application.workflow_delivery import register as register_server_preview
+    from jobagent.infra.cloud_client import CloudError
+    try:
+        register_server_preview(review)
+    except CloudError as exc:
+        if exc.code != "delivery_list_cancelled":
+            raise
+        # The service may have committed cancellation before its response was
+        # lost. Restore the accepted choice, without reauthorizing the old list.
+        from jobagent.application.delivery_followup import register
+        return register(platform, review, str(path), "cancelled_server_receipt")
     path = save_review(review, str(path))
+    criteria_filter = review.get("criteria_filter") or {}
+    if criteria_filter.get("uncovered_cities") and not review["send_candidates"]:
+        from jobagent.application.delivery_followup import register
+        return {**register(platform, review, str(path), "criteria_coverage_insufficient"),
+                "criteria_filter": criteria_filter,
+                "message": "现有候选未覆盖新城市。请明确选择重新搜索或跳过本平台；本次筛选没有收费。"}
     workflow = rounds.round_status()
     requires_confirmation = bool(delivery_preview["requires_user_confirmation"])
     if requires_confirmation:
@@ -175,6 +196,10 @@ def review_decision(
         "skipped_delivered": review.get("skipped_delivered", []),
         "skipped_delivered_count": len(review.get("skipped_delivered", [])),
         "send_count": len(review["send_candidates"]),
+        **({"criteria_filter": criteria_filter, "coverage_notice": (
+            "当前清单仅来自原搜索；尚未覆盖：" + "、".join(criteria_filter["uncovered_cities"])
+            if criteria_filter.get("uncovered_cities") else "本次仅筛选已采集候选，没有新搜索或额外收费。")}
+           if criteria_filter else {}),
         "display_required": True,
         "requires_user_action": requires_confirmation,
         "delivery_preview": delivery_preview,

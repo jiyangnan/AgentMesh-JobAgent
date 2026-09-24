@@ -25,6 +25,8 @@ _ACCOUNT_OWNED_PATHS = (
     "pending_interaction.json",
     "pending_round_binding.json",
     "resume_freshness_baselines.json",
+    "workflow.json",
+    "round_criteria_input.json",
     "rounds",
     "discoveries",
     "archive",

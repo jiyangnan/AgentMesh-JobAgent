@@ -42,7 +42,7 @@ def test_contract_returns_current_full_instructions_without_writing(monkeypatch,
     assert result["protocol_version"] == 1
     assert result["instructions"] == codex_skill._bundle()["SKILL.md"].decode()
     assert result["file_sha256"] == {name: codex_skill._digest(data) for name, data in codex_skill._bundle().items()}
-    assert result["next_suggested"] == "jobagent work next"
+    assert result["next_suggested"] == "jobagent workflow next"
     assert list(tmp_path.iterdir()) == []
 
 
@@ -57,11 +57,13 @@ def test_install_is_idempotent_and_does_not_touch_business_state(monkeypatch, tm
     target = tmp_path / "codex" / "skills" / "codex-job-agent"
     assert first["ok"] and first["status"] == "installed"
     assert first["target"] == str(target)
+    assert first["next_suggested"] == "jobagent onboarding"
     before = snapshot(tmp_path)
     mtimes = {path: path.stat().st_mtime_ns for path in target.rglob("*") if path.is_file()}
     second = codex_skill.install_skill()
     assert second["ok"] and second["status"] == "current"
     assert second["updated_files"] == []
+    assert second["next_suggested"] == "jobagent onboarding"
     assert snapshot(tmp_path) == before
     assert {path: path.stat().st_mtime_ns for path in mtimes} == mtimes
 
@@ -74,7 +76,8 @@ def test_default_target_without_codex_home(monkeypatch, tmp_path):
     assert result["target"] == str(tmp_path / ".codex" / "skills" / "codex-job-agent")
 
 
-@pytest.mark.parametrize("contents", [None, b"User's custom skill", codex_skill._bundle()["SKILL.md"]])
+@pytest.mark.parametrize("contents", [None, b"User's custom skill", codex_skill._bundle()["SKILL.md"]],
+                         ids=["empty-directory", "custom-skill", "unmanaged-bundle"])
 def test_existing_unmanaged_skill_is_never_adopted(contents, tmp_path):
     target = tmp_path / "custom"
     target.mkdir()

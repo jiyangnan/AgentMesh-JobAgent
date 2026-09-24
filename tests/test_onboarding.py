@@ -217,16 +217,29 @@ def test_doctor_outage_preserves_key_and_never_sends_user_to_register(monkeypatc
     assert '申请' not in result.get('user_prompt', '')
 
 
-def test_doctor_resume_handoff_includes_workbench_and_return_path(doctor_context):
+def test_doctor_checks_online_resume_before_asking_for_another_analysis(doctor_context):
     result = cli._doctor_env()
     assert result['environment_healthy'] is True
     assert result['cloud_access']['usable'] is True
-    assert result['onboarding']['stage'] == 'resume_required'
-    assert result['requires_user_action'] is True
-    assert onboarding.WORKBENCH_URL in result['user_prompt']
-    assert '简历已准备好，请继续' in result['user_prompt']
-    assert 'jobagent resume list' in result['user_prompt']
-    assert '#pricing' not in result['user_prompt']
+    assert result['onboarding']['stage'] == 'resume_check_required'
+    assert result['requires_user_action'] is False
+    assert result['next_suggested'] == 'jobagent resume status'
+
+
+def test_doctor_resumes_preserved_work_before_local_profile_setup(monkeypatch, doctor_context):
+    from jobagent.infra import rounds, browser_work, account_state
+    monkeypatch.setattr(rounds, 'round_status', lambda: {'round_id': 'existing-round', 'next_suggested': 'jobagent boss discover'})
+    monkeypatch.setattr(account_state, 'current_account_ref', lambda: 'existing-account')
+    def works(binding):
+        assert binding == {'account_ref': 'existing-account', 'round_id': 'existing-round'}
+        return [{'state': 'reconcile_only', 'observation_attempts': 3}]
+    monkeypatch.setattr(browser_work, 'list_work', works)
+    assert not (doctor_context / 'profile.json').exists()
+    result = cli._doctor_env()
+    assert result['onboarding']['stage'] == 'preserved_work_pending'
+    assert result['next_suggested'] == 'jobagent work next'
+    assert not result['requires_user_action']
+    assert result['request_preserved']
 
 
 def test_doctor_payment_handoff_only_for_insufficient_credits(monkeypatch, doctor_context):

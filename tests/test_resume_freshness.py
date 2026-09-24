@@ -32,6 +32,9 @@ def binding_fixture(revision="rev-1", digest="sha256:aaa", name="后端简历",
 
 @pytest.fixture
 def fresh_env(tmp_path, monkeypatch):
+    # These cases replay the pre-v2 persisted interaction semantics. New search
+    # and skip semantics have their own tests below with the current version.
+    monkeypatch.setattr(freshness, "FRESHNESS_POLICY_VERSION", 1)
     monkeypatch.setattr(state_mod, "STATE_DIR", tmp_path, raising=False)
     monkeypatch.setattr(state_mod, "ROUNDS_DIR", tmp_path / "rounds", raising=False)
     from jobagent.infra import account_state
@@ -642,3 +645,50 @@ def test_cli_round_skip_dispatch_clears_awaiting_card(fresh_env):
     assert active["platforms"]["boss"]["status"] == "skipped_this_round"
     assert "resume_freshness" not in active["platforms"]["boss"]
     assert load_pending_interaction() is None
+
+
+def test_v2_search_sync_before_cloud_and_user_attestation(fresh_env, monkeypatch):
+    monkeypatch.setattr(freshness, 'FRESHNESS_POLICY_VERSION', 2)
+    platforms = {p: {'status': 'pending'} for p in PLATFORMS}
+    platforms['boss']['status'] = 'login_verified'
+    write_round(binding_fixture(), platforms=platforms,
+                extra={'native_session': {'accounts': {'boss': 'visible-test-account'}}})
+    monkeypatch.setattr(freshness.cloud_client, 'resume_binding_material',
+                        lambda _: {'binding': binding_fixture()})
+    card = freshness.gate_search('boss')
+    assert card['requires_user_action']
+    assert card['interaction']['interaction_id'] == freshness.gate_search('boss')['interaction']['interaction_id']
+    result = freshness.respond(card['interaction']['interaction_id'], choice='synced')
+    assert result['next_suggested'] == 'jobagent boss discover'
+    assert result['basis'] == 'user_attested'
+    assert freshness.gate_search('boss') is None
+    active = state_mod.load_json(state_mod.current_round_path())
+    active['native_session']['accounts']['boss'] = 'other-account'
+    state_mod.save_json(state_mod.current_round_path(), active)
+    assert freshness.gate_search('boss')['requires_user_action']
+
+
+def test_v2_pause_platform_is_terminal_skip(fresh_env, monkeypatch):
+    monkeypatch.setattr(freshness, 'FRESHNESS_POLICY_VERSION', 2)
+    write_round(binding_fixture())
+    card = freshness.gate_search('boss')
+    answer = freshness.respond(card['interaction']['interaction_id'], choice='pause_platform')
+    assert answer['event'] == 'platform_skipped'
+    assert answer['workflow']['current_platform'] == 'liepin'
+    assert answer['workflow']['platforms']['boss']['status'] == 'skipped_this_round'
+    assert answer['workflow']['resume_freshness']['held_platforms'] == []
+    assert freshness.respond(card['interaction']['interaction_id'], choice='synced') is None
+    assert 'boss' not in freshness.load_baselines()['platforms']
+
+
+def test_v2_material_unavailable_preserves_binding_and_question(fresh_env, monkeypatch):
+    monkeypatch.setattr(freshness, 'FRESHNESS_POLICY_VERSION', 2)
+    original = write_round(binding_fixture())
+    card = freshness.gate_search('boss')
+    def missing(_):
+        raise freshness.cloud_client.CloudError('unavailable', status=409, code='preparation_required')
+    monkeypatch.setattr(freshness.cloud_client, 'resume_binding_material', missing)
+    result = freshness.respond(card['interaction']['interaction_id'], choice='synced')
+    assert not result['ok'] and result['request_preserved']
+    assert state_mod.load_json(state_mod.current_round_path())['resume_binding'] == original['resume_binding']
+    assert load_pending_interaction()['interaction_id'] == card['interaction']['interaction_id']

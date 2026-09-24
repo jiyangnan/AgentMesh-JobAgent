@@ -36,6 +36,7 @@ def key_handoff() -> dict[str, Any]:
             "请勿把 Key 发到公开群聊或 Issue。"
         ),
         "agent_instructions": (
+            "Read jobagent workflow contract for the installed command/input schema. "
             "Show user_prompt in the user's language before ending the installation turn. "
             "Wait for the user's real Key or confirmation of local configuration. "
             "Never execute a placeholder Key. With a supplied Key, run init without echoing "
@@ -58,6 +59,8 @@ def installation_handoff() -> dict[str, Any]:
         "source": "local_configuration",
         "account_verified": False,
         "cli_command": [sys.executable, "-m", "jobagent"],
+        "workflow_contract_argv": [sys.executable, "-m", "jobagent", "workflow", "contract"],
+        "workflow_resume_argv": [sys.executable, "-m", "jobagent", "workflow", "next"],
     }
     try:
         key_present = bool(load_api_key())
@@ -88,6 +91,7 @@ def installation_handoff() -> dict[str, Any]:
             "已有配置尚未经过本次在线验证，无需先重新申请 Key。"
         ),
         "agent_instructions": (
+            "Read jobagent workflow contract for the installed command/input schema. "
             "Run jobagent doctor env now and relay its current setup or recovery handoff. "
             "Do not stop after installation or infer readiness from credential presence. "
             "An install request authorizes setup checks, not a new round, paid analysis, "
@@ -105,7 +109,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--installer", action="store_true")
     args = parser.parse_args()
-    handoff = installation_handoff()
+    from jobagent.infra.workflow_protocol import with_contract
+    handoff = with_contract(installation_handoff())
     if args.installer:
         from jobagent.infra.tls_support import transport_preflight
 
