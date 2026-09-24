@@ -373,6 +373,9 @@ def test_observation_limit_recovery_still_accepts_final_receipt(env):
     status = native.request_login("boss")
     assert status["next_suggested"].startswith("jobagent work submit")
     assert status["work"]["allowed_mode"] == "reconcile_only"
+    assert status["recovery"]["status"] == "receipt_only"
+    assert "after_confirmation_argv" not in status["recovery"]
+    assert native.status()["recovery"] == status["recovery"]
     assert "无需关闭其他窗口" in status["user_prompt"]
     submit(env, status["work"], _bind_receipt(status["work"]))
     assert rounds.ensure_current_round()["native_session"]["window_reference"] == "chrome-window-9"

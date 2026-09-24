@@ -126,6 +126,10 @@ def transport_preflight() -> dict[str, Any]:
         'user_prompt': ('HTTPS 连接检查通过，继续原操作。' if ok else
                         '客户端已安装，但 HTTPS 连接检查未通过。现有任务已保留，请按具体诊断处理证书或网络配置。'),
     }
+    if ok:
+        # The probe reads no business state and grants no browser permission.
+        # Recheck the account/workflow through a safe CLI entry after repair.
+        result['next_suggested'] = 'jobagent doctor env'
     if any(item.get('tls_diagnostic', {}).get('reason') == 'bundled_ca_unavailable' for item in results):
         import sys
         if sys.prefix != sys.base_prefix:

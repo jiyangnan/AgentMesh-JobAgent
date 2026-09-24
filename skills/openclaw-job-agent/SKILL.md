@@ -64,6 +64,21 @@ are informational. A quote does not debit or reserve credits; the paid business
 step checks the current account again. After a lost response, use
 `workflow status --operation-id ID`. An old native result is not a new permit.
 
+After a successful `doctor tls`, execute its safe `doctor env` continuation and
+read the preserved work's current permissions. Repairing HTTPS never resets
+observation attempts or authorizes a browser action. Product-managed public CA
+roots are loaded automatically; do not depend on pip's private certifi path.
+
+For an exhausted read-only collection, `work next`, `work status`,
+`workflow next`, and a rejected `work begin` expose the same `recovery` object.
+When `recovery.status=confirmation_required`, explain the declared recovery
+scope and obtain explicit user consent before using `after_confirmation_argv`.
+Existing consent for that exact scope remains valid. A `receipt_only` recovery
+status permits submission of complete evidence already obtained, not another UI
+observation, renewed budget or recovery task. Never infer recovery eligibility
+from `reconcile_only` and the attempt count alone; read the actual action,
+side-effect flag and current recovery contract.
+
 The input shape for a new request is `{"request_id":"...","criteria":{...}}`.
 Criteria can contain explicitly stated `target_roles`, `target_cities`, `salary`
 and `company`. Read the installed contract for supported fields; never add

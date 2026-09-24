@@ -191,3 +191,19 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 - **preserve**：API Key、账户归属、所有 BrowserWork/nonce/回执、简历、轮次、预览授权、审计及 Chrome profile 原样保留；无 schema 或状态迁移。
 - **additive**：安装环境增加 certifi 根证书依赖；只在进程内补充默认 TLS 信任，不写系统钥匙串或 shell 配置。用户显式 SSL_CERT_FILE/SSL_CERT_DIR 保持权威。安装器附加无账号 HTTPS 检查，普通 onboarding 仍离线。
 - **block**：过期、域名不符、未知颁发者或损坏自定义证书仍阻断，不因证书失败重试业务请求或使用离线账户证明。doctor tls 不更新程序、不迁移或写业务状态。
+
+### TLS and exhausted native observation continuity
+
+TLS repair preserves every work ID, nonce, account binding and observation count.
+A successful `doctor tls` offers `doctor env` as a safe continuation, without
+accessing business state during the TLS probe itself. The original task's actual
+permissions remain authoritative after that check.
+
+Native responses add a `recovery` object for exhausted read-only tasks. This is
+an additive presentation contract, not a ledger migration or attempt reset.
+Eligible search-page collection exposes the existing explicitly confirmed
+`work recover` path consistently from next/status and rejected begin responses.
+Other exhausted tasks retain `receipt_only`; recovery tasks and delivery work
+cannot use this addition to obtain another execution budget. The last newly
+issued observation permit remains usable for that observation; later reads
+never reissue it.

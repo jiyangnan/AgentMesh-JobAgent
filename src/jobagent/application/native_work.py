@@ -281,7 +281,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     can_execute = bool(execution and work.get("execution_permitted"))
     # A read-only work that exhausted its observation attempts can no longer
     # begin; its only settlement is a final receipt or explicit cancellation.
-    observation_locked = bool(not work.get("side_effect")
+    observation_locked = bool(not work.get("side_effect") and not can_execute
                               and work.get("observation_attempts", 0) >= store.MAX_OBSERVATION_ATTEMPTS)
     reconcile = work.get("state") in {"intent_recorded", "reconcile_only"} and not can_execute
     if work.get("side_effect"):
@@ -312,6 +312,16 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                                if execution or observation_locked else "jobagent work status" if blocked
                                else f"jobagent work begin --work-id {work['work_id']}"),
             "workflow": rounds.round_status()}
+    if observation_locked:
+        response["recovery"] = {
+            "status": "receipt_only", "work_id": work["work_id"], "action": work["action"],
+            "reason": "observation_budget_exhausted", "automatic_retry_allowed": False,
+            "observation_attempts": work["observation_attempts"],
+            "observation_limit": store.MAX_OBSERVATION_ATTEMPTS,
+            "new_observation_permitted": False,
+            "existing_evidence_submission_allowed": True,
+            "instruction": "Submit only already observed complete evidence with the preserved nonce. TLS repair, next, status and repeated recover do not reset this budget. No new browser action is permitted without an explicit CLI grant.",
+        }
     if observation_locked and work["action"] == "collect_search_page" and not work["task"].get("delivery_source"):
         command = f"jobagent work recover --work-id {work['work_id']} --confirm-recover"
         response.update(recovery_command=command, next_suggested=command,
@@ -320,6 +330,10 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             cancel_command=f"jobagent work cancel --work-id {work['work_id']} --confirm-cancel",
             user_prompt="当前只读采集的观察次数已用完。是否恢复这项采集？恢复会取消当前失败任务并重新核验同一浏览器 profile 和账号，保留原轮次、请求及已采集岗位，不执行投递。请明确回复同意恢复；助手不得替你确认。",
             recovery_instructions="Do not submit invented completion or loop begin/next. Submit a final receipt only if actual complete evidence exists. Otherwise obtain explicit recovery confirmation once, then run recovery_command. Cancelling this read-only work does not require the old browser window to remain available.")
+        response["recovery"].update(status="confirmation_required", kind="read_only_collection",
+            confirmation_required=True,
+            after_confirmation_argv=["jobagent", "work", "recover", "--work-id", work["work_id"], "--confirm-recover"],
+            preserves=["round", "request", "discover", "completed_pages", "candidates", "profile", "platform_account"])
         if host_window_issue:
             response["user_prompt"] = (
                 "宿主暂时无法操作原窗口，或辅助功能信息与截图未能对应。请先将原来的 Chrome 窗口前置并保持可见一次，完成后回复“已前置”。"
@@ -655,7 +669,16 @@ def begin(work_id: str) -> dict[str, Any]:
                 return {"ok": True, "event": "browser_work_wait", "retryable": True,
                         "requires_user_action": False, "wait_seconds": round(remaining, 3),
                         "request_preserved": True, "next_suggested": f"jobagent work begin --work-id {work_id}"}
-    return present(store.begin_work(work_id, binding), execution=True)
+    try:
+        issued = store.begin_work(work_id, binding)
+    except store.BrowserWorkError as exc:
+        if exc.payload.get("error") == "browser_work_observation_limit":
+            # The rejected begin must expose the same recovery as next/status.
+            # Presentation grants no permission and never changes the ledger.
+            exc.payload = {**exc.payload, **present(work), "ok": False,
+                           "error": "browser_work_observation_limit", "work_id": work_id}
+        raise
+    return present(issued, execution=True)
 
 
 def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str, Any]) -> None:
@@ -1193,7 +1216,8 @@ def status() -> dict[str, Any]:
     if pending_recovery:
         return present(pending_recovery)
     blocked = next((w for w in works if w["state"] != "closed"
-                    and (w.get("result") or {}).get("requires_technical_recovery")), None)
+                    and ((w.get("result") or {}).get("requires_technical_recovery")
+                         or (not w.get("side_effect") and w.get("observation_attempts", 0) >= store.MAX_OBSERVATION_ATTEMPTS))), None)
     if blocked:
         # Pure presentation: status must expose the technical stop, not send
         # the host back around next -> status without explaining the boundary.

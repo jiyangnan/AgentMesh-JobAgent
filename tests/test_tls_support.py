@@ -148,6 +148,9 @@ def test_read_only_transport_probe_uses_no_credentials_and_preserves_state(monke
         assert callable(probe), 'installation needs a bounded read-only transport preflight'
         result = probe()
         assert result['ok'] is True and result['account_verified'] is False
+        assert result['next_suggested'] == 'jobagent doctor env'
+        from jobagent.infra.workflow_protocol import with_contract
+        assert with_contract(result)['action'] == {'type': 'run', 'argv': ['jobagent', 'doctor', 'env']}
         assert len(seen) == 2 and all(auth is None for _, auth in seen)
         assert before == {p: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
         assert 'secret-must-not-be-sent' not in json.dumps(result)

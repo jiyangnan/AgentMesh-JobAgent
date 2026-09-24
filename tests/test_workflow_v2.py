@@ -160,9 +160,9 @@ def test_workflow_dispatches_tls_recovery_before_resuming_doctor(isolated, monke
     recovery = flow.next_action()["action"]
     assert recovery["business_argv"] == ["jobagent", "doctor", "tls"]
     calls = []
-    monkeypatch.setattr(tls_support, "transport_preflight", lambda: calls.append(1) or {
-        "ok": True, "event": "tls_ready", "next_suggested": "jobagent doctor env"})
+    monkeypatch.setattr(tls_support, "_probe", lambda service, base: calls.append(service) or {
+        "service": service, "ok": True, "tls_verified": True})
     action = cli.build_parser().parse_args(recovery["argv"][1:])
-    assert flow.advance(action.action_id, action.expected_revision)["event"] == "tls_ready"
-    assert calls == [1]
+    assert flow.advance(action.action_id, action.expected_revision)["event"] == "tls_preflight"
+    assert sorted(calls) == ["agentmesh_cloud", "agentmesh_core"]
     assert flow.next_action()["action"]["business_argv"] == ["jobagent", "doctor", "env"]

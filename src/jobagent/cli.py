@@ -613,6 +613,14 @@ def _doctor_env() -> dict[str, Any]:
     from jobagent.infra.rounds import round_status
 
     workflow = round_status() if local_state.get("ready") else None
+    pending_native_work = False
+    if workflow and workflow.get("round_id"):
+        from jobagent.infra.account_state import current_account_ref
+        from jobagent.infra.browser_work import list_work
+        account_ref = current_account_ref()
+        if account_ref:
+            pending_native_work = any(work["state"] != "closed" for work in list_work(
+                {"account_ref": account_ref, "round_id": workflow["round_id"]}))
     blocked_by: list[str] = []
     if not environment_healthy:
         blocked_by.append("environment")
@@ -630,6 +638,8 @@ def _doctor_env() -> dict[str, Any]:
         next_suggested = "https://agentmesh360.com/app/?lang=zh-CN#pricing"
     elif not access.get("usable"):
         next_suggested = "jobagent doctor env"
+    elif pending_native_work:
+        next_suggested = "jobagent work next"
     elif not profile_exists:
         next_suggested = "jobagent resume status"
     else:
@@ -694,6 +704,11 @@ def _doctor_env() -> dict[str, Any]:
             "账户已连接，但暂时无法确认可用额度。当前结果不代表额度不足；"
             "恢复后运行 jobagent doctor env 继续检查。"
         )
+    elif environment_healthy and local_state.get("ready") and access.get("usable") and pending_native_work:
+        payload["onboarding"] = {"stage": "preserved_work_pending"}
+        payload["requires_user_action"] = False
+        payload["request_preserved"] = True
+        payload["message"] = "连接和账户检查通过，继续读取原任务的当前许可或恢复要求；观察次数及投递权限保持原状。"
     elif environment_healthy and local_state.get("ready") and access.get("usable") and not profile_exists:
         payload["onboarding"] = {"stage": "resume_check_required", "workbench_url": WORKBENCH_URL}
         payload["requires_user_action"] = False

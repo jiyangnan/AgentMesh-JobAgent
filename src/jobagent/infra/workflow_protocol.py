@@ -133,6 +133,9 @@ def with_contract(payload: Any) -> Any:
         current.update(type="done", scope="round" if workflow.get("workflow_complete") else payload.get("scope", "command"))
     elif action["type"] == "native_work":
         current.update(binding_field="work.binding", nonce_field="work.nonce")
+    if payload.get("recovery_requires_confirmation"):
+        current.update(confirmation_required=True, recovery_field="recovery",
+                       automatic_continuation=False)
     return {**payload, "action": payload.get("action") or current, "agent_action": {
         "protocol": PROTOCOL, "protocol_version": 1,
         "state": (payload.get("onboarding") or {}).get("stage") or interaction.get("kind")
