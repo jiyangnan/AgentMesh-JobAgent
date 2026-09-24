@@ -79,7 +79,10 @@ def _probe(service: str, base: str) -> dict[str, Any]:
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
             return {'service': service, 'ok': False, 'error': 'https_endpoint_required'}
         request = urllib.request.Request(base.rstrip('/') + '/v1/health', headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(request, timeout=5, context=verified_context()) as response:
+        # Public health endpoints can take several seconds on a healthy route.
+        # Both probes run in parallel; retain a bounded wait without mistaking
+        # ordinary network latency for an unusable HTTPS connection.
+        with urllib.request.urlopen(request, timeout=15, context=verified_context()) as response:
             return {'service': service, 'ok': response.status == 200, 'http_status': response.status,
                     'tls_verified': urllib.parse.urlsplit(response.geturl()).scheme == 'https'}
     except urllib.error.HTTPError as exc:
