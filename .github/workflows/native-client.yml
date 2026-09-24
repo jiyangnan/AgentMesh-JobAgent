@@ -58,7 +58,7 @@ jobs:
       - name: Windows workflow and interaction contract tests
         if: runner.os == 'Windows'
         run: |
-          python -m pytest -q tests/test_workflow_protocol.py tests/test_workflow_v2.py tests/test_round_criteria.py tests/test_round_resume_binding.py tests/test_round_intent_interaction.py tests/test_resume_center_cli.py tests/test_delivery_confirmation_interaction.py
+          python -m pytest -q tests/test_workflow_protocol.py tests/test_workflow_v2.py tests/test_round_criteria.py tests/test_round_resume_binding.py tests/test_round_intent_interaction.py tests/test_resume_center_cli.py tests/test_delivery_confirmation_interaction.py tests/test_native_continuation.py tests/test_native_resume_choice.py
       - name: Validate Codex Skill metadata and source/package equivalence
         run: python scripts/ci/native_package_gate.py
       - name: Build and verify an isolated wheel installation

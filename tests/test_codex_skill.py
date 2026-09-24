@@ -76,7 +76,8 @@ def test_default_target_without_codex_home(monkeypatch, tmp_path):
     assert result["target"] == str(tmp_path / ".codex" / "skills" / "codex-job-agent")
 
 
-@pytest.mark.parametrize("contents", [None, b"User's custom skill", codex_skill._bundle()["SKILL.md"]])
+@pytest.mark.parametrize("contents", [None, b"User's custom skill", codex_skill._bundle()["SKILL.md"]],
+                         ids=["empty-directory", "custom-skill", "unmanaged-bundle"])
 def test_existing_unmanaged_skill_is_never_adopted(contents, tmp_path):
     target = tmp_path / "custom"
     target.mkdir()
