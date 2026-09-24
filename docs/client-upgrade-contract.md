@@ -234,3 +234,18 @@ Other exhausted tasks retain `receipt_only`; recovery tasks and delivery work
 cannot use this addition to obtain another execution budget. The last newly
 issued observation permit remains usable for that observation; later reads
 never reissue it.
+
+### Boss message-center preflight
+
+New Boss greetings add a read-only `inspect_delivery` phase after communication
+opens, bound to the same signed list, job, account and browser. Only verified
+message-center evidence can complete that phase or a newly issued greeting.
+Detail popups and pending bubbles cannot prove delivery. Uncertain/unresolved
+receipts can still describe their actual official page without inventing success.
+
+Existing issued greeting work retains its original immutable task and nonce.
+Completed, unavailable and terminal unresolved sends never gain an extra preflight
+or write permission. Older completed rounds remain completed. There is no ledger
+migration, permission reset, replacement round or additional cloud charge.
+Reconciliation presentation explicitly gives read-only instructions without
+rewriting the persisted task.

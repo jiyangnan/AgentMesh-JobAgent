@@ -150,6 +150,11 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
                 attachment_selection_verified="boolean true only after actual pre-submit selection inspection")
             success.update(submission_mode=task["submission_mode"], attachment_reference=task["attachment_reference"],
                            attachment_selection_verified=True)
+    if task.get("conversation_surface") == "boss_message_center":
+        fields["page_url"] = "actual official HTTPS www.zhipin.com/web/geek/chat URL; detail popups do not satisfy success"
+        success["page_url"] = "https://www.zhipin.com/web/geek/chat"
+        if action == "inspect_delivery":
+            success.update(communication_state="open", conversation_job_verified=True)
     task["result_schema"] = {**task.get("result_schema", {}), "outcome": "success|uncertain|unresolved|unavailable",
         "evidence": fields,
         "outcome_rules": {
@@ -310,6 +315,12 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
             "execute_once" if can_execute else "observe")
     else:
         work["allowed_mode"] = "reconcile_only" if observation_locked else "observe"
+    if work.get("side_effect") and work["allowed_mode"] == "reconcile_only":
+        task["instruction"] = (
+            "Read-only reconciliation of the existing action. Inspect this exact job's official "
+            "conversation/application history and report the actual receipt. Do not type a message, "
+            "click communicate/send/apply, upload a resume, or repeat the action. "
+            "A missing or pending receipt remains uncertain/unresolved; it is never permission to retry.")
     result = work.get("result") or {}
     paused = bool(result.get("requires_user_action")) and not execution
     host_window_issue = native_window.host_window_issue(result) if paused else None
@@ -728,6 +739,10 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
         return
     if result["outcome"] != "success":
         _error("native_outcome_invalid", "Unsupported delivery outcome.")
+    if work["task"].get("conversation_surface") == "boss_message_center":
+        page = urlsplit(str(e.get("page_url") or ""))
+        if page.hostname != "www.zhipin.com" or page.path.rstrip("/") != "/web/geek/chat":
+            _error("native_message_center_required", "Verify the exact job's existing conversation in the official Boss message center; a detail popup is insufficient. Do not repeat an attempted send.")
     action = work["action"]
     if action == "inspect_delivery":
         if e.get("history_checked") is not True or e.get("login_state") != "authenticated":
@@ -1111,15 +1126,22 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         resume_done = e.get("resume_state") == "sent"
         greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"}) if needs_greeting else False
         communication_done = e.get("communication_state") == "open" or any(w["state"] == "closed" and w["result"].get("outcome") == "success" and w["result"].get("evidence", {}).get("communication_state") == "open" for w in own)
+        # Existing send work keeps its original immutable contract, including
+        # terminal unresolved results. This gate can never reopen an old send.
+        boss_message_preflight = platform == "boss" and communication_done and not greeting_done and not any(
+            w["action"] == "send_greeting" for w in own)
         # Liepin exposes its resume control inside the conversation. Opening it
         # may itself emit a default greeting or a resume: inspect those effects
         # before issuing a separate resume permission, including on old rounds.
-        if platform == "liepin" and communication_done:
+        if (platform == "liepin" and communication_done) or boss_message_preflight:
             post = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"
                          and w["task"].get("inspection_phase") == "after_communication"), None)
             if not post:
                 task.update(inspection_phase="after_communication",
                     instruction="Read the already open exact job-bound conversation, existing account resume choice and official application/history receipts. Do not click communicate, apply or send. Report whether opening the conversation already submitted the resume, and record default versus exact personalized outgoing text separately. Identify the actual resume choice before any submission; never infer it from an attachment filename or a default greeting.")
+                if platform == "boss":
+                    task.update(conversation_surface="boss_message_center",
+                        instruction="Read only: leave the job-detail popup, follow the official Messages entry to https://www.zhipin.com/web/geek/chat in the same task tab, and select the already established conversation. Verify the same account, recruiter, company and approved job against the detail route and conversation job card. Inspect existing history, recording default versus exact signed text separately. Do not click communicate again, type or send a message, submit a resume, or treat a detail popup as the message center. If identity or history is inconclusive, report the declared non-success branch.")
                 return present(store.ensure_work(action="inspect_delivery", task=task, binding=job_binding))
             if post["result"]["outcome"] != "success":
                 if post["result"]["outcome"] != "unavailable" and source.get("stop_on_failure", True):
@@ -1129,6 +1151,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
             resume_done = e.get("resume_state") == "sent"
             greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting")
                              and e.get("message_state") in {"sent", "delivered"})
+            if platform == "boss":
+                task["conversation_surface"] = "boss_message_center"
         steps = (["open_communication", "submit_resume", "send_greeting"] if platform == "liepin"
                  else (["submit_resume"] if needs_resume else []) + (["open_communication", "send_greeting"] if needs_greeting else []))
         terminal_problem = False
@@ -1171,6 +1195,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
                 "send_greeting": "In the verified job-bound conversation, send job.cloud_greeting exactly once without rewriting. Read the exact outgoing message and sent/delivered state. Do not send a default template or a second message if uncertain.",
             }
             task["instruction"] = instructions[action]
+            if platform == "boss" and action == "send_greeting":
+                task["instruction"] += " Use only the preflight-verified existing conversation in the official https://www.zhipin.com/web/geek/chat message center. Reverify its account, company, recruiter and approved job before typing. Never send from a job-detail popup. A sending/pending bubble is not success; inspect persisted message-center history read-only and never resend after an uncertain click."
             if "submission_mode" in task:
                 task["instruction"] += " Reinspect the exact online resume and task.attachment_reference in the existing cancellable dialog before the final click. Select only the user's declared attachment; a platform default is not authorization. If the dialog was dismissed, reopen only its cancellable chooser and reverify the same target. If options, resume, account or job changed, stop and report; never substitute another attachment or click again after an uncertain result."
             task["required_evidence"] += {"submit_resume": ["resume_state=sent", "resume_reference", "receipt_kind", "receipt_checked"],

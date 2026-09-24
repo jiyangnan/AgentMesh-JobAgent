@@ -62,6 +62,16 @@ observation, renewed budget or recovery task. Never infer recovery eligibility
 from `reconcile_only` and the attempt count alone; read the actual action,
 side-effect flag and current recovery contract.
 
+Boss personalized delivery uses the official message center at
+`https://www.zhipin.com/web/geek/chat`. After opening communication once, follow
+the CLI's read-only conversation inspection before a new greeting permission.
+Select the existing conversation and verify the same account, recruiter, company
+and approved job; a job-detail popup is insufficient. Send only the exact signed
+text once from that verified message center. A pending/sending bubble is not a
+receipt: inspect persistent history read-only, then report uncertain/unresolved
+if delivery cannot be verified. Never resend a terminal unresolved job. Existing
+issued work keeps its original contract and cannot gain a new send permission.
+
 Liepin delivery opens the approved conversation before submitting a resume.
 Follow the CLI's subsequent read-only conversation inspection: a platform default
 greeting and an actual resume receipt are separate facts. Never submit a resume
@@ -620,6 +630,16 @@ jobagent boss audit
 ```
 
 After audit, inspect `workflow`. When it points to `jobagent liepin login --check`, continue immediately unless user intervention is required.
+
+Boss personalized delivery uses the official message center at
+`https://www.zhipin.com/web/geek/chat`. After opening communication once, follow
+the CLI's read-only conversation inspection before a new greeting permission.
+Select the existing conversation and verify the same account, recruiter, company
+and approved job; a job-detail popup is insufficient. Send only the exact signed
+text once from that verified message center. A pending/sending bubble is not a
+receipt: inspect persistent history read-only, then report uncertain/unresolved
+if delivery cannot be verified. Never resend a terminal unresolved job. Existing
+issued work keeps its original contract and cannot gain a new send permission.
 
 The send command rechecks local delivery history. A stale or edited review file must not be used to contact a previously delivered Boss job again. If Boss automatically sends its own default introduction while opening a new conversation, that event alone is not successful personalized delivery; the CLI must continue and verify the reviewed greeting itself.
 

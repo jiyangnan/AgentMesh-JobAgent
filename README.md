@@ -306,6 +306,8 @@ jobagent boss greet send --input <review_file> --preview-id <preview_id> --autho
 jobagent boss audit
 ```
 
+Boss requires a read-only check of the existing job conversation in the official message center before issuing a new personalized-send permission. New personalized greetings are sent from that verified message center; pending messages require read-only receipt checks and are never automatically resent.
+
 Boss uses a personalized greeting. `greet preview` shows the signed decision and greeting before any real send. A platform-generated default introduction may establish the conversation, but it does not count as delivery until the reviewed personalized greeting is also verified in the chat.
 
 ### 猎聘
