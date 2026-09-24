@@ -90,7 +90,7 @@ def test_contract_version_hashes_and_complete_instructions_match(source_tree):
     expected = gate.validate_sources(source_tree)
     contract = {
         **expected, "ok": True, "event": "codex_skill_contract", "skill_name": "codex-job-agent",
-        "protocol": "jobagent.browser_work", "protocol_version": 1, "next_suggested": "jobagent work next",
+        "protocol": "jobagent.browser_work", "protocol_version": 1, "next_suggested": "jobagent workflow next",
     }
     gate.validate_contract(contract, expected)
     for key, value in (("client_version", "0.0.0"), ("instructions", "truncated"), ("file_sha256", {}), ("protocol_version", True)):
@@ -98,6 +98,11 @@ def test_contract_version_hashes_and_complete_instructions_match(source_tree):
         broken[key] = value
         with pytest.raises(ValueError):
             gate.validate_contract(broken, expected)
+
+
+def test_gate_validates_actual_packaged_contract():
+    from jobagent.infra.codex_skill import skill_contract
+    gate.validate_contract(skill_contract(), gate.validate_sources(ROOT))
 
 
 def test_isolation_replaces_all_homes_and_drops_runtime_credentials(tmp_path):

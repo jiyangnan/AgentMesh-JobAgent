@@ -57,11 +57,13 @@ def test_install_is_idempotent_and_does_not_touch_business_state(monkeypatch, tm
     target = tmp_path / "codex" / "skills" / "codex-job-agent"
     assert first["ok"] and first["status"] == "installed"
     assert first["target"] == str(target)
+    assert first["next_suggested"] == "jobagent onboarding"
     before = snapshot(tmp_path)
     mtimes = {path: path.stat().st_mtime_ns for path in target.rglob("*") if path.is_file()}
     second = codex_skill.install_skill()
     assert second["ok"] and second["status"] == "current"
     assert second["updated_files"] == []
+    assert second["next_suggested"] == "jobagent onboarding"
     assert snapshot(tmp_path) == before
     assert {path: path.stat().st_mtime_ns for path in mtimes} == mtimes
 

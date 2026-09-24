@@ -146,7 +146,7 @@ def validate_contract(contract: dict, expected: dict) -> None:
     require(contract.get("protocol") == "jobagent.browser_work" and type(contract.get("protocol_version")) is int and contract["protocol_version"] == 1, "unsupported browser work contract")
     for key in ("client_version", "instructions", "file_sha256"):
         require(contract.get(key) == expected[key], f"installed contract mismatch: {key}")
-    require(contract.get("next_suggested") == "jobagent work next", "unexpected contract continuation")
+    require(contract.get("next_suggested") == "jobagent workflow next", "unexpected contract continuation")
 
 
 def smoke_wheel(wheel: Path, expected: dict) -> None:
@@ -179,11 +179,13 @@ def smoke_wheel(wheel: Path, expected: dict) -> None:
         validate_contract(json.loads(module("jobagent.infra.codex_skill", "contract")), expected)
         first = json.loads(module("jobagent.infra.codex_skill", "install"))
         require(first.get("ok") is True and first.get("status") == "installed", "first temporary Codex install failed")
+        require(first.get("next_suggested") == "jobagent onboarding", "Skill installation missed the setup handoff")
         target = directory / "codex/skills" / SKILL_NAME
         require(Path(first["target"]) == target, "Skill escaped the temporary Codex home")
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in target.rglob("*") if path.is_file()}
         second = json.loads(module("jobagent.infra.codex_skill", "install"))
         require(second.get("ok") is True and second.get("status") == "current", "second Codex install is not idempotent")
+        require(second.get("next_suggested") == "jobagent onboarding", "Current Skill installation missed the setup handoff")
         require(before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in target.rglob("*") if path.is_file()}, "idempotent installation rewrote files")
         custom = directory / "custom-skill"
         custom.mkdir()

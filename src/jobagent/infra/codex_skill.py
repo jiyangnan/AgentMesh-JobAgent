@@ -173,7 +173,7 @@ def _install_locked(target: Path, files: dict[str, bytes]) -> dict[str, Any]:
         "status": "installed" if old is None else "updated" if changed or old != marker_data else "current",
         "updated_files": changed,
         "conflicts": [],
-        "next_suggested": "jobagent work next",
+        "next_suggested": "jobagent onboarding",
     }
 
 
