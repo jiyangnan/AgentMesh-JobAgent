@@ -156,6 +156,9 @@ def test_discover_rejects_incompatible_profile_before_cloud(tmp_path, monkeypatc
     }
     monkeypatch.setattr(application, "profile_path", lambda: tmp_path / "profile.json")
     monkeypatch.setattr(application, "load_json", lambda _path: old_profile)
+    monkeypatch.setattr(application.rounds, "ensure_current_round", lambda: {
+        "round_id": "classic-test-round", "status": "active", "platforms": {},
+    })
 
     def unexpected_cloud_call(**_kwargs):
         pytest.fail("incompatible profile reached the cloud")

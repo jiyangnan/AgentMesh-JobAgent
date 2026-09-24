@@ -241,7 +241,7 @@ def test_preflight_network_or_http_error_is_not_certificate_failure(monkeypatch,
     calls = []
 
     def urlopen(request, *, timeout, context):
-        assert timeout <= 5
+        assert timeout == 15
         assert request.get_method() == 'GET'
         assert request.get_header('Authorization') is None
         assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
