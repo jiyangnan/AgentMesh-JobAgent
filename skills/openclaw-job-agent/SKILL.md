@@ -210,7 +210,14 @@ path when required; do not repeat `work begin` for that saved recovery receipt.
 
 ## Install and Profile
 
-macOS/Linux:
+The `jobagent` CLI is open source under the Apache-2.0 license: <https://github.com/jiyangnan/AgentMesh-JobAgent>. The installers are [`scripts/install.sh`](https://github.com/jiyangnan/AgentMesh-JobAgent/blob/main/scripts/install.sh) and [`scripts/install.ps1`](https://github.com/jiyangnan/AgentMesh-JobAgent/blob/main/scripts/install.ps1) in that repository. They check prerequisites, clone the public repository into a local directory, create an isolated virtual environment and install the CLI from that checkout. Later managed updates apply only a release whose signature, tag, commit and archive hash verify. If the user prefers to review the installer first, download it, let them read it, then run the local copy:
+
+```bash
+curl -fsSL -o jobagent-install.sh https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.sh
+bash jobagent-install.sh
+```
+
+One-line install, macOS/Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jiyangnan/AgentMesh-JobAgent/main/scripts/install.sh | bash
