@@ -192,6 +192,25 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 - **additive**：安装环境增加 certifi 根证书依赖；只在进程内补充默认 TLS 信任，不写系统钥匙串或 shell 配置。用户显式 SSL_CERT_FILE/SSL_CERT_DIR 保持权威。安装器附加无账号 HTTPS 检查，普通 onboarding 仍离线。
 - **block**：过期、域名不符、未知颁发者或损坏自定义证书仍阻断，不因证书失败重试业务请求或使用离线账户证明。doctor tls 不更新程序、不迁移或写业务状态。
 
+### Liepin prerequisite continuation
+
+The native Liepin delivery order is inspection → communication → read-only
+conversation inspection → resume submission if needed → personalized greeting.
+Existing successful receipts remain authoritative and are never clicked again.
+The additional conversation inspection detects a resume already sent by the
+platform's communication action; a default greeting remains a separate fact.
+
+`work continue --work-id ID --result FILE` is an additive recovery command for
+the old resume-before-communication ordering only. It accepts the original nonce
+and full binding, revalidates the unchanged signed list/authorization/session,
+and requires every preserved receipt to explicitly attest no attempted external
+action and the missing communication prerequisite. Unknown, attempted, conflicting
+or terminal delivery outcomes cannot use it. A validated `not_attempted` receipt
+closes the original intent without deleting its history, then the scheduler offers
+the missing step. It does not reset any nonce, observation count, account or round.
+An identical receipt replay repairs a lost response or interruption after commit.
+There is no ledger schema migration and no expansion of collection `work recover`.
+
 ### TLS and exhausted native observation continuity
 
 TLS repair preserves every work ID, nonce, account binding and observation count.

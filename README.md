@@ -6,6 +6,11 @@ AgentMesh360 Job Agent is an Agent-native job-search product. Its open-source CL
 
 The cloud turns the resume into a recruiter-side 36-dimension candidate profile, creates profile-driven search plans, classifies every deduplicated job into signed `selected / review / rejected` results with reasons and risks, and generates evidence-grounded personalized greetings where the platform supports them. The CLI verifies those official results before delivery.
 
+Liepin opens the approved conversation before submitting a resume, then checks
+the actual resume receipt and personalized message separately. A preserved
+pre-action ordering failure follows the CLI's offered `work continue` contract;
+an uncertain send remains read-only and is never clicked again.
+
 It supports four independent recruiting-platform workflows:
 
 1. Boss直聘

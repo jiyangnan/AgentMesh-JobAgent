@@ -138,10 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
     work_sub = work.add_subparsers(dest="work_command", required=True)
     for name in ("next", "status", "contract"):
         work_sub.add_parser(name)
-    for name in ("begin", "submit", "cancel", "recover"):
+    for name in ("begin", "submit", "cancel", "recover", "continue"):
         action = work_sub.add_parser(name)
         action.add_argument("--work-id", required=True)
-        if name == "submit":
+        if name in {"submit", "continue"}:
             action.add_argument("--result", required=True, help="Local typed UI-observation JSON")
         if name == "cancel":
             action.add_argument("--confirm-cancel", action="store_true")
@@ -1635,6 +1635,9 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return native_work.submit(args.work_id, args.result)
         if args.work_command == "recover":
             return native_work.recover(args.work_id, confirmed=args.confirm_recover)
+        if args.work_command == "continue":
+            from jobagent.application.native_continuation import continue_unattempted
+            return continue_unattempted(args.work_id, args.result)
         return native_work.cancel(args.work_id, confirmed=args.confirm_cancel)
     if args.command == "browser":
         return native_work.request_login(args.platform, diagnose=True)

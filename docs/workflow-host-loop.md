@@ -58,6 +58,21 @@ observation, renewed budget or recovery task. Never infer recovery eligibility
 from `reconcile_only` and the attempt count alone; read the actual action,
 side-effect flag and current recovery contract.
 
+Liepin delivery opens the approved conversation before submitting a resume.
+Follow the CLI's subsequent read-only conversation inspection: a platform default
+greeting and an actual resume receipt are separate facts. Never submit a resume
+again when the conversation already proves it was sent, and never count the
+default greeting as the signed personalized message.
+
+An older Liepin task may offer `continuation.kind=liepin_unattempted_prerequisite`.
+Use its exact `work continue` template and receipt schema only when the preserved
+observations explicitly establish that no external action was attempted and the
+conversation prerequisite was missing. Unknown or attempted actions cannot use
+this path. It preserves the list and authorization, records `not_attempted`, then
+offers the missing step; it does not itself permit a browser action. Preserve and
+replay an identical receipt after a lost response. Never reset the old nonce or
+observation count, cancel delivery, or start a replacement round to unblock it.
+
 The input shape for a new request is `{"request_id":"...","criteria":{...}}`.
 Criteria can contain explicitly stated `target_roles`, `target_cities`, `salary`
 and `company`. Read the installed contract for supported fields; never add

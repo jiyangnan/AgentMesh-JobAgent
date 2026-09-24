@@ -299,6 +299,15 @@ def list_account_work(account_ref: str) -> list[dict]:
         return [work for work in works if work["binding"].get("account_ref") == account_ref]
 
 
+def work_receipts(work_id: str, binding: dict) -> list[dict]:
+    """Read immutable receipts only after verifying the work's owner/context."""
+    with _transaction() as conn:
+        _get(conn, work_id, _binding(binding))
+        return [json.loads(row["result_json"]) for row in conn.execute(
+            "SELECT result_json FROM receipts WHERE work_id = ? ORDER BY received_at, receipt_id",
+            (work_id,))]
+
+
 def pending_work(binding) -> dict | None:
     """Recover current work; an issued intent never implies a new permission."""
     binding = _binding(binding)

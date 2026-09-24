@@ -63,9 +63,9 @@ def _record_result(value, args, result):
         elif operation["status"] == "claimed" and (
             (_read_only(operation["argv"]) and operation["argv"][1] == args.command)
             or (operation["argv"][1] in {"work", "browser", "boss", "liepin", "zhilian", "51job"}
-                and args.command == "work" and args.work_command in {"status", "next", "submit"}
+                and args.command == "work" and args.work_command in {"status", "next", "submit", "continue"}
                 and (result.get("work", {}).get("work_id") or any(result.get("work_counts", {}).values())
-                     or (args.work_command == "submit" and result.get("ok") is not False)))
+                     or (args.work_command in {"submit", "continue"} and result.get("ok") is not False)))
         ):
             # A recovered BrowserWork presentation can close this local dispatch
             # uncertainty. It does not declare the external action successful;

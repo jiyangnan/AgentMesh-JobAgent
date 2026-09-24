@@ -340,6 +340,12 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                   "\n本只读任务的观察次数已用完，前置窗口不会恢复观察额度。已有完整真实证据时可按 completion_command 提交；"
                   "若还需新的观察或采集，必须先明确确认下面的只读恢复范围，不能自动恢复或重复 begin。\n"
                 + response["user_prompt"])
+    from jobagent.application.native_continuation import contract as continuation_contract
+    continuation = continuation_contract(work)
+    if continuation:
+        response["continuation"] = continuation
+        response["recovery_command"] = continuation["command_template"]
+        response["next_suggested"] = continuation["command_template"]
     return response
 
 
@@ -715,6 +721,9 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             _error("native_resume_state_unknown", "Use an uncertain/unresolved receipt until the existing application state is verified; do not submit again.")
         if platform in {"boss", "liepin"} and (e.get("communication_state") == "unknown" or e.get("message_state") == "unknown"):
             _error("native_message_state_unknown", "Use an uncertain/unresolved receipt while conversation/message delivery is unknown; do not send again.")
+        if work["task"].get("inspection_phase") == "after_communication" and (
+                e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True):
+            _error("native_conversation_unverified", "Inspect the already opened exact job-bound conversation without another communication click.")
     elif action == "open_communication":
         if e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True:
             _error("native_conversation_unverified", "Verify the job-bound conversation; a default greeting is not personalized delivery.")
@@ -1047,8 +1056,10 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         own = [w for w in all_work if all(w["binding"].get(k) == v for k, v in job_binding.items())]
         previous = [w for w in all_work if w.get("side_effect") and w["binding"].get("platform") == platform
                     and w["binding"].get("job_id") == str(job["id"]) and w not in own]
-        inspection = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"), None)
+        inspection = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"
+                           and w["task"].get("inspection_phase") != "after_communication"), None)
         task = {"job": job, "session": session, "delivery_source": source,
+                "delivery_order_version": 2,
                 "required_evidence": ["job_id", "job_url", "title", "company", "page_url", "account_label", "window_reference", "profile_label", "observation", "observed_at"],
                 "result_schema": {"outcome": "success|uncertain|unresolved|unavailable",
                                   "evidence": {"source": "host_ui_observation", "receipt_checked": "boolean"}}}
@@ -1067,12 +1078,32 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         resume_done = e.get("resume_state") == "sent"
         greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"}) if needs_greeting else False
         communication_done = e.get("communication_state") == "open" or any(w["state"] == "closed" and w["result"].get("outcome") == "success" and w["result"].get("evidence", {}).get("communication_state") == "open" for w in own)
-        steps = (["submit_resume"] if needs_resume else []) + (["open_communication", "send_greeting"] if needs_greeting else [])
+        # Liepin exposes its resume control inside the conversation. Opening it
+        # may itself emit a default greeting or a resume: inspect those effects
+        # before issuing a separate resume permission, including on old rounds.
+        if platform == "liepin" and communication_done:
+            post = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"
+                         and w["task"].get("inspection_phase") == "after_communication"), None)
+            if not post:
+                task.update(inspection_phase="after_communication",
+                    instruction="Read the already open exact job-bound conversation, existing account resume choice and official application/history receipts. Do not click communicate, apply or send. Report whether opening the conversation already submitted the resume, and record default versus exact personalized outgoing text separately. Identify the actual resume choice before any submission; never infer it from an attachment filename or a default greeting.")
+                return present(store.ensure_work(action="inspect_delivery", task=task, binding=job_binding))
+            if post["result"]["outcome"] != "success":
+                if post["result"]["outcome"] != "unavailable" and source.get("stop_on_failure", True):
+                    return _delivery_paused(platform)
+                continue
+            e = post["result"].get("evidence", {})
+            resume_done = e.get("resume_state") == "sent"
+            greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting")
+                             and e.get("message_state") in {"sent", "delivered"})
+        steps = (["open_communication", "submit_resume", "send_greeting"] if platform == "liepin"
+                 else (["submit_resume"] if needs_resume else []) + (["open_communication", "send_greeting"] if needs_greeting else []))
         terminal_problem = False
         for action in steps:
             if (action == "submit_resume" and resume_done) or (action == "send_greeting" and greeting_done) or (action == "open_communication" and (communication_done or greeting_done)):
                 continue
-            done = next((w for w in own if w["action"] == action and w["state"] == "closed"), None)
+            done = next((w for w in own if w["action"] == action and w["state"] == "closed"
+                         and w["result"].get("outcome") != "not_attempted"), None)
             if done:
                 if done["result"]["outcome"] != "success":
                     terminal_problem = True
@@ -1176,7 +1207,8 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
     for works in by_job.values():
         closed = [w for w in works if w["state"] == "closed"]
         observations = [w["result"].get("evidence", {}) for w in closed if w["result"].get("outcome") == "success"]
-        if any(w["action"] == "send_greeting" and w["result"].get("outcome") == "success" for w in closed) or any(e.get("existing_outgoing_text") == works[0]["task"]["job"].get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"} for e in observations if works[0]["task"]["job"].get("cloud_greeting")):
+        greeting_verified = any(w["action"] == "send_greeting" and w["result"].get("outcome") == "success" for w in closed) or any(e.get("existing_outgoing_text") == works[0]["task"]["job"].get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"} for e in observations if works[0]["task"]["job"].get("cloud_greeting"))
+        if greeting_verified:
             summary["greeting_sent"] += 1
         if any(e.get("resume_state") == "sent" for e in observations):
             summary["resume_submitted"] += 1
@@ -1184,7 +1216,12 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
             summary["unavailable"] += 1
         if any(w["result"].get("outcome") == "unresolved" for w in closed):
             summary["unresolved"] += 1
-        if any(w["state"] != "closed" for w in works):
+        resumed_unattempted = any(w["result"].get("outcome") == "not_attempted" for w in closed)
+        incomplete_continuation = resumed_unattempted and not (
+            any(e.get("resume_state") == "sent" for e in observations)
+            and greeting_verified)
+        terminal = any(w["result"].get("outcome") in {"unavailable", "unresolved"} for w in closed)
+        if any(w["state"] != "closed" for w in works) or (incomplete_continuation and not terminal):
             summary["pending"] += 1
     workflow = rounds.complete_platform_after_audit(platform) if complete and not summary["pending"] else rounds.round_status()
     _record_completed_native_delivery_fact(platform, by_job, completed=bool(

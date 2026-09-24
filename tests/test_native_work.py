@@ -69,6 +69,8 @@ def observation(work, **changes):
             "resume_state": "not_sent", "resume_reference": "Synthetic online resume", "communication_state": "not_open",
             "conversation_job_verified": True, "message_state": "not_sent"}}
     result["evidence"].update(changes)
+    if work["task"].get("inspection_phase") == "after_communication":
+        result["evidence"]["communication_state"] = "open"
     if work["action"] == "submit_resume":
         result["evidence"].update(resume_state="sent", receipt_kind="application_history")
     elif work["action"] == "open_communication":
@@ -88,7 +90,7 @@ def submit(env, work, result=None):
 
 @pytest.mark.parametrize("platform,actions", [
     ("boss", ["inspect_delivery", "open_communication", "send_greeting"]),
-    ("liepin", ["inspect_delivery", "submit_resume", "open_communication", "send_greeting"]),
+    ("liepin", ["inspect_delivery", "open_communication", "inspect_delivery", "submit_resume", "send_greeting"]),
     ("zhilian", ["inspect_delivery", "submit_resume"]),
     ("51job", ["inspect_delivery", "submit_resume"]),
 ])
@@ -134,6 +136,9 @@ def test_resume_does_not_count_as_greeting_or_cause_duplicate_communication(env)
     response = submit(env, work)
     work = native.begin(response["work"]["work_id"])["work"]
     response = submit(env, work, observation(work, communication_state="open"))
+    assert response["work"]["task"]["inspection_phase"] == "after_communication"
+    work = native.begin(response["work"]["work_id"])["work"]
+    response = submit(env, work, observation(work, resume_state="sent", receipt_kind="resume_card"))
     assert response["work"]["action"] == "send_greeting"
     assert native.audit("liepin", complete=False)["summary"]["greeting_sent"] == 0
 
