@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.18] - 2026-10-07
+
+### Fixed
+
+- Align Agent onboarding and Skill guidance with the 3-day welcome pass and 30 shared credits after account verification and first successful sign-in. Preserve legacy trial access and credit checks.
+- Clarify mainland China and overseas Standard/Pro Pass and add-on prices.
+
 ## [0.6.17] - 2026-09-24
 
 - Add cloud greeting refresh for unapproved Boss/Liepin lists, preserving the original search, explicit choices and signed history with no additional credits. Changed greetings require a new complete preview and confirmation; attempted or unresolved delivery cannot be reopened.
