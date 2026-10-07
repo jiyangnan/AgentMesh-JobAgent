@@ -1072,7 +1072,7 @@ def test_public_agent_docs_forbid_batch_login_and_require_vertical_completion():
         assert "complete its audit before logging in to the next platform" in text
 
 
-def test_public_agent_docs_encode_zero_credit_signup_and_legacy_trial_compatibility():
+def test_public_agent_docs_encode_welcome_credits_and_legacy_trial_compatibility():
     root = Path(__file__).resolve().parents[1]
     agent_contract = (root / "AGENTS.md").read_text(encoding="utf-8")
     docs = [
@@ -1084,7 +1084,10 @@ def test_public_agent_docs_encode_zero_credit_signup_and_legacy_trial_compatibil
 
     for text in docs:
         assert "active monthly pass and available credits" not in text
-        assert "new accounts start with zero cloud credits" in text.lower()
+        assert "new accounts start with zero cloud credits" not in text.lower()
+        assert "3-day welcome pass with 30 shared credits" in text
+        assert "after account verification and the first successful sign-in" in text
+        assert "no card required, nothing renews automatically" in text
         assert "50 shared trial credits" not in text
         assert "verified signup trial" not in text.lower()
     for skill in docs[2:]:
@@ -1095,7 +1098,8 @@ def test_public_agent_docs_encode_zero_credit_signup_and_legacy_trial_compatibil
         assert "paid_pass_required=true" in skill
         assert "无需购买通行证" in skill
         assert "此前发放" in skill
-    assert "New accounts start with zero cloud credits" in agent_contract
+    assert "New accounts start with zero cloud credits" not in agent_contract
+    assert "3-day welcome pass with 30 shared credits" in agent_contract
     assert "50 shared trial credits" not in agent_contract
     assert "jobagent doctor env" in agent_contract
     assert "top-level `next_suggested`" in agent_contract
