@@ -703,6 +703,9 @@ def round_status() -> dict[str, Any]:
         next_suggested = _freshness_next_suggested(freshness, platforms) or next_suggested
     if next_suggested is None:
         next_suggested = _freshness_next_suggested(freshness, platforms)
+    if any(record.get("status") in {"awaiting", "paused"}
+           for record in state.get("native_delivery_followups", {}).values()):
+        next_suggested = "jobagent work next"
     return {
         "round_id": state.get("round_id"),
         "status": "completed" if workflow_complete else "active",

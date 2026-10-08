@@ -104,6 +104,10 @@ def _source(value):
         pending_work = next((w for w in works if w["state"] != "closed"), None)
         if pending_work:
             return native_work.present(pending_work, execution=False)
+    from jobagent.application.native_delivery_followup import pending as delivery_followup_pending
+    followup = delivery_followup_pending()
+    if followup:
+        return followup
     direction = direction_pending()
     if direction:
         return direction
