@@ -144,10 +144,18 @@ def _source(value):
             return {"ok": True, "next_suggested": f"jobagent round update --input {shlex.quote(str(path))} --expected-revision 0"}
     if active.get("status") == "completed" and value.get("new_round_requested_after") == active.get("round_id"):
         return {"ok": True, "next_suggested": "jobagent round start"}
+    workflow = rounds.round_status()
+    platform = workflow.get("current_platform")
+    platform_state = active.get("platforms", {}).get(platform, {})
+    if platform_state.get("native_delivery") and platform_state.get("status") not in {"sent", "completed"}:
+        # Resume the retained authorized scheduler, including closed preflights
+        # whose next prerequisite needs a new read-only observation. A generic
+        # apply/send command cannot reconstruct its preview/authorization IDs.
+        return {"ok": True, "request_preserved": True, "workflow": workflow,
+                "next_suggested": "jobagent work next"}
     previous = value.get("last_result")
     if previous and value.get("snapshot") == _snapshot() and previous.get("next_suggested") != "jobagent workflow next":
         return _safe_result(previous)
-    workflow = rounds.round_status()
     if workflow.get("status") == "active" or workflow.get("workflow_complete"):
         return {"ok": True, "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
     if not value.get("doctor", {}).get("checked") or not value["doctor"].get("ready"):

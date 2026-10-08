@@ -14,7 +14,7 @@ from jobagent.infra import browser_work as store, rounds, state
 COMMON_EVIDENCE = {"source", "observed_at", "observation"}
 SESSION_EVIDENCE = {"window_reference", "profile_label"}
 JOB_EVIDENCE = {"job_id", "job_url", "title", "company"}
-DELIVERY_ACTIONS = ("inspect_delivery", "open_communication", "send_greeting", "submit_resume")
+DELIVERY_ACTIONS = ("inspect_delivery", "inspect_resume_selection", "open_communication", "send_greeting", "submit_resume")
 SUCCESS_FIELDS = {
     "inspect_delivery": {
         "history_checked", "login_state", "resume_state", "communication_state",
@@ -25,10 +25,12 @@ SUCCESS_FIELDS = {
     "send_greeting": {"outgoing_text", "message_state", "conversation_job_verified"},
     "submit_resume": {"resume_state", "resume_reference", "receipt_kind", "receipt_checked"},
 }
+SUCCESS_FIELDS["inspect_resume_selection"] = SUCCESS_FIELDS["inspect_delivery"] | {"resume_selection_verified", "submission_attempted"}
 EXAMPLE_FIELDS = {
     **SUCCESS_FIELDS,
     "inspect_delivery": SUCCESS_FIELDS["inspect_delivery"] - {"receipt_kind", "conversation_job_verified"},
     "open_communication": SUCCESS_FIELDS["open_communication"] - {"default_greeting_observed"},
+    "inspect_resume_selection": SUCCESS_FIELDS["inspect_resume_selection"] - {"receipt_kind"},
 }
 
 

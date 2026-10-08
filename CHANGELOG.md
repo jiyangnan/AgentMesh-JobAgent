@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.19] - 2026-10-08
+
+### Fixed
+
+- Recover a missing platform resume name from a closed delivery inspection through a new account- and job-bound read-only task, preserving accepted receipts and the original confirmed list and greetings.
+- Resume retained delivery through both work and workflow commands without reopening communication or repeating an attempted submission. Keep incomplete resume verification pending in audit.
+- Verify the original cloud-bound resume during upgrade checks instead of requesting another local analysis when the local profile is missing or outdated.
+
 ## [0.6.18] - 2026-10-07
 
 ### Fixed

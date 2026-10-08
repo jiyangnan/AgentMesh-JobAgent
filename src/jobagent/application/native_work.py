@@ -88,6 +88,10 @@ def _example(work: dict[str, Any]) -> dict[str, Any]:
                          "observation": "What the current UI actually shows"}}
 
 
+def _resume_reference(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 500
+
+
 def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
     """Expose the validator's receipt fields, including non-success branches."""
     if "delivery_source" not in task:
@@ -102,7 +106,7 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
         "unavailable_text": "non-empty observed notice; required only for outcome=unavailable"}
     action = work["action"]
     success = dict(identity)
-    if action == "inspect_delivery":
+    if action in {"inspect_delivery", "inspect_resume_selection"}:
         fields.update(history_checked="boolean; must be true for success", login_state="authenticated for success",
             resume_state="sent|not_sent|not_applicable|unknown; unknown requires uncertain/unresolved except Boss",
             communication_state="open|not_open|not_applicable|unknown; unknown requires uncertain/unresolved for Boss/Liepin",
@@ -119,6 +123,13 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
         if work["binding"]["platform"] in {"zhilian", "51job"}:
             success.update(communication_state="not_applicable")
             success.pop("message_state")
+        if action == "inspect_resume_selection":
+            fields.update(resume_reference="non-empty string (at most 500 characters); actual visible existing account resume name/reference, never a cloud profile name or attachment filename",
+                resume_selection_verified="boolean true; observed existing account resume without selecting or replacing it",
+                submission_attempted="boolean false; no recruiting action during this read-only check")
+            success.update(resume_selection_verified=True, submission_attempted=False)
+            if work["binding"]["platform"] == "liepin":
+                success.update(communication_state="open", conversation_job_verified=True)
     elif action == "open_communication":
         fields.update(communication_state="open for success", conversation_job_verified="boolean; must be true for success",
             default_greeting_observed="optional boolean; platform default text never proves personalized delivery")
@@ -744,7 +755,7 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
         if page.hostname != "www.zhipin.com" or page.path.rstrip("/") != "/web/geek/chat":
             _error("native_message_center_required", "Verify the exact job's existing conversation in the official Boss message center; a detail popup is insufficient. Do not repeat an attempted send.")
     action = work["action"]
-    if action == "inspect_delivery":
+    if action in {"inspect_delivery", "inspect_resume_selection"}:
         if e.get("history_checked") is not True or e.get("login_state") != "authenticated":
             _error("native_delivery_preflight_required", "Verify the active account and previous application/chat history first.")
         if e.get("resume_state") not in {"sent", "not_sent", "not_applicable", "unknown"} or e.get("communication_state") not in {"open", "not_open", "not_applicable", "unknown"}:
@@ -760,6 +771,16 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
         if work["task"].get("inspection_phase") == "after_communication" and (
                 e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True):
             _error("native_conversation_unverified", "Inspect the already opened exact job-bound conversation without another communication click.")
+        if action == "inspect_resume_selection":
+            if (not _resume_reference(e.get("resume_reference"))
+                    or e.get("resume_selection_verified") is not True
+                    or e.get("submission_attempted") is not False
+                    or e.get("resume_state") not in {"sent", "not_sent"}):
+                _error("native_resume_selection_unverified", "Read the actual existing account resume name without changing or submitting it; preserve this work until its evidence is verified.",
+                       work_id=work["work_id"], receipt_saved=False,
+                       next_suggested=f"jobagent work submit --work-id {work['work_id']} --result <result.json>")
+            if platform == "liepin" and (e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True):
+                _error("native_conversation_unverified", "Read the already established exact job conversation; never click communicate again.")
     elif action == "open_communication":
         if e.get("communication_state") != "open" or e.get("conversation_job_verified") is not True:
             _error("native_conversation_unverified", "Verify the job-bound conversation; a default greeting is not personalized delivery.")
@@ -1116,6 +1137,7 @@ def _delivery_next(platform: str) -> dict[str, Any]:
                         historical_action_requires_reconciliation=bool(previous or _legacy_history(platform, job["url"], job["id"])))
             task["required_evidence"] += ["history_checked", "login_state", "resume_state", "communication_state", "resume_reference (visible existing account resume; required before any resume submission)"]
             return present(store.ensure_work(action="inspect_delivery", task=task, binding=job_binding))
+        resume_inspection = inspection
         e = inspection["result"].get("evidence", {})
         if inspection["result"]["outcome"] != "success":
             if inspection["result"]["outcome"] != "unavailable" and source.get("stop_on_failure", True):
@@ -1147,12 +1169,26 @@ def _delivery_next(platform: str) -> dict[str, Any]:
                 if post["result"]["outcome"] != "unavailable" and source.get("stop_on_failure", True):
                     return _delivery_paused(platform)
                 continue
+            resume_inspection = post
             e = post["result"].get("evidence", {})
             resume_done = e.get("resume_state") == "sent"
             greeting_done = (e.get("existing_outgoing_text") == job.get("cloud_greeting")
                              and e.get("message_state") in {"sent", "delivered"})
             if platform == "boss":
                 task["conversation_surface"] = "boss_message_center"
+        selection_inspection = next((w for w in own if w["action"] == "inspect_resume_selection"
+                                     and w["state"] == "closed"), None)
+        if selection_inspection:
+            if selection_inspection["result"]["outcome"] != "success":
+                if source.get("stop_on_failure", True):
+                    return _delivery_paused(platform)
+                continue
+            # Additive evidence only: the accepted preflight/history receipt,
+            # authorization and attempted communication are never rewritten.
+            e = selection_inspection["result"]["evidence"]
+            resume_done = e.get("resume_state") == "sent"
+            greeting_done = bool(needs_greeting and e.get("existing_outgoing_text") == job.get("cloud_greeting")
+                                 and e.get("message_state") in {"sent", "delivered"})
         steps = (["open_communication", "submit_resume", "send_greeting"] if platform == "liepin"
                  else (["submit_resume"] if needs_resume else []) + (["open_communication", "send_greeting"] if needs_greeting else []))
         terminal_problem = False
@@ -1173,8 +1209,13 @@ def _delivery_next(platform: str) -> dict[str, Any]:
                 _error("native_previous_action_unresolved", "A previous action on this job needs read-only reconciliation; no new send permission was issued.", requires_user_action=True, next_suggested="jobagent work status")
             if action == "submit_resume" and e.get("resume_state") not in {"not_sent", "sent"}:
                 _error("native_resume_state_unknown", "The account resume/application state is unknown; do not submit again.", requires_user_action=True)
-            if action == "submit_resume" and not str(e.get("resume_reference") or "").strip():
-                _error("native_resume_selection_unverified", "Identify the existing account resume in read-only preflight before submitting.", requires_user_action=True)
+            if action == "submit_resume" and not _resume_reference(e.get("resume_reference")):
+                task.update(resume_selection_source=resume_inspection["work_id"],
+                    instruction="Read only: verify this same job and account, inspect the existing account's online resume name and current official application/conversation history. Use visible account/resume navigation if needed, then return to the already established job conversation. Do not click communicate, apply, send or final submit, change or select a resume, upload/replace a file, or infer the name from the cloud profile, attachment filename or default greeting. Report the actual existing account resume reference and independent current resume/message states. If the name or identity cannot be observed, use the pause/technical schema; never invent success.",
+                    allowed_actions=["inspect_existing_job_conversation", "inspect_account_resume", "navigate_visible_account_resume_entry", "return_to_existing_conversation"],
+                    forbidden_actions=["open_communication", "apply", "submit_resume", "send_greeting", "change_resume", "upload_resume"],
+                    required_evidence=task["required_evidence"] + ["history_checked", "login_state", "resume_state", "communication_state", "resume_reference", "resume_selection_verified=true", "submission_attempted=false"])
+                return present(store.ensure_work(action="inspect_resume_selection", task=task, binding=job_binding))
             task["resume_reference"] = e.get("resume_reference")
             if platform == "liepin" and action == "submit_resume":
                 prepared = next((w for w in own if w["action"] == "prepare_resume" and w["state"] == "closed"), None)
@@ -1290,10 +1331,16 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
             summary["unavailable"] += 1
         if any(w["result"].get("outcome") == "unresolved" for w in closed):
             summary["unresolved"] += 1
-        resumed_unattempted = any(w["result"].get("outcome") == "not_attempted" or w["action"] == "prepare_resume" for w in closed)
-        incomplete_continuation = resumed_unattempted and not (
+        resumed_unattempted = any(w["result"].get("outcome") == "not_attempted"
+            or w["action"] in {"prepare_resume", "inspect_resume_selection"}
+            or (platform != "boss" and w["action"] == "inspect_delivery"
+                and w["result"].get("outcome") == "success"
+                and w["result"].get("evidence", {}).get("resume_state") == "not_sent"
+                and not _resume_reference(w["result"].get("evidence", {}).get("resume_reference"))) for w in closed)
+        delivery_verified = (greeting_verified if platform == "boss" else
             any(e.get("resume_state") == "sent" for e in observations)
-            and greeting_verified)
+            and (platform != "liepin" or greeting_verified))
+        incomplete_continuation = resumed_unattempted and not delivery_verified
         terminal = any(w["result"].get("outcome") in {"unavailable", "unresolved"} for w in closed)
         if any(w["state"] != "closed" for w in works) or (incomplete_continuation and not terminal):
             summary["pending"] += 1
