@@ -959,6 +959,10 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_work() -> dict[str, Any]:
+    from jobagent.application.native_delivery_followup import pending as followup_pending
+    followup = followup_pending()
+    if followup:
+        return followup
     from jobagent.application.native_resume_choice import pending as resume_choice_pending
     pending = resume_choice_pending()
     if pending:
@@ -1026,6 +1030,10 @@ def next_work() -> dict[str, Any]:
 def start_delivery(platform: str, *, input_path: str | None, preview_id: str | None,
                    authorization_id: str | None, limit: int = 100, dry_run: bool = False,
                    stop_on_failure: bool = True) -> dict[str, Any]:
+    from jobagent.application.native_delivery_followup import pending as followup_pending
+    followup = followup_pending()
+    if followup:
+        return followup
     from jobagent.application.delivery import _load_reviewed
     _binding(platform)
     reviewed = _load_reviewed(platform, input_path, preview_id=preview_id, authorization_id=authorization_id)
@@ -1251,8 +1259,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
     summary = audit(platform, complete=False)
     total = len(reviewed["send_candidates"])
     if source["limit"] < total:
-        return {**summary, "completion_state": "batch_limit_reached", "requires_user_action": True,
-                "message": "The requested batch limit was reached; remaining approved jobs were not sent."}
+        from jobagent.application.native_delivery_followup import register
+        return register(platform, summary, reviewed=reviewed, source=source)
     rounds.set_platform_status(platform, "sent", command=f"jobagent {platform} {'greet' if platform == 'boss' else 'apply'} send", evidence=summary["summary"], next_suggested=f"jobagent {platform} audit")
     return {**summary, "completion_state": "completed_with_unresolved" if summary["summary"]["unresolved"] else "completed",
             "next_suggested": f"jobagent {platform} audit", "workflow": rounds.round_status()}
@@ -1309,6 +1317,11 @@ def _record_completed_native_delivery_fact(
 
 
 def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
+    if complete:
+        from jobagent.application.native_delivery_followup import pending as followup_pending
+        followup = followup_pending()
+        if followup:
+            return followup
     active = state.load_json(state.current_round_path()) or {}
     if not active.get("round_id") or not current_account_ref():
         _error("account_round_required", "Verify an account-bound round before reading its audit.")
@@ -1348,9 +1361,15 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
     _record_completed_native_delivery_fact(platform, by_job, completed=bool(
         complete and not summary["pending"] and not summary["unresolved"]
         and workflow.get("platforms", {}).get(platform, {}).get("status") == "completed"))
-    return {"ok": True, "executor": EXECUTOR, "platform": platform,
-            "evidence_source": "host_ui_observation", "summary": summary,
-            "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
+    response = {"ok": True, "executor": EXECUTOR, "platform": platform,
+                "evidence_source": "host_ui_observation", "summary": summary,
+                "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
+    if (complete and workflow.get("current_platform") and not workflow.get("workflow_complete")
+            and workflow.get("platforms", {}).get(platform, {}).get("status") == "completed"
+            and active.get("platforms", {}).get(platform, {}).get("native_delivery")):
+        from jobagent.application.native_delivery_followup import register
+        return register(platform, response)
+    return response
 
 
 def audit_round(platform: str | None = None) -> dict[str, Any]:
@@ -1365,6 +1384,10 @@ def audit_round(platform: str | None = None) -> dict[str, Any]:
 
 
 def status() -> dict[str, Any]:
+    from jobagent.application.native_delivery_followup import pending as followup_pending
+    followup = followup_pending()
+    if followup:
+        return followup
     workflow = rounds.round_status()
     if not workflow.get("round_id"):
         return {"ok": True, "executor": EXECUTOR, "workflow": workflow}

@@ -42,6 +42,25 @@ After the installation/account handoff, use this loop:
    - `done`: report its scope. Only `scope=round` means the four-platform round
      is complete; a setup or command result is not the end of a requested round.
 
+After a native batch, report the verified counts and display the complete
+`delivery_batch_followup` card whenever the original authorized list has
+unattempted jobs. Ask whether to `continue_delivery`, `finish_platform`, or
+`pause_delivery`, using that exact interaction ID. Never treat a batch limit as
+platform completion. Continuing revalidates the original full list and resumes
+only unattempted jobs; ending explicitly skips the remainder for this round.
+Pausing preserves the same card, list, authorization and receipts. Do not change
+`--limit`, open a new round, recollect, or infer an answer from a status check.
+
+After a completed native platform audit, display `delivery_platform_followup`
+and ask whether to `continue_platforms` or `pause_delivery`. Name the next
+platform and preserve the original round. Do not end the conversation with only
+a completion summary while this card is awaiting an answer. If cards are
+unavailable, relay the complete fallback and wait. Use `jobagent work next` to
+recover the same card after an upgrade or restart. Only the current CLI action
+permits continuation; the next platform still requires its own complete preview
+and final delivery confirmation. Whole-round completion remains
+`workflow.workflow_complete=true`.
+
 Wait for every CLI process to exit. Progress events, including `credit_quote`,
 are informational. A quote does not debit or reserve credits; the paid business
 step checks the current account again. After a lost response, use
@@ -650,7 +669,7 @@ jobagent boss greet send --input <review_file> --preview-id <preview_id> --autho
 jobagent boss audit
 ```
 
-After audit, inspect `workflow`. When it points to `jobagent liepin login --check`, continue immediately unless user intervention is required.
+After audit, inspect the returned action and workflow. Display any `delivery_platform_followup` card and wait for its answer. If the CLI directly offers `jobagent liepin login --check` with no required interaction, follow that continuation.
 
 Boss personalized delivery uses the official message center at
 `https://www.zhipin.com/web/geek/chat`. After opening communication once, follow

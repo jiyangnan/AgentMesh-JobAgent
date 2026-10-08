@@ -38,6 +38,25 @@ After the installation/account handoff, use this loop:
    - `done`: report its scope. Only `scope=round` means the four-platform round
      is complete; a setup or command result is not the end of a requested round.
 
+After a native batch, report the verified counts and display the complete
+`delivery_batch_followup` card whenever the original authorized list has
+unattempted jobs. Ask whether to `continue_delivery`, `finish_platform`, or
+`pause_delivery`, using that exact interaction ID. Never treat a batch limit as
+platform completion. Continuing revalidates the original full list and resumes
+only unattempted jobs; ending explicitly skips the remainder for this round.
+Pausing preserves the same card, list, authorization and receipts. Do not change
+`--limit`, open a new round, recollect, or infer an answer from a status check.
+
+After a completed native platform audit, display `delivery_platform_followup`
+and ask whether to `continue_platforms` or `pause_delivery`. Name the next
+platform and preserve the original round. Do not end the conversation with only
+a completion summary while this card is awaiting an answer. If cards are
+unavailable, relay the complete fallback and wait. Use `jobagent work next` to
+recover the same card after an upgrade or restart. Only the current CLI action
+permits continuation; the next platform still requires its own complete preview
+and final delivery confirmation. Whole-round completion remains
+`workflow.workflow_complete=true`.
+
 Wait for every CLI process to exit. Progress events, including `credit_quote`,
 are informational. A quote does not debit or reserve credits; the paid business
 step checks the current account again. After a lost response, use
@@ -73,6 +92,17 @@ Follow the CLI's subsequent read-only conversation inspection: a platform defaul
 greeting and an actual resume receipt are separate facts. Never submit a resume
 again when the conversation already proves it was sent, and never count the
 default greeting as the signed personalized message.
+
+If a closed inspection omitted the actual account resume name, continue with
+`work next` or the current `workflow next` action. The client offers
+`inspect_resume_selection`, a new read-only work bound to the same account,
+round, job, signed list and authorization. Begin only the offered work, inspect
+the visible existing account resume and current history, then submit its actual
+name with the new nonce. Do not reopen communication, select/change a resume,
+send, upload, edit an accepted receipt or infer a platform name from the cloud
+profile. Missing evidence uses this task's pause/technical schema. A bound cloud
+resume remains the round's material; an old local `profile_missing` notice does
+not authorize another analysis, resume selection or round.
 
 When Liepin needs a resume submission, `prepare_resume` only permits opening
 the cancellable attachment chooser and reporting its actual options. It never

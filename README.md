@@ -463,3 +463,11 @@ This product is part of the [AgentMesh360](https://agentmesh360.com/) product ma
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+Native delivery keeps each batch separate from platform completion. After a
+batch with remaining authorized jobs, the CLI asks whether to continue those
+jobs, end this platform and explicitly skip its remainder, or pause. After a
+completed platform audit, it asks whether to continue the next platform. The
+same choice is recoverable with `jobagent work next`; prior verified receipts
+and the original round remain intact. Later platforms still require their own
+complete delivery preview and final confirmation.

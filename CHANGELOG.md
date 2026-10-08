@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.20] - 2026-10-08
+
+### Fixed
+
+- Native delivery batch limits now return an explicit choice to continue the remaining authorized jobs, end this platform and skip its remainder, or pause. The same card survives restart; continuation preserves verified receipts and starts with unattempted jobs.
+- Completed native platform audits now ask whether to continue the next platform. Later platforms keep their separate final delivery confirmation.
+- Work, workflow, status and direct platform commands restore the pending choice; repeated responses do not issue duplicate browser actions. Existing signed lists, account/session bindings, resume selection and delivery history remain intact.
+
 ## [0.6.19] - 2026-10-08
 
 ### Fixed

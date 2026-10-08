@@ -178,6 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
             "finish_round_and_rebind",
             "keep_round",
             "pause_round",
+            "continue_delivery",
+            "finish_platform",
+            "pause_delivery",
+            "continue_platforms",
         ],
     )
     interaction_respond.add_argument(
@@ -958,6 +962,13 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
         return attachment
     if getattr(args, "attachment_id", None):
         return {"ok": False, "error": "interaction_not_pending"}
+    if interaction_id.startswith("native-followup:") and any(getattr(args, field, None) for field in
+            ("resume_id", "target_role", "target_city", "exclude_index")):
+        return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current follow-up choice."}
+    from jobagent.application.native_delivery_followup import respond as respond_native_followup
+    followup = respond_native_followup(interaction_id, str(args.choice or ""))
+    if followup is not None:
+        return followup
     from jobagent.application.round_direction import respond as respond_direction
     direction = respond_direction(interaction_id, str(args.choice or ""))
     if direction is not None:
@@ -1718,7 +1729,18 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "interaction" and getattr(args, "answer_file", None):
         from jobagent.application.interaction_answer import apply_answer_file
         apply_answer_file(args)
+    if args.command == "round" and args.round_command == "skip" and args.confirm_skip:
+        from jobagent.application.native_delivery_followup import pending as native_followup_pending, respond as respond_native_followup
+        followup = native_followup_pending()
+        if followup:
+            if followup.get("event") == "delivery_batch_followup" and followup.get("platform") == args.platform:
+                return respond_native_followup(followup["interaction"]["interaction_id"], "finish_platform")
+            return followup
     if args.command in {"boss", "liepin", "zhilian", "51job"}:
+        from jobagent.application.native_delivery_followup import pending as native_followup_pending
+        followup = native_followup_pending()
+        if followup:
+            return followup
         from jobagent.application.delivery_followup import pending as after_cancel_pending
         after_cancel = after_cancel_pending()
         if after_cancel:

@@ -266,3 +266,9 @@ rewriting the persisted task.
 - **continuation**：`work next` 与 `workflow next/advance` 续行相同原授权任务。云端绑定轮次的 `upgrade-check` 只读验证原绑定材料、账户、修订及画像摘要，不因缺少或过期本地 profile 引导重新分析、换简历或开轮。
 - **block**：身份、签名、账户、修订、材料摘要不符仍停止并保留原数据；缺少可观察的实际名称保留新只读任务，不能编造完成。已经签发、成功或终态未决的外部投递不获取另一执行许可，已打开沟通不再次打开。附件仍走既有显式选择交互。
 - **clear/archive/migrate**：本次不新增清理、归档或业务状态迁移；升级标记沿用当前版本化幂等处理。仅已验证的新观察可使未执行的原步骤继续，不能把平台默认招呼计作个性化消息。
+
+### 0.6.19 → 0.6.20 原生批次和平台后续选择
+
+新增可选 round.native_delivery_followups 与 platform.native_delivery_remainder_skipped；旧轮次无需迁移、清理或重新付费。BrowserWork schema、已接受回执、nonce、观察预算、原简历绑定、签名清单、预览、授权和会话保持。旧版本到达批次上限后，通过 work next / work status / workflow next 恢复同一 choice card；不再只返回缺少 user_prompt 的 handoff。
+
+continue_delivery 必须复验原完整签名清单与授权，只扩大原 source.limit 到该清单总数，已完成和历史记录不重发。finish_platform 明确记录本轮未执行岗位被跳过，之后按原平台顺序续行。pause_delivery 保留卡片。平台完成审计后提供 continue_platforms / pause_delivery，下一平台的最终投递仍单独确认。重复同一应答幂等，冲突应答拒绝；账户、轮次、会话或原 source 变化拒绝，无有效签名授权不得继续。应答落盘后 pending slot 清理中断可安全恢复，不增发浏览器许可。
