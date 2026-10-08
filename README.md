@@ -406,6 +406,13 @@ The cloud service returns signed SearchPlans and DecisionManifests. The CLI veri
 
 The local decision file contains the signed result needed for review and delivery. It does not persist the transient raw candidate pool.
 
+If a retained delivery stops because an earlier read-only receipt omitted the
+platform's actual resume name, continue with `jobagent work next` or the returned
+workflow action. `inspect_resume_selection` verifies the existing account resume
+read-only, preserving the confirmed list, greetings and receipts. It never
+reopens communication or replaces a resume. An active cloud-bound round does not
+need a separate local resume analysis after an update.
+
 ## Updates
 
 ```bash

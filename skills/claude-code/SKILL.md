@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching and recruiter greetings.
-version: 0.6.18
+version: 0.6.19
 ---
 
 # Job Agent
@@ -83,6 +83,17 @@ Follow the CLI's subsequent read-only conversation inspection: a platform defaul
 greeting and an actual resume receipt are separate facts. Never submit a resume
 again when the conversation already proves it was sent, and never count the
 default greeting as the signed personalized message.
+
+If a closed inspection omitted the actual account resume name, continue with
+`work next` or the current `workflow next` action. The client offers
+`inspect_resume_selection`, a new read-only work bound to the same account,
+round, job, signed list and authorization. Begin only the offered work, inspect
+the visible existing account resume and current history, then submit its actual
+name with the new nonce. Do not reopen communication, select/change a resume,
+send, upload, edit an accepted receipt or infer a platform name from the cloud
+profile. Missing evidence uses this task's pause/technical schema. A bound cloud
+resume remains the round's material; an old local `profile_missing` notice does
+not authorize another analysis, resume selection or round.
 
 When Liepin needs a resume submission, `prepare_resume` only permits opening
 the cancellable attachment chooser and reporting its actual options. It never

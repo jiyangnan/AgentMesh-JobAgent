@@ -258,3 +258,11 @@ or write permission. Older completed rounds remain completed. There is no ledger
 migration, permission reset, replacement round or additional cloud charge.
 Reconciliation presentation explicitly gives read-only instructions without
 rewriting the persisted task.
+
+### 0.6.18 → 0.6.19 简历名称只读核对续行
+
+- **preserve**：原账户、在线简历绑定与修订、round/Discover、完整清单、文案、预览授权、浏览器会话、工作 ID/nonce/观察次数、已接受回执和四平台审计全部保留，不重建轮次、不再分析或扣费。
+- **additive**：已关闭核对缺少实际平台简历名称时，原调度器下发独立 `inspect_resume_selection` 只读任务，完整绑定原账户、会话、岗位及清单，引用原核对 work ID。观察实际现有账号简历及最新历史后使用新任务 nonce 保存补充证据；原回执不修改。没有账本 schema 迁移或预算重置。
+- **continuation**：`work next` 与 `workflow next/advance` 续行相同原授权任务。云端绑定轮次的 `upgrade-check` 只读验证原绑定材料、账户、修订及画像摘要，不因缺少或过期本地 profile 引导重新分析、换简历或开轮。
+- **block**：身份、签名、账户、修订、材料摘要不符仍停止并保留原数据；缺少可观察的实际名称保留新只读任务，不能编造完成。已经签发、成功或终态未决的外部投递不获取另一执行许可，已打开沟通不再次打开。附件仍走既有显式选择交互。
+- **clear/archive/migrate**：本次不新增清理、归档或业务状态迁移；升级标记沿用当前版本化幂等处理。仅已验证的新观察可使未执行的原步骤继续，不能把平台默认招呼计作个性化消息。
