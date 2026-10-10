@@ -6,6 +6,12 @@
 
 ## 工作流协议的兼容性
 
+0.6.21 的简历分析沿用原命令，在有、无工作流意图时均获取并展示已验签报价；
+分析请求回传同一份绑定完整输入的短时引用。升级不修改简历、轮次或本地状态。
+报价过期、材料或有效价格变化时停止，需重新确认，不自动换报价继续扣费。
+服务端启用报价要求后，旧版分析明确返回 `analysis_quote_required` 和
+`jobagent update check`；旧客户端不会因缺少报价而扣费或开始生成。
+
 工作流协议 V2 新增 `action` 和 `workflow contract/submit/next/advance/status`，
 保留 V1 `agent_action` 与 `workflow-contract`。旧签名协议和 BrowserWork 许可不改变。
 新 `state/workflow.json` 记录账户、需求、动作版本、执行意图和结果；与

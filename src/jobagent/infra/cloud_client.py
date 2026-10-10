@@ -380,9 +380,13 @@ def round_criteria_filter(round_id: str, discover_id: str) -> dict:
                     timeout=20, operation="round_criteria_filter")
 
 
-def credits_quote(action: str, request_id: str, scope_digest: str) -> dict[str, Any]:
+def credits_quote(action: str, request_id: str, scope_digest: str,
+                  *, material_digest: str | None = None) -> dict[str, Any]:
+    body = {"action": action, "request_id": request_id, "scope_digest": scope_digest}
+    if material_digest is not None:
+        body["material_digest"] = material_digest
     result = _workflow_request("POST", "/v1/workflow/credits/quote",
-                    {"action": action, "request_id": request_id, "scope_digest": scope_digest},
+                    body,
                     timeout=20, operation="credits_quote")
     from jobagent.infra import protocol
     from jobagent.infra.account_state import current_account_ref
@@ -394,18 +398,29 @@ def credits_quote(action: str, request_id: str, scope_digest: str) -> dict[str, 
             or quote.get("charged") is not False or quote.get("protocol_version") != 2
             or datetime.fromisoformat(quote["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc)):
         raise CloudError("Credit quote context mismatch", code="credit_quote_invalid")
+    if "analysis_quote_ref" in quote:
+        import re
+        if (action != "analysis" or quote.get("material_digest") != material_digest
+                or not isinstance(quote["analysis_quote_ref"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", quote["analysis_quote_ref"]) is None):
+            raise CloudError("Analysis quote context mismatch", code="credit_quote_invalid")
     return result
 
 
-def _workflow_price_stage(action: str, request_id: str, scope: dict) -> None:
+def _workflow_price_stage(action: str, request_id: str, scope: dict) -> dict | None:
     from jobagent.infra import state, protocol
     workflow = state.load_json(state.STATE_DIR / "workflow.json") or {}
-    if not workflow.get("intent"):
+    if action != "analysis" and not workflow.get("intent"):
         return
-    response = credits_quote(action, request_id, protocol.digest_payload(scope))
+    if action == "analysis":
+        response = credits_quote(action, request_id, protocol.digest_payload(scope),
+                                 material_digest=scope["material_digest"])
+    else:
+        response = credits_quote(action, request_id, protocol.digest_payload(scope))
     from jobagent.infra.diagnostics import emit_stage
     emit_stage("credit_quote", action=action, quote=response["quote"], charged=False,
                recheck_at_execution=True)
+    return response
 
 
 def resume_center_preparation() -> dict[str, Any]:
@@ -516,8 +531,10 @@ def resume_analyze(
     if hints:
         body["hints"] = hints
     from jobagent.infra.protocol import digest_payload
-    _workflow_price_stage("analysis", "analysis_" + digest_payload(body).split(":")[1][:32],
-                          {"material_digest": digest_payload(body)})
+    price = _workflow_price_stage("analysis", "analysis_" + digest_payload(body).split(":")[1][:32],
+                                  {"material_digest": digest_payload(body)})
+    if price is not None and "analysis_quote_ref" in price["quote"]:
+        body["quote_ref"] = price["quote"]["analysis_quote_ref"]
     return _request(
         "POST",
         "/v1/resume/analyze",

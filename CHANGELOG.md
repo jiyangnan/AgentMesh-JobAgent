@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.21] - 2026-10-11
+
+### Fixed
+
+- Resume analysis now displays and returns the same signed, input-bound price quote, including outside an active workflow. A changed or expired quote stops without automatically accepting a new price.
+- Existing analysis commands, resume materials and local workflow state remain compatible. Earlier clients receive a clear upgrade instruction when a current quote is required.
+
 ## [0.6.20] - 2026-10-08
 
 ### Fixed

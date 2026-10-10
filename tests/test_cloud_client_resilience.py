@@ -163,6 +163,7 @@ def test_semantic_decision_failure_is_not_retried(monkeypatch):
 
 def test_resume_analyze_does_not_retry_without_request_idempotency(monkeypatch):
     attempts = 0
+    monkeypatch.setattr(cloud_client, "credits_quote", lambda *a, **kw: {"quote": {}})
 
     def fail(_request, *, timeout, context=None):
         nonlocal attempts
@@ -182,6 +183,31 @@ def test_resume_analyze_does_not_retry_without_request_idempotency(monkeypatch):
     assert attempts == 1
     assert error.value.retryable is True
     assert error.value.attempts == 1
+
+
+def test_analysis_without_workflow_intent_returns_same_displayed_quote_and_never_refreshes_stale(monkeypatch):
+    from jobagent.infra import diagnostics, protocol, state
+    monkeypatch.setattr(state, "load_json", lambda *_: {})
+    quoted, emitted, executed = [], [], []
+    ref = "a" * 64
+    def price(action, request_id, scope_digest, **kw):
+        quoted.append((action, scope_digest, kw["material_digest"]))
+        return {"quote": {"analysis_quote_ref": ref, "credits_required": 5}}
+    def execute(method, route, body, **kw):
+        executed.append(dict(body))
+        raise cloud_client.CloudError("Confirm the changed price", code="quote_stale")
+    monkeypatch.setattr(cloud_client, "credits_quote", price)
+    monkeypatch.setattr(diagnostics, "emit_stage", lambda *a, **kw: emitted.append(kw))
+    monkeypatch.setattr(cloud_client, "_request", execute)
+    material = {"resume_text": "Synthetic documented engineering work.", "file_name": "synthetic.txt",
+                "hints": {"target_role": "Engineer"}}
+    with pytest.raises(cloud_client.CloudError, match="Confirm the changed price"):
+        cloud_client.resume_analyze(**material)
+    digest = protocol.digest_payload(material)
+    assert quoted == [("analysis", protocol.digest_payload({"material_digest": digest}), digest)]
+    assert emitted[0]["quote"]["analysis_quote_ref"] == ref
+    assert executed == [{**material, "quote_ref": ref}]
+    assert len(quoted) == 1  # A changed price is never silently confirmed.
 
 
 def test_tls_eof_has_stable_code_and_safe_discovery_diagnostic(monkeypatch):
