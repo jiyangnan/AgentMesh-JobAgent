@@ -1,6 +1,8 @@
 """Transport and resume v2 jobs; matching policy remains on the server."""
 from __future__ import annotations
 
+from contextlib import ExitStack
+import random
 import time
 from urllib.parse import quote
 
@@ -8,9 +10,10 @@ from jobagent import __version__
 from jobagent.infra import cloud_client, state
 from jobagent.infra.diagnostics import emit_stage
 from jobagent.infra.protocol import (PROTOCOL_VERSION, DECISION_SIGNING_PUBLIC_KEY, ProtocolError,
-    candidate_digest, verify_signed_payload)
+    candidate_digest, digest_payload, verify_signed_payload)
 
 BATCH_SIZE = 15
+DETAIL_BATCH_SIZES = (7, 11, 13)
 
 
 def request(method, discover_id, suffix, body=None):
@@ -48,6 +51,30 @@ def upload_candidates(plan, jobs, *, final=False):
     return ids
 
 
+def _detail_batches(path, saved, items):
+    """Freeze the detail work groups before reading; resumes keep the same groups."""
+    identifiers = [item["id"] for item in items]
+    batches = saved.get("detail_batches")
+    if batches is None:
+        batches = []
+        offset = 0
+        while offset < len(identifiers):
+            target = random.choice(DETAIL_BATCH_SIZES)
+            ids = identifiers[offset:offset + target]
+            batches.append({"ids": ids, "target_size": target})
+            offset += len(ids)
+        saved["detail_batches"] = batches
+        state.save_json(path, saved)
+    if (not isinstance(batches, list)
+            or any(not isinstance(batch, dict) or batch.get("target_size") not in DETAIL_BATCH_SIZES
+                   or not isinstance(batch.get("ids"), list)
+                   or not 1 <= len(batch["ids"]) <= batch["target_size"] for batch in batches)
+            or any(len(batch["ids"]) != batch["target_size"] for batch in batches[:-1])
+            or [identifier for batch in batches for identifier in batch["ids"]] != identifiers):
+        raise ProtocolError("preserved detail batches do not match the signed task")
+    return batches
+
+
 def _enrich(platform, plan, jobs):
     from jobagent.application.hybrid_discovery import collection_reader
     from jobagent.platforms.detail_reader import read_detail, detail_url_allowed
@@ -69,30 +96,46 @@ def _enrich(platform, plan, jobs):
             raise ProtocolError("enrichment detail URL mismatch")
     path = _checkpoint_path(discover_id)
     saved = state.load_json(path)
+    batches = _detail_batches(path, saved, items)
+    by_id = {item["id"]: item for item in items}
     # Finish only missing reads. Each result is durable before its upload.
-    with collection_reader(platform) as reader:
-        for item in items:
-            if saved["details"].get(item["id"], {}).get("status") != "available":
-                detail = read_detail(reader, platform, {**originals[item["id"]], **item})
-                if detail.get("status") != "available" or not str(detail.get("jd") or "").strip():
-                    from jobagent.platforms.discovery import CollectionError
-                    # Missing required evidence needs adapter recovery; it
-                    # cannot be finalized as a completed read.
-                    saved["detail_pause"] = {"job_id": item["id"], "code": "detail_evidence_required"}
+    with ExitStack() as stack:
+        reader = None
+        for index, batch in enumerate(batches):
+            for identifier in batch["ids"]:
+                item = by_id[identifier]
+                existing = saved["details"].get(identifier, {})
+                if existing.get("status") != "available" or not str(existing.get("jd") or "").strip():
+                    if reader is None:
+                        reader = stack.enter_context(collection_reader(platform))
+                    detail = read_detail(reader, platform, {**originals[identifier], **item})
+                    if detail.get("status") != "available" or not str(detail.get("jd") or "").strip():
+                        from jobagent.platforms.discovery import CollectionError
+                        saved["detail_pause"] = {"job_id": identifier, "code": "detail_evidence_required"}
+                        state.save_json(path, saved)
+                        raise CollectionError("detail_evidence_required",
+                            "The reader did not obtain the required full job description; technical recovery is needed",
+                            details={"retryable": False, "request_preserved": True,
+                                     "requires_user_action": False, "automatic_retry_allowed": False,
+                                     "requires_technical_recovery": True,
+                                     "completed_details": len(saved["details"]), "required_details": len(items)})
+                    saved["details"][identifier] = detail
+                    saved.pop("detail_pause", None)
                     state.save_json(path, saved)
-                    raise CollectionError("detail_evidence_required",
-                        "The reader did not obtain the required full job description; technical recovery is needed",
-                        details={"retryable": False, "request_preserved": True,
-                                 "requires_user_action": False, "automatic_retry_allowed": False,
-                                 "requires_technical_recovery": True,
-                                 "completed_details": len(saved["details"]), "required_details": len(items)})
-                saved["details"][item["id"]] = detail
-                saved.pop("detail_pause", None)
+                    emit_stage("bulk_detail_collected", platform=platform,
+                               detail_count=len(saved["details"]), detail_total=len(items))
+            results = [saved["details"][identifier] for identifier in batch["ids"]]
+            batch_id = f"details-{index:06d}"
+            digest = digest_payload(results)
+            uploaded = saved.setdefault("detail_uploads", {})
+            if batch_id in uploaded and uploaded[batch_id] != digest:
+                raise ProtocolError("preserved detail upload changed")
+            if batch_id not in uploaded:
+                request("PUT", discover_id, "enrichment/" + batch_id, {"results": results})
+                uploaded[batch_id] = digest
                 state.save_json(path, saved)
-                emit_stage("bulk_detail_collected", platform=platform,
-                           detail_count=len(saved["details"]), detail_total=len(items))
-            request("PUT", discover_id, "enrichment/" + quote(item["id"], safe=""),
-                    {"results": [saved["details"][item["id"]]]})
+                emit_stage("bulk_detail_batch_uploaded", platform=platform,
+                           batch_index=index + 1, batch_count=len(batches), detail_count=len(results))
     request("POST", discover_id, "enrichment/finalize")
 
 

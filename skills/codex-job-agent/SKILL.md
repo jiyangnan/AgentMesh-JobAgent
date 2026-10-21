@@ -58,6 +58,11 @@ Existing rounds and in-flight requests retain their executor and recovery IDs.
 
 Boss list and detail reads share a persistent request budget for the dedicated
 Chrome profile. Changing rounds, accounts or processes does not reset it.
+Detail work uses persisted small batches; each successful description is saved
+before its batch upload. The next request's due time is also persisted before
+the current request. A restart must not redraw a shorter delay, rebuild batches
+or reread completed descriptions after a lost upload acknowledgement. These
+controls limit local load; they are not evidence of a platform's request limits.
 On a rejected request or visible verification, stop without foreground fallback
 or automatic retries. `automatic_retry_allowed=false` takes precedence over any
 older continuation command. Keep already collected descriptions and resume only
@@ -66,6 +71,9 @@ recovery uses `jobagent browser resume-collection --platform boss --confirm`;
 this checks the existing page without navigation and does not collect jobs.
 The local cooldown alone never authorizes a retry. Technical reader failures
 need a technical repair; do not present them as missing published job content.
+An explicit engineering suspension returns `collection_read_suspended`. It
+cannot be released by completing verification, waiting or an ordinary
+`resume-collection --confirm`; retain the task pending technical review.
 
 Read `jobagent workflow contract` once for the installed protocol, command catalog
 and input schemas. Protocol 2 uses the top-level `action`. The legacy

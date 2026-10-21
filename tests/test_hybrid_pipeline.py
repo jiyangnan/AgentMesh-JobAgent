@@ -274,3 +274,62 @@ def test_bulk_listing_failure_never_uses_visible_page_fallback(monkeypatch):
     collector=BossDataDriver(driver=driver)
     monkeypatch.setattr(collector,'_fetch_visible_page',lambda *a:pytest.fail('foreground fallback'))
     with pytest.raises(RuntimeError,match='fixture'):collector._fetch_page('AI','101280600')
+
+
+@pytest.mark.parametrize('count', [100, 200, 500, 1000])
+def test_detail_batches_cover_entire_signed_task_and_survive_resume(tmp_path, monkeypatch, count):
+    from itertools import cycle
+    choices = cycle([7, 11, 13])
+    monkeypatch.setattr(bulk_decision.random, 'choice', lambda _: next(choices))
+    items = [{'id': str(i)} for i in range(count)]
+    path = tmp_path / 'details.json'
+    saved = {'details': {}}
+    batches = bulk_decision._detail_batches(path, saved, items)
+    assert [i for batch in batches for i in batch['ids']] == [str(i) for i in range(count)]
+    assert {batch['target_size'] for batch in batches} == {7, 11, 13}
+    assert all(len(batch['ids']) == batch['target_size'] for batch in batches[:-1])
+    monkeypatch.setattr(bulk_decision.random, 'choice', lambda _: pytest.fail('redrew preserved batches'))
+    assert bulk_decision._detail_batches(path, state.load_json(path), items) == batches
+    with pytest.raises(ValueError, match='signed task'):
+        bulk_decision._detail_batches(path, state.load_json(path), list(reversed(items)))
+
+
+def test_detail_batch_upload_lost_ack_reuses_reads_and_exact_batch(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from jobagent.application import hybrid_discovery
+    from jobagent.infra.protocol import candidate_digest
+    monkeypatch.setattr(state, 'STATE_DIR', tmp_path)
+    choices = iter([7, 11, 13])
+    monkeypatch.setattr(bulk_decision.random, 'choice', lambda _: next(choices))
+    jobs = [{'id': str(i), 'url': f'https://www.zhipin.com/job_detail/{i}.html'} for i in range(31)]
+    task = {'discover_id': 'dis_test', 'platform': 'boss', 'account_ref': 'fixture',
+            'candidate_digest': candidate_digest(jobs), 'collection_executor': 'cdp_readonly', 'items': jobs}
+    monkeypatch.setattr(bulk_decision, 'verify_signed_payload', lambda value, **kw: value)
+    monkeypatch.setattr(hybrid_discovery, 'collection_reader', lambda _: nullcontext(object()))
+    reads, uploads = [], []
+    def read(reader, platform, item):
+        reads.append(item['id'])
+        return {**item, 'status': 'available', 'jd': 'Full description ' + item['id']}
+    monkeypatch.setattr(detail_reader, 'read_detail', read)
+    def request(method, discover_id, suffix, body=None):
+        if method == 'GET': return task
+        if method == 'PUT':
+            uploads.append((suffix, copy.deepcopy(body)))
+            if len(uploads) == 1: raise ConnectionError('server saved detail batch; response lost')
+        return {'ok': True}
+    monkeypatch.setattr(bulk_decision, 'request', request)
+    path = bulk_decision._checkpoint_path('dis_test')
+    state.save_json(path, {'details': {}, 'uploads': {}})
+    with pytest.raises(ConnectionError):
+        bulk_decision._enrich('boss', {**plan(), 'account_ref': 'fixture'}, jobs)
+    assert reads == [str(i) for i in range(7)]
+    assert len(state.load_json(path)['details']) == 7
+    monkeypatch.setattr(bulk_decision.random, 'choice', lambda _: pytest.fail('redrew batch after lost ack'))
+    bulk_decision._enrich('boss', {**plan(), 'account_ref': 'fixture'}, jobs)
+    assert reads == [str(i) for i in range(31)]
+    assert uploads[0] == uploads[1]
+    assert [len(body['results']) for _, body in uploads] == [7, 7, 11, 13]
+    assert len(state.load_json(path)['detail_uploads']) == 3
+    monkeypatch.setattr(hybrid_discovery, 'collection_reader', lambda _: pytest.fail('opened browser for completed reads'))
+    bulk_decision._enrich('boss', {**plan(), 'account_ref': 'fixture'}, jobs)
+    assert len(uploads) == 4 and len(reads) == 31

@@ -11,12 +11,14 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import time
 
 from jobagent.infra import state
 from jobagent.infra.diagnostics import emit_stage
 
-MIN_INTERVAL_SECONDS = 2.5
+READ_INTERVAL_SECONDS = (2.0, 3.0, 5.0)
+MIN_INTERVAL_SECONDS = min(READ_INTERVAL_SECONDS)
 WINDOW_SECONDS = 60.0
 MAX_REQUESTS_PER_WINDOW = 20
 RECOVERY_DELAY_SECONDS = 300.0
@@ -43,11 +45,20 @@ class CollectionGuard:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             blocked = data.get("blocked")
+            suspension = data.get("suspension")
             if (data.get("schema_version") != 1 or not isinstance(data.get("requests"), list)
                     or not all(isinstance(t, (float, int)) and math.isfinite(t) for t in data["requests"])
                     or data["requests"] != sorted(data["requests"])
                     or not isinstance(data.get("inflight", False), bool)
                     or not isinstance(data.get("total_requests"), int) or data["total_requests"] < 0
+                    or ("next_read_at" in data and (isinstance(data["next_read_at"], bool)
+                        or not isinstance(data["next_read_at"], (int, float))
+                        or not math.isfinite(data["next_read_at"]) or data["next_read_at"] < 0
+                        or (data["requests"] and data["next_read_at"] < data["requests"][-1] + MIN_INTERVAL_SECONDS)))
+                    or ("suspension" in data and (not isinstance(suspension, dict)
+                        or not isinstance(suspension.get("reason"), str) or not suspension["reason"]
+                        or not isinstance(suspension.get("at"), (int, float))
+                        or not math.isfinite(suspension["at"])))
                     or ("blocked" in data and (not isinstance(blocked, dict) or not blocked.get("code")
                         or not isinstance(blocked.get("not_before"), (int, float))
                         or not math.isfinite(blocked["not_before"])))):
@@ -93,6 +104,11 @@ class CollectionGuard:
 
     @staticmethod
     def _blocked_error(data):
+        if data.get("suspension"):
+            return _error("collection_read_suspended", "Live collection is suspended pending technical review",
+                requires_user_action=False, requires_technical_recovery=True,
+                suspension_reason=data["suspension"]["reason"],
+                message_detail="Page verification or ordinary resume confirmation cannot release this suspension.")
         blocked = data.get("blocked") or {"code": "collection_read_interrupted"}
         user_action = blocked.get("code") == "boss_verification_required" or blocked.get("upstream_code") in {
             7, 31, 32, 35, 36, 37, 1011, 5012, 5002, 5003, 5004, 120, 121, 122, 200404}
@@ -105,7 +121,7 @@ class CollectionGuard:
 
     def assert_available(self):
         data = self._load()
-        if data.get("blocked") or data.get("inflight"):
+        if data.get("suspension") or data.get("blocked") or data.get("inflight"):
             raise self._blocked_error(data)
 
     def _record_block(self, data, code, upstream_code=None):
@@ -119,19 +135,37 @@ class CollectionGuard:
         with self._lock():
             self._record_block(self._load(), code, upstream_code)
 
+    def suspend(self, reason):
+        """Hold live testing without clearing requests, rejection or business state.
+
+        This engineering hold has no automatic/ordinary-confirmation recovery.
+        Releasing it requires a separately reviewed recovery after repair.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("A suspension reason is required")
+        with self._lock():
+            data = self._load()
+            data["suspension"] = {"reason": reason, "at": time.time()}
+            state.save_json(self.path, data)
+
     def call(self, kind, callback):
         from jobagent.platforms.discovery import CollectionError
         with self._lock():
             data = self._load()
-            if data.get("blocked") or data.get("inflight"):
+            if data.get("suspension") or data.get("blocked") or data.get("inflight"):
                 raise self._blocked_error(data)
+            if "next_read_at" not in data and data["requests"]:
+                # Upgrade an existing budget once. Restarting must not redraw
+                # a shorter delay or discard the last request timestamp.
+                data["next_read_at"] = data["requests"][-1] + random.choice(READ_INTERVAL_SECONDS)
+                state.save_json(self.path, data)
             while True:
                 now = time.time()
                 times = [t for t in data["requests"] if now - t < WINDOW_SECONDS]
                 if times and times[-1] > now:
                     raise _error("collection_clock_changed", "Clock moved backwards; preserve the request budget",
                                  requires_technical_recovery=True)
-                delay = max(0.0, times[-1] + MIN_INTERVAL_SECONDS - now) if times else 0.0
+                delay = max(0.0, float(data.get("next_read_at", 0)) - now)
                 if len(times) >= MAX_REQUESTS_PER_WINDOW:
                     delay = max(delay, times[-MAX_REQUESTS_PER_WINDOW] + WINDOW_SECONDS - now)
                 if delay <= 0:
@@ -140,7 +174,8 @@ class CollectionGuard:
                            wait_seconds=round(delay, 3))
                 time.sleep(min(delay, WINDOW_SECONDS))
             data.update(requests=[*times, now], total_requests=int(data.get("total_requests") or 0) + 1,
-                        inflight=True, last_kind=kind)
+                        inflight=True, last_kind=kind,
+                        next_read_at=now + random.choice(READ_INTERVAL_SECONDS))
             state.save_json(self.path, data)  # A killed process must not erase an attempted request.
             try:
                 result = callback()
@@ -159,6 +194,8 @@ class CollectionGuard:
         """An explicit human response permits one DOM-only readiness check."""
         with self._lock():
             data = self._load()
+            if data.get("suspension"):
+                raise self._blocked_error(data)
             if not confirmed:
                 raise self._blocked_error(data)
             if not data.get("blocked") and not data.get("inflight"):

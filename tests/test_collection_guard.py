@@ -19,6 +19,7 @@ def clock(monkeypatch):
 
 
 def test_list_and_details_share_rate_budget_across_readers_and_state_directories(tmp_path, monkeypatch, clock):
+    monkeypatch.setattr(guards.random, 'choice', lambda _: 2.0)
     profile = tmp_path / 'chrome'
     starts = []
     for i in range(45):
@@ -30,6 +31,77 @@ def test_list_and_details_share_rate_budget_across_readers_and_state_directories
         assert sum(start <= t < start + guards.WINDOW_SECONDS for t in starts) <= guards.MAX_REQUESTS_PER_WINDOW
     assert guard._load()['total_requests'] == 45 and clock.waits
     assert len(guard._load()['requests']) <= guards.MAX_REQUESTS_PER_WINDOW
+
+
+def test_random_delay_is_reserved_before_request_and_survives_new_reader(tmp_path, monkeypatch, clock):
+    selected = iter([2.0, 5.0, 3.0])
+    monkeypatch.setattr(guards.random, 'choice', lambda options: next(selected))
+    profile = tmp_path / 'chrome'
+    observed = []
+    for _ in range(3):
+        guard = guards.CollectionGuard(profile)
+        def read():
+            saved = guard._load()
+            assert saved['inflight'] is True
+            observed.append((clock.now, saved['next_read_at']))
+        guard.call('detail', read)
+    assert observed == [(1000.0, 1002.0), (1002.0, 1007.0), (1007.0, 1010.0)]
+    assert clock.waits == [2.0, 5.0]
+
+
+def test_interrupted_wait_cannot_redraw_shorter_delay(tmp_path, monkeypatch, clock):
+    guard = guards.CollectionGuard(tmp_path / 'chrome')
+    monkeypatch.setattr(guards.random, 'choice', lambda _: 5.0)
+    guard.call('detail', lambda: None)
+    original_sleep = guards.time.sleep
+    def interrupt(_):
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(guards.time, 'sleep', interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        guard.call('detail', lambda: pytest.fail('read before wait finished'))
+    assert guard._load()['next_read_at'] == 1005.0
+    monkeypatch.setattr(guards.time, 'sleep', original_sleep)
+    monkeypatch.setattr(guards.random, 'choice', lambda _: 2.0)
+    guards.CollectionGuard(tmp_path / 'chrome').call('list', lambda: None)
+    assert clock.now == 1005.0
+    assert guard._load()['total_requests'] == 2
+
+
+def test_legacy_budget_keeps_last_request_when_adopting_random_schedule(tmp_path, monkeypatch, clock):
+    guard = guards.CollectionGuard(tmp_path / 'chrome')
+    state.save_json(guard.path, {'schema_version': 1, 'requests': [1000.0], 'total_requests': 31})
+    monkeypatch.setattr(guards.random, 'choice', lambda _: 5.0)
+    guard.call('detail', lambda: None)
+    assert clock.now == 1005.0 and guard._load()['total_requests'] == 32
+    assert guard._load()['requests'] == [1000.0, 1005.0]
+
+
+def test_engineering_suspension_survives_confirmation_cooldown_and_new_reader(tmp_path, clock):
+    guard = guards.CollectionGuard(tmp_path / 'chrome')
+    guard.block('boss_detail_request_rejected', upstream_code=36)
+    original_block = guard._load()['blocked']
+    guard.suspend('user_stopped_live_testing')
+    clock.now += 86400
+    other = guards.CollectionGuard(tmp_path / 'chrome')
+    with pytest.raises(CollectionError) as error:
+        other.resume(confirmed=True, check_page=lambda: pytest.fail('suspended page probe'))
+    assert error.value.code == 'collection_read_suspended'
+    assert error.value.details['automatic_retry_allowed'] is False
+    assert error.value.details['requires_user_action'] is False
+    assert 'next_suggested' not in error.value.details
+    with pytest.raises(CollectionError):
+        other.call('detail', lambda: pytest.fail('suspended request'))
+    assert other._load()['blocked'] == original_block
+
+
+@pytest.mark.parametrize('value', [True, float('nan'), -1, 1001.0])
+def test_invalid_persisted_next_read_time_never_resets_pacing(tmp_path, clock, value):
+    guard = guards.CollectionGuard(tmp_path / 'chrome')
+    guard.path.write_text(json.dumps({'schema_version': 1, 'requests': [1000.0],
+                                     'total_requests': 1, 'next_read_at': value}), encoding='utf-8')
+    with pytest.raises(CollectionError) as error:
+        guard.call('list', lambda: pytest.fail('invalid delay was ignored'))
+    assert error.value.code == 'collection_read_state_invalid'
 
 
 @pytest.mark.parametrize('upstream', [7, 36, 37, 5012, 122])
