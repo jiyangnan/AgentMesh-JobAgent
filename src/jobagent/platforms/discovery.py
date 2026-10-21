@@ -136,7 +136,9 @@ def _collect_boss(
         code,
         city_name=city,
         page=page,
-        page_size=min(15, limit),
+        # Changing pageSize near the target changes the upstream page offset
+        # and returns earlier jobs. Trim only after extracting the whole page.
+        page_size=15 if getattr(driver, "bulk_readonly", False) else min(15, limit),
     )
 
 
@@ -171,14 +173,14 @@ def _collect_web_platform(
     collect_kwargs = {
         "query": str(query.get("keyword") or ""),
         "city": str(query.get("city") or ""),
-        "limit": min(40, limit),
+        "limit": 40 if getattr(driver, "bulk_readonly", False) else min(40, limit),
         "wait_seconds": wait_seconds,
         "page": page,
         "pages": 1,
         "page_delay": 0,
     }
     if platform == "zhilian":
-        collect_kwargs["detail_limit"] = min(40, limit)
+        collect_kwargs["detail_limit"] = 0 if getattr(driver, "bulk_readonly", False) else min(40, limit)
     result = collector.collect(**collect_kwargs)
     if not result.ok:
         payload = result.to_payload(include_snapshot=False)
@@ -221,7 +223,10 @@ def collect_from_search_plan(
     )
 
     platform = str(plan["platform"])
-    candidate_limit = min(100, int(plan.get("candidate_limit", 100)))
+    ceiling = 1000 if plan.get("discovery_contract_version") == 2 else 100
+    candidate_limit = int(plan.get("candidate_limit", 100))
+    if not 1 <= candidate_limit <= ceiling:
+        raise CollectionError("candidate_limit_invalid", "Signed candidate limit is unsupported")
     queries = list(plan.get("queries") or [])
     if not queries:
         raise CollectionError("empty_search_plan", "SearchPlan contains no queries")
@@ -230,6 +235,11 @@ def collect_from_search_plan(
         resume_progress, queries=queries, candidate_limit=candidate_limit
     )
     seen = {str(item["id"]) for item in candidates}
+    bulk = plan.get("discovery_contract_version") == 2
+    page_fingerprints = dict((resume_progress or {}).get("page_fingerprints", {}))
+    prior_seconds = float((resume_progress or {}).get("elapsed_seconds", 0))
+    started = time.monotonic()
+    stop_reason = ""
     driver = driver or create_driver(platform=platform)
 
     def checkpoint() -> None:
@@ -238,6 +248,9 @@ def collect_from_search_plan(
                 "candidates": list(candidates),
                 "completed_pages": [list(item) for item in sorted(completed_pages)],
                 "exhausted_queries": sorted(exhausted_queries),
+                **({"page_fingerprints": page_fingerprints,
+                    "elapsed_seconds": round(prior_seconds + time.monotonic() - started, 3),
+                    "stop_reason": stop_reason} if bulk else {}),
             })
 
     try:
@@ -252,6 +265,14 @@ def collect_from_search_plan(
                 remaining = candidate_limit - len(candidates)
                 if remaining <= 0:
                     return candidates
+                if bulk and (len(completed_pages) >= plan["page_budget"] or prior_seconds + time.monotonic() - started >= plan["collection_time_budget_seconds"]):
+                    stop_reason = "collection_budget_reached"
+                    checkpoint()
+                    raise CollectionError(stop_reason, "Collection budget reached; the partial pool is preserved",
+                        user_prompt="已达到本次采集预算。可确认使用已采集结果，或保留当前进度。",
+                        details={"retryable": False, "requires_user_action": True, "request_preserved": True,
+                                 "collected_candidate_count": len(candidates),
+                                 "partial_result_command": f"jobagent {platform} discover --accept-partial"})
                 progress_details = {
                     "platform": platform,
                     "query_index": query_index + 1,
@@ -315,6 +336,19 @@ def collect_from_search_plan(
                             query_index in exhausted_queries
                         ),
                     )
+                if bulk and jobs:
+                    fingerprint = hashlib.sha256("|".join(sorted(_job_id(platform, j) for j in jobs)).encode()).hexdigest()
+                    previous = page_fingerprints.get(str(query_index), [])
+                    if fingerprint in previous:
+                        stop_reason = "collection_page_not_advancing"
+                        checkpoint()
+                        raise CollectionError(stop_reason, "This query returned an earlier page; progress is preserved",
+                            details={"request_preserved": True, "retryable": False,
+                                     "partial_result_command": f"jobagent {platform} discover --accept-partial",
+                                     "collected_candidate_count": len(candidates)})
+                    page_fingerprints[str(query_index)] = previous + [fingerprint]
+                if platform == "boss" and not jobs:
+                    exhausted_queries.add(query_index)
                 for job in jobs:
                     candidate = job_to_candidate(platform, job)
                     if candidate["id"] in seen:
@@ -351,6 +385,14 @@ def collect_from_search_plan(
             },
         ) from exc
 
+    if bulk and candidates and len(candidates) < candidate_limit and len(exhausted_queries) < len(queries):
+        stop_reason = "collection_query_budget_reached"
+        checkpoint()
+        raise CollectionError(stop_reason, "Search page limits reached; the partial pool is preserved",
+            user_prompt="已达到查询页数上限。请确认是否使用目前已采集的结果。",
+            details={"retryable": False, "requires_user_action": True, "request_preserved": True,
+                     "collected_candidate_count": len(candidates),
+                     "partial_result_command": f"jobagent {platform} discover --accept-partial"})
     if not candidates:
         raise CollectionError(
             "no_candidates",

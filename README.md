@@ -46,7 +46,7 @@ Resume profile
   -> completed round
 ```
 
-One completed Discover covers one platform, processes up to 100 deduplicated candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
+One completed Discover covers one platform, collects 100 unique candidates by default (an explicit request can raise the target to 1000), matches the entire collected pool, and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
 
 Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creation are free in the [AgentMesh360 account center](https://agentmesh360.com/app/). The open-source client is free; AgentMesh360 cloud capabilities use credits. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The Standard Pass costs CNY 29.99 for 30 days for mainland China users (USD 4 for users outside mainland China) and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days for mainland China users (USD 10 for users outside mainland China) and includes 3,000 shared credits. Users with an active pass can add 500 credits for CNY 15 (USD 2 for users outside mainland China), at most twice per pass period. Passes do not renew automatically, and unused credits expire with the active pass period. Previously issued signup-trial credits remain usable until their original expiry.
 
@@ -56,8 +56,10 @@ The installer checks HTTPS connectivity using the installed Python and bundled p
 
 ### Codex native Computer Use
 
-The default Codex workflow uses native Computer Use in the user's existing
-Chrome session. Job Agent supplies one account-bound task at a time and keeps
+The default Codex workflow uses the CLI's read-only CDP collector for discovery,
+cloud matching for all collected candidates, and native Computer Use for
+user-confirmed delivery in the same dedicated Chrome session. Recommendations
+follow the user's profile and job evidence, without a fixed count. Job Agent supplies one account-bound task at a time and keeps
 cloud decisions, final-list confirmation, progress and audit in the CLI. Read
 the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
 
@@ -68,7 +70,7 @@ jobagent workflow next
 Read each returned task and result schema. When the current response offers
 `jobagent work begin --work-id ID`, run it before its browser action and report the observed result with
 `jobagent work submit --work-id ID --result FILE`. `jobagent work status` is the
-read-only recovery entry. Native mode does not use CDP, browser scripts or hidden
+read-only recovery entry. Issued native delivery tasks do not use CDP, browser scripts or hidden
 site APIs. If this host lacks native Computer Use, pause rather than switching
 drivers. Browser permissions and real UI observations still belong to the host;
 the task protocol cannot intercept actions taken outside it.
@@ -391,7 +393,7 @@ Boss and 猎聘 require a non-empty signed personalized greeting of at most 100 
 - `jobagent round start` is the only command that creates a new round. A completed round stays completed until that explicit command runs.
 - Never pre-login future platforms. Enter only the current platform, finish its `login -> discover -> review -> delivery preview -> delivery confirmation -> send -> audit` chain, and complete its audit before logging in to the next platform.
 - Completing one platform is not completing the round. The Agent must follow `workflow.next_suggested` until `workflow.workflow_complete=true`.
-- One send covers the complete reviewed selected list, up to 100 jobs. The default send limit is 100.
+- The confirmed list may contain up to 1000 jobs. Each native delivery batch covers at most 100; remaining jobs require the existing continue/pause/finish choice. No job outside the confirmed list is permitted.
 - If the CLI reports login, CAPTCHA, verification or resume-selection intervention, the Agent must stop and ask the user to complete it.
 
 Example review override:

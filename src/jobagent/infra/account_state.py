@@ -29,6 +29,8 @@ _ACCOUNT_OWNED_PATHS = (
     "round_criteria_input.json",
     "rounds",
     "discoveries",
+    "bulk-discovery",
+    "delivery-receipts",
     "archive",
     "audit_log.json",
     "liepin_audit_log.json",

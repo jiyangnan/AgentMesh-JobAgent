@@ -156,10 +156,10 @@ def respond(interaction_id, choice):
         candidates = list(reviewed["send_candidates"])
         if digest_payload(candidates) != record["candidate_digest"]:
             raise ValueError("The authorized candidate list changed; preserve the original receipts.")
-        if len(candidates) > 100:
+        if len(candidates) > 1000:
             return {"ok": False, "error": "native_delivery_batch_capacity", "request_preserved": True,
                     "next_suggested": "jobagent work next"}
-        active["platforms"][record["platform"]]["native_delivery"]["limit"] = len(candidates)
+        active["platforms"][record["platform"]]["native_delivery"]["limit"] = min(len(candidates), int(source["limit"]) + 100)
     elif choice == "finish_platform":
         rounds.assert_platform_turn(record["platform"])
         item = active["platforms"][record["platform"]]

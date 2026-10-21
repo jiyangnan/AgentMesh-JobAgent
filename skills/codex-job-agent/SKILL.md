@@ -10,11 +10,62 @@ After every navigation, scroll, dialog change, UI action or interruption, obtain
 For `browser_work_required`, follow the current task's returned command and permission. Run its `work begin` only when offered to obtain the current nonce and task schema; a recovery offer or exhausted observation budget is not permission to begin again. If native capability is unavailable, do not operate any browser: submit the returned `pause_result_example` with the actual missing-capability observation and `reason=permission_required`, then relay the returned user prompt. Never fabricate an observed window/profile merely to satisfy a schema.
 
 Use the official Job Agent CLI for account-bound progress, cloud decisions,
-confirmation and audit. Use the host's native Computer Use tools for the browser.
+confirmation and audit. New rounds collect through the CLI's read-only CDP
+adapter, defaulting to 100 unique candidates. The cloud matches the whole pool;
+recommendation count depends on the user's profile, constraints and job evidence.
+Run the returned Discover command and wait for it to finish; do not replace it
+with manual browser clicks. Use native Computer Use only for issued native work,
+including confirmed delivery and its receipt verification.
 The CLI's current task and result schema are authoritative; this skill is an
 operating procedure, not a mechanism that can intercept host UI actions.
 
+## Collection and delivery are separate phases
+
+The signed SearchPlan controls collection scope. An explicit `--candidate-limit`
+can request up to 1000 candidates; 200/500/1000 are optional, not defaults.
+`--recommendation-limit` is optional; do not invent a quota or fill a short list.
+Keep the original request, Discover ID, candidate checkpoint and upload receipts
+when interrupted. `--accept-partial` requires the user's explicit choice to use
+an available partial pool; show target and actual coverage. Do not start over.
+
+After matching, the CLI disconnects CDP and native delivery verifies the same
+dedicated Chrome profile and platform account. Show the complete preview and
+wait for the user's final-list confirmation. CDP must never send a message or
+resume or click a recruiting action. Native tasks never fall back to CDP.
+If a host URL-validation layer fails before reading a page, preserve its exact
+error and current work. Do not diagnose that as a logged-out platform or open a
+replacement profile. Collection's CLI adapter is independent of that host tool.
+
+Upgrades preserve active older rounds on their existing executor. Only an idle
+round with explicit user consent may use `jobagent round use-bulk-discovery
+--confirm`; do not convert pending work, decisions, authorizations or receipts.
+
 ## Host-independent workflow contract
+
+New rounds split discovery from delivery: execute the CLI's read-only CDP
+collection command (100 candidates by default, up to 1000 when explicitly
+requested), then wait for cloud matching of the full collected pool. The number
+of recommendations depends on actual fit and evidence. Do not browse each job
+with native UI instead of running Discover. After the CLI releases collection,
+issued native tasks verify the same Chrome profile/account for user-confirmed
+delivery and receipts. A native task never grants CDP delivery permission.
+Details use bounded background read-only requests. The collector never cycles
+through foreground job pages to fill missing descriptions; unavailable details
+require reader recovery and must not be treated as completed evidence. Every
+recommendation and delivery preview requires the full job description.
+Background reads still depend on the network.
+Existing rounds and in-flight requests retain their executor and recovery IDs.
+
+Boss list and detail reads share a persistent request budget for the dedicated
+Chrome profile. Changing rounds, accounts or processes does not reset it.
+On a rejected request or visible verification, stop without foreground fallback
+or automatic retries. `automatic_retry_allowed=false` takes precedence over any
+older continuation command. Keep already collected descriptions and resume only
+missing work with the same Discover and billing key. A user-confirmed page
+recovery uses `jobagent browser resume-collection --platform boss --confirm`;
+this checks the existing page without navigation and does not collect jobs.
+The local cooldown alone never authorizes a retry. Technical reader failures
+need a technical repair; do not present them as missing published job content.
 
 Read `jobagent workflow contract` once for the installed protocol, command catalog
 and input schemas. Protocol 2 uses the top-level `action`. The legacy

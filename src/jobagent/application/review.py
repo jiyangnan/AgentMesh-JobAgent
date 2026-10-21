@@ -86,11 +86,25 @@ def review_decision(
         str(item.get("job_id"))
         for item in (envelope.get("user_overrides") or [])
         if isinstance(item, dict)
-        and item.get("from") == "review"
+        and item.get("from") in {"review", "reserve"}
         and item.get("to") == "selected"
         and item.get("job_id")
     ]
     requested_promoted_ids = list(promoted_ids or []) or existing_promoted_ids
+    if (manifest.get("discovery_contract_version") == 2 and platform in {"boss", "liepin"}
+            and requested_promoted_ids and (confirm_promote or existing_promoted_ids)):
+        missing = {j["id"] for j in manifest.get("review", []) + manifest.get("reserve", []) if not j.get("greeting")}
+        if missing & set(requested_promoted_ids):
+            from jobagent.application.bulk_decision import request
+            from jobagent.infra.discovery_state import save_manifest
+            response = request("POST", manifest["discover_id"], "greetings/prepare", {
+                "expected_manifest_id": manifest["manifest_id"], "job_ids": requested_promoted_ids, "confirm_promote": True})
+            prepared = verify_stored_decision(response["manifest"], platform=platform)
+            if prepared.get("candidate_digest") != manifest["candidate_digest"] or prepared["discover_id"] != manifest["discover_id"]:
+                raise ValueError("Prepared greetings changed the discovery context")
+            manifest = prepared
+            envelope["manifest"] = response["manifest"]
+            save_manifest(response["manifest"])
     review = build_review(
         envelope,
         promoted_ids=requested_promoted_ids,
@@ -101,6 +115,15 @@ def review_decision(
     apply_filter(review)
     if platform == "boss":
         _exclude_delivered_boss_jobs(review)
+    if manifest.get("discovery_contract_version") == 2:
+        from jobagent.application.native_work import _legacy_history
+        from jobagent.infra import browser_work
+        prior = {w["binding"].get("job_id") for w in browser_work.list_account_work(current_account_ref())
+                 if w.get("side_effect") and w["binding"].get("platform") == platform
+                 and w["state"] != "ready" and w["binding"].get("discover_id") != manifest["discover_id"]}
+        skipped = [j for j in review["send_candidates"] if j["id"] in prior or _legacy_history(platform, j["url"], j["id"])]
+        review["send_candidates"] = [j for j in review["send_candidates"] if j not in skipped]
+        review.setdefault("skipped_delivered", []).extend(skipped)
     if platform in {"boss", "liepin"}:
         missing = [
             str(item.get("id"))
@@ -191,6 +214,7 @@ def review_decision(
         "discover_id": manifest["discover_id"],
         "selected": manifest.get("selected", []),
         "review": manifest.get("review", []),
+        "reserve": manifest.get("reserve", []),
         "rejected": manifest.get("rejected", []),
         "promoted": review["user_overrides"],
         "skipped_delivered": review.get("skipped_delivered", []),

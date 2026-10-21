@@ -54,6 +54,8 @@ def _binding(platform: str | None = None) -> dict[str, Any]:
     if not account:
         _error("account_verification_required", "Verify the current account before native browser work.")
     active = rounds.ensure_current_round()
+    if active.get("browser_phase") == "collecting":
+        _error("collection_phase_locked", "Finish or resume the read-only collection before native browser work.")
     value = {"account_ref": account, "round_id": str(active["round_id"])}
     if platform:
         value["platform"] = platform
@@ -67,6 +69,11 @@ def _session() -> dict[str, Any] | None:
         return None
     if session.get("account_ref") != current_account_ref() or session.get("round_id") != active["round_id"]:
         _error("native_session_binding_mismatch", "The browser session belongs to a different account or round.")
+    collection = active.get("collection_session")
+    if collection and session.get("collection_session_id") != collection["id"]:
+        # Keep the prior binding as history, but require a new read-only bind
+        # against the collection profile before issuing delivery permissions.
+        return None
     return session
 
 
@@ -198,6 +205,7 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
     # The ledger specification, nonce and observation budget remain immutable.
     if work["action"] == "bind_session":
         task.update(native_window.binding_task())
+        _collection_handoff_task(task)
     elif work["action"] == "collect_search_page":
         from jobagent.application.native_discovery import candidate_id_pattern
         task.setdefault("result_schema", {}).setdefault("candidate_properties", {}).setdefault("id", {}).update(
@@ -407,6 +415,20 @@ def _pause_prompt(reason: Any, url: str, host_window_issue: str | None = None) -
     return f"当前界面或宿主权限无法确认，已保留进度并暂停；请检查当前 Chrome 页面 {url} 或 Computer Use 权限，完成后回复“好了”。"
 
 
+def _collection_handoff_task(task):
+    collection = rounds.ensure_current_round().get("collection_session")
+    if not collection:
+        return
+    task["collection_session"] = collection
+    task["instruction"] += (" Reuse the Chrome profile used for read-only collection. The CDP socket has been released. "
+        "Use native UI to inspect Chrome's profile path (chrome://version if needed) and match collection_session.profile_directory, "
+        "then verify the platform account. Do not create another browser or copy cookies. "
+        "Return reuse_status=reused, collection_session_id, and collection_profile_verified=true only with actual UI evidence. "
+        "If the host rejects a site URL before reading it, pause as host URL validation failure; do not call it a site login failure.")
+    task.setdefault("result_schema", {}).setdefault("evidence", {}).update(
+        collection_session_id=collection["id"], collection_profile_verified="boolean; actual native profile-path verification required")
+
+
 def ensure_session(platform: str) -> dict[str, Any] | None:
     if _session():
         return None
@@ -419,6 +441,7 @@ def ensure_session(platform: str) -> dict[str, Any] | None:
         del active["native_cancelled_work"]
         rounds.save_round(active)
     task = native_window.binding_task()
+    _collection_handoff_task(task)
     revision = len(store.list_work(binding))
     work = store.ensure_work(action="bind_session", task=task, binding=binding,
         key=f"bind:{active['round_id']}:{platform}:{revision}")
@@ -844,6 +867,10 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
             _error("native_outcome_invalid", "Unsupported session-binding outcome.")
         if result["outcome"] == "success":
             invalid = []
+            collection = work["task"].get("collection_session")
+            if collection and (e.get("collection_session_id") != collection["id"]
+                    or e.get("collection_profile_verified") is not True or e.get("reuse_status") != "reused"):
+                _error("native_collection_handoff_required", "Verify the same collection Chrome profile through native UI before delivery.")
             if e.get("native_computer_use_available") is not True:
                 invalid.append("native_computer_use_available")
             if e.get("browser") != "chrome":
@@ -902,6 +929,8 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
     if action == "bind_session":
         e = result["evidence"]
         session = {**work["binding"], **{k: e[k] for k in ("window_reference", "profile_label", "group_reference")}, "accounts": {}}
+        if work["task"].get("collection_session"):
+            session["collection_session_id"] = e["collection_session_id"]
         if e.get("window_reference_kind"):
             session["window_reference_kind"] = e["window_reference_kind"]
         session["id"] = "native_" + digest_payload(session)[7:31]
@@ -959,6 +988,8 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_work() -> dict[str, Any]:
+    from jobagent.application.delivery_receipts import flush_pending
+    flush_pending()
     from jobagent.application.native_delivery_followup import pending as followup_pending
     followup = followup_pending()
     if followup:
@@ -1011,6 +1042,14 @@ def next_work() -> dict[str, Any]:
     if active["platforms"][platform].get("native_delivery") and workflow["platforms"][platform]["status"] != "sent":
         return _delivery_next(platform)
     status = workflow["platforms"][platform]["status"]
+    if (active.get("collection_executor") == "cdp_readonly"
+            and not active.get("native_review")
+            and status in {"pending", "active", "blocked", "login_verified"}):
+        from jobagent.application.hybrid_discovery import assert_collection_available
+        assert_collection_available(platform)
+        command = "discover" if status == "login_verified" else "login"
+        return {"ok": True, "workflow": workflow,
+                "next_suggested": f"jobagent {platform} {command}"}
     if status in {"pending", "active", "blocked"}:
         return request_login(platform)
     if status == "login_verified":
@@ -1056,6 +1095,8 @@ def start_delivery(platform: str, *, input_path: str | None, preview_id: str | N
     if existing and existing != source and store.pending_work(_binding(platform)):
         _error("native_delivery_in_progress", "Do not change an authorized delivery while its native task is unresolved.")
     active["platforms"][platform]["native_delivery"] = source
+    if active.get("collection_session"):
+        active["browser_phase"] = "native_delivery"
     rounds.save_round(active)
     session_request = ensure_session(platform)
     if session_request:
@@ -1364,6 +1405,9 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
     response = {"ok": True, "executor": EXECUTOR, "platform": platform,
                 "evidence_source": "host_ui_observation", "summary": summary,
                 "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
+    if active.get("collection_executor") == "cdp_readonly":
+        from jobagent.application.delivery_receipts import sync_verified
+        response["receipt_sync"] = sync_verified(platform, by_job)
     if (complete and workflow.get("current_platform") and not workflow.get("workflow_complete")
             and workflow.get("platforms", {}).get(platform, {}).get("status") == "completed"
             and active.get("platforms", {}).get(platform, {}).get("native_delivery")):

@@ -10,6 +10,31 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 
 ## Host-independent workflow contract
 
+New rounds split discovery from delivery: execute the CLI's read-only CDP
+collection command (100 candidates by default, up to 1000 when explicitly
+requested), then wait for cloud matching of the full collected pool. The number
+of recommendations depends on actual fit and evidence. Do not browse each job
+with native UI instead of running Discover. After the CLI releases collection,
+issued native tasks verify the same Chrome profile/account for user-confirmed
+delivery and receipts. A native task never grants CDP delivery permission.
+Details use bounded background read-only requests. The collector never cycles
+through foreground job pages to fill missing descriptions; unavailable details
+require reader recovery and must not be treated as completed evidence. Every
+recommendation and delivery preview requires the full job description.
+Background reads still depend on the network.
+Existing rounds and in-flight requests retain their executor and recovery IDs.
+
+Boss list and detail reads share a persistent request budget for the dedicated
+Chrome profile. Changing rounds, accounts or processes does not reset it.
+On a rejected request or visible verification, stop without foreground fallback
+or automatic retries. `automatic_retry_allowed=false` takes precedence over any
+older continuation command. Keep already collected descriptions and resume only
+missing work with the same Discover and billing key. A user-confirmed page
+recovery uses `jobagent browser resume-collection --platform boss --confirm`;
+this checks the existing page without navigation and does not collect jobs.
+The local cooldown alone never authorizes a retry. Technical reader failures
+need a technical repair; do not present them as missing published job content.
+
 Read `jobagent workflow contract` once for the installed protocol, command catalog
 and input schemas. Protocol 2 uses the top-level `action`. The legacy
 `workflow-contract` alias and `agent_action` field remain available for older
@@ -218,11 +243,11 @@ An install alone does not authorize a new round, paid analysis or delivery.
 Preserve existing rounds and confirmations. All later platform actions retain
 Boss -> Liepin -> Zhilian -> 51Job order and final-list confirmation.
 
-## Native mode takes precedence
+## Bulk discovery and native delivery
 
 In Codex, use the dedicated `codex-job-agent` skill and start with
-`jobagent work next`. In `codex_native` mode, existing browser-facing commands
-below return host tasks, not permission to use a legacy driver. Read each task's
+`jobagent work next`. New rounds use CLI-managed read-only CDP for discovery.
+Commands issuing native delivery tasks require native Computer Use. Read each task's
 complete instructions and result schema; run `jobagent work begin --work-id ID`
 before the allowed native UI action, then
 `jobagent work submit --work-id ID --result FILE`. On uncertainty, use

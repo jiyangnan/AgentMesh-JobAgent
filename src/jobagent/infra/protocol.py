@@ -116,7 +116,7 @@ def _is_expired(value: str) -> bool:
     return datetime.now(timezone.utc) >= expires.astimezone(timezone.utc)
 
 
-def _validate_search_queries(value: Any) -> None:
+def _validate_search_queries(value: Any, *, page_ceiling: int = 5) -> None:
     if not isinstance(value, list) or not 1 <= len(value) <= 12:
         raise ProtocolError("search plan queries are invalid")
     for item in value:
@@ -146,7 +146,7 @@ def _validate_search_queries(value: Any) -> None:
             )
         if len(city) > 30 or any(ord(character) < 32 for character in city):
             raise ProtocolError("search plan city is invalid")
-        if not 1 <= page_limit <= 5:
+        if not 1 <= page_limit <= page_ceiling:
             raise ProtocolError("search plan page limit is invalid")
 
 
@@ -176,14 +176,32 @@ def verify_search_plan(
             raise ProtocolError("search plan intent digest mismatch")
         if signed.get("round_intent") != round_intent:
             raise ProtocolError("search plan round intent mismatch")
-    if int(signed.get("candidate_limit", 0)) != 100:
+    version = signed.get("discovery_contract_version", 1)
+    if type(version) is not int or version not in {1, 2}:
+        raise ProtocolError("unsupported discovery contract version")
+    bulk = version == 2
+    limit = signed.get("candidate_limit", 0)
+    if type(limit) is not int:
+        raise ProtocolError("search plan candidate limit invalid")
+    if (not bulk and limit != 100) or (bulk and not 1 <= limit <= 1000):
         raise ProtocolError("search plan candidate limit mismatch")
+    if bulk:
+        recommendation_limit = signed.get("recommendation_limit")
+        if recommendation_limit is not None and (type(recommendation_limit) is not int or not 1 <= recommendation_limit <= 1000):
+            raise ProtocolError("search plan recommendation limit invalid")
+        if (signed.get("collection_executor") != "cdp_readonly"
+                or signed.get("delivery_executor") != "codex_native"
+                or not isinstance(signed.get("account_ref"), str)
+                or type(signed.get("page_budget")) is not int or not 1 <= signed["page_budget"] <= 200
+                or type(signed.get("collection_time_budget_seconds")) is not int
+                or not 1 <= signed["collection_time_budget_seconds"] <= 3600):
+            raise ProtocolError("search plan bulk controls invalid")
     signed_request_id = signed.get("request_id")
     if require_request_id and not signed_request_id:
         raise ProtocolError("search plan request binding is missing")
     if request_id is not None and signed_request_id not in {None, request_id}:
         raise ProtocolError("search plan request binding mismatch")
-    _validate_search_queries(signed.get("queries"))
+    _validate_search_queries(signed.get("queries"), page_ceiling=200 if bulk else 5)
     if _is_expired(str(signed.get("expires_at", ""))):
         raise SearchPlanExpiredError(signed)
     return signed
@@ -214,7 +232,7 @@ def verify_decision_manifest(
         raise ProtocolError("decision manifest expired")
     classified = [
         item
-        for bucket in ("selected", "review", "rejected")
+        for bucket in ("selected", "review", "rejected", "reserve")
         for item in signed.get(bucket, [])
     ]
     ids = [str(item.get("id")) for item in classified]
@@ -222,6 +240,9 @@ def verify_decision_manifest(
         signed.get("deduplicated_count", -1)
     ):
         raise ProtocolError("decision categories are incomplete or duplicated")
+    if not set(ids).issubset({str(j["id"]) for j in jobs}):
+        raise ProtocolError("decision contains unknown candidates")
+    _verify_bulk_coverage(signed)
     return signed
 
 
@@ -242,7 +263,7 @@ def verify_stored_decision(
         raise ProtocolError("decision manifest expired")
     classified = [
         item
-        for bucket in ("selected", "review", "rejected")
+        for bucket in ("selected", "review", "rejected", "reserve")
         for item in signed.get(bucket, [])
     ]
     ids = [str(item.get("id")) for item in classified]
@@ -250,4 +271,22 @@ def verify_stored_decision(
         signed.get("deduplicated_count", -1)
     ):
         raise ProtocolError("decision categories are incomplete or duplicated")
+    _verify_bulk_coverage(signed)
     return signed
+
+
+def _verify_bulk_coverage(signed):
+    if signed.get("discovery_contract_version") != 2:
+        if signed.get("reserve"):
+            raise ProtocolError("legacy decision cannot contain reserve")
+        return
+    count = signed["deduplicated_count"]
+    coverage = signed.get("coverage") or {}
+    if coverage.get("unique_candidates") != count or coverage.get("scored_candidates") != count:
+        raise ProtocolError("bulk decision coverage incomplete")
+    limit = signed.get("recommendation_limit")
+    if limit is not None and (type(limit) is not int or len(signed.get("selected", [])) > limit):
+        raise ProtocolError("bulk recommendation limit exceeded")
+    for bucket in ("selected", "review", "rejected", "reserve"):
+        if any(j.get("classification") != bucket for j in signed.get(bucket, [])):
+            raise ProtocolError("bulk decision classification mismatch")

@@ -85,6 +85,7 @@ BrowserWork nonce/binding 及投递授权保持原有校验。
 | `state_owner.json` | 新增并校验 | 新空状态可自动绑定；历史业务状态必须由用户执行 `jobagent account bind --confirm-legacy` 显式认领；账户不一致时 fail closed |
 | `accounts/<account_ref>/state/` | 保留 | 切换账户时保存非活动账户的画像、轮次、Discover、升级归档与审计；返回原账户时恢复，不删除 |
 | Job Agent Chrome profile / cookies | 永远保留 | 自动升级不得删除或重建浏览器 profile；需要重新登录时由平台登录检查显式提示 |
+| Chrome profile 同级的 `*.boss-read-state.json` / `.lock` | 新增并保留 | schema 1，仅含请求时间、次数和中断原因；不含岗位、账户或凭据。按浏览器 profile 共用，不随轮次或账户切换清空；JSON 损坏、未完成请求或平台拒绝时阻断采集。恢复保留请求计数和原 Discover，不重新收费；不迁移或重建 Chrome profile |
 | `state/profile.json` | 保留并校验 schema | 可兼容则原样保留；不兼容时阻断平台命令并要求重新分析简历 |
 | 四个平台 audit log | 永远保留 | 它们是投递、消息送达和去重证据，不参与缓存清理 |
 | `state/browser-work.sqlite3` 与原生会话绑定 | 保留并只读预检 | 不清理、不重建、不迁移此账本；存在未决副作用或无法安全读取时暂停升级，不能将缺失回执当作未发送 |
@@ -278,3 +279,9 @@ rewriting the persisted task.
 新增可选 round.native_delivery_followups 与 platform.native_delivery_remainder_skipped；旧轮次无需迁移、清理或重新付费。BrowserWork schema、已接受回执、nonce、观察预算、原简历绑定、签名清单、预览、授权和会话保持。旧版本到达批次上限后，通过 work next / work status / workflow next 恢复同一 choice card；不再只返回缺少 user_prompt 的 handoff。
 
 continue_delivery 必须复验原完整签名清单与授权，只扩大原 source.limit 到该清单总数，已完成和历史记录不重发。finish_platform 明确记录本轮未执行岗位被跳过，之后按原平台顺序续行。pause_delivery 保留卡片。平台完成审计后提供 continue_platforms / pause_delivery，下一平台的最终投递仍单独确认。重复同一应答幂等，冲突应答拒绝；账户、轮次、会话或原 source 变化拒绝，无有效签名授权不得继续。应答落盘后 pending slot 清理中断可安全恢复，不增发浏览器许可。
+
+## 未发布候选：批量发现与原生投递分阶段
+
+新轮次新增可选 collection_executor=cdp_readonly、delivery_executor=codex_native，默认采集100、推荐数不设固定默认。已有轮次不自动转换；待处理 request、Discover、采集断点、BrowserWork、授权和回执保留。只有无在途任务的轮次经过明确确认才可原地启用批量发现，round ID不变。
+
+新增 bulk-discovery 与 delivery-receipts 文件是账户绑定的恢复凭据，升级/回滚不得删除。上传和详情按原批次幂等重放，云端按原Discover扣费；结果返回前不新建任务。投递回执同步失败只重发回执，不重复外部投递。回滚旧客户端前应完成或保留这些任务，旧客户端不能继续v2任务，不能用新轮次替代。专用Chrome配置、登录态及历史审计不重置。

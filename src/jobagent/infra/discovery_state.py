@@ -347,10 +347,10 @@ def build_review(
 ) -> dict[str, Any]:
     manifest = envelope["manifest"]
     promoted_ids = list(dict.fromkeys(promoted_ids or []))
-    review_by_id = {str(item["id"]): item for item in manifest.get("review", [])}
+    review_by_id = {str(item["id"]): item for item in manifest.get("review", []) + manifest.get("reserve", [])}
     unknown = [job_id for job_id in promoted_ids if job_id not in review_by_id]
     if unknown:
-        raise ValueError("Only review jobs can be promoted: " + ", ".join(unknown))
+        raise ValueError("Only review or reserve jobs can be promoted: " + ", ".join(unknown))
     if promoted_ids and not confirm_promote:
         raise ValueError("Promoting review jobs requires --confirm-promote")
     selected = list(manifest.get("selected", []))
@@ -361,7 +361,7 @@ def build_review(
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
         "manifest": manifest,
         "user_overrides": [
-            {"job_id": item["id"], "from": "review", "to": "selected"}
+            {"job_id": item["id"], "from": item.get("classification", "review"), "to": "selected"}
             for item in promoted
         ],
         "send_candidates": [_send_item(item) for item in selected + promoted],

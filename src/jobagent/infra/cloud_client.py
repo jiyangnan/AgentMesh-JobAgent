@@ -554,6 +554,9 @@ def discovery_start(
     context_id: str | None = None,
     round_id: str | None = None,
     criteria_revision: int | None = None,
+    discovery_contract_version: int | None = None,
+    candidate_limit: int = 100,
+    recommendation_limit: int | None = None,
 ) -> dict[str, Any]:
     from jobagent.infra.protocol import digest_payload
 
@@ -568,6 +571,9 @@ def discovery_start(
     if round_intent and round_intent.get("status") == "confirmed":
         body["round_intent"] = round_intent
         body["intent_digest"] = digest_payload(round_intent)
+    if discovery_contract_version is not None:
+        body.update(discovery_contract_version=discovery_contract_version,
+                    candidate_limit=candidate_limit, recommendation_limit=recommendation_limit)
     if round_id:
         body["round_id"] = round_id
     if criteria_revision is not None:
@@ -579,7 +585,7 @@ def discovery_start(
         if round_id:
             body["round_id"] = round_id
     _workflow_price_stage("discover", request_id, body)
-    return _request(
+    plan = _request(
         "POST",
         "/v1/discovery/start",
         body,
@@ -588,6 +594,10 @@ def discovery_start(
         operation="discovery_start",
         request_id=request_id,
     )
+    if discovery_contract_version is not None and plan.get("discovery_contract_version") != discovery_contract_version:
+        raise CloudError("The server does not support bulk discovery yet", code="bulk_discovery_unavailable",
+                         retryable=False, details={"request_preserved": True, "no_charge": True})
+    return plan
 
 
 def discovery_renew(

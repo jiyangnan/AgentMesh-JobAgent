@@ -32,6 +32,10 @@ def _inspection_script(platform: str) -> str:
         && /我的智联/.test(title);
       const authUi = authenticatedLocation
         || authTerms.filter((term) => text.includes(term)).length >= 2;
+      const verificationUi = /安全验证|请完成验证|拖动滑块/.test(text)
+        || /[/]safe-validate|[/]captcha|[/]verify/.test(href)
+        || [...document.querySelectorAll('iframe')].some(frame =>
+          /captcha|verify|geetest/i.test(frame.src) && frame.getClientRects().length > 0);
       const resources = performance.getEntriesByType('resource') || [];
       return JSON.stringify({{
         url: href,
@@ -40,6 +44,7 @@ def _inspection_script(platform: str) -> str:
         loginUrl,
         loginUi,
         authUi,
+        verificationUi,
         resourceCount: resources.length,
         slowResourceCount: resources.filter((item) => Number(item.duration || 0) >= 5000).length,
         navigationTimingMs: Math.round((performance.getEntriesByType('navigation')[0] || {{}}).duration || 0)
@@ -141,7 +146,8 @@ def diagnose_browser(platform: str, *, port: int = ChromeInstanceManager.DEFAULT
         login_state = "login_required"
     else:
         login_state = "unknown"
-    ready_for_platform_work = bool(page_ready and login_state == "authenticated")
+    verification_required = bool(page.get("verificationUi"))
+    ready_for_platform_work = bool(page_ready and login_state == "authenticated" and not verification_required)
     return {
         "ok": page_ready,
         **base,
@@ -165,6 +171,7 @@ def diagnose_browser(platform: str, *, port: int = ChromeInstanceManager.DEFAULT
             "authenticated_ui_detected": bool(page.get("authUi")),
         },
         "ready_for_platform_work": ready_for_platform_work,
+        "verification_required": verification_required,
         "probe_elapsed_ms": round((time.monotonic() - started) * 1000),
         "next_suggested": None if ready_for_platform_work else f"jobagent {platform} login --check",
     }

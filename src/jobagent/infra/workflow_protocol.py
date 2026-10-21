@@ -58,6 +58,7 @@ def contract(parser: argparse.ArgumentParser) -> dict:
         "rules": {
             "authority": "CLI and server state, signed decisions and explicit user answers",
             "business_data": "Read through CLI; never inspect the workbench UI as a data fallback.",
+            "collection": "New rounds use the CLI read-only CDP collector: default 100, explicit maximum 1000, all unique candidates matched in cloud, recommendation count depends on fit. Preserve old in-flight executors. Never replace Discover with manual native browsing.",
             "browser": "Only an issued work begin response permits its exact native task; obey allowed_mode, nonce, binding and result_schema.",
             "user_web_handoff": "The user opens the supplied URL and returns to this conversation; this does not authorize host browser automation.",
             "host_adapters": "Use only currently callable native tools. Render interaction.fallback_text when cards are unavailable. Missing browser capability uses the work pause schema; never switch driver or API.",
@@ -113,6 +114,9 @@ def with_contract(payload: Any) -> Any:
             }
     elif payload.get("requires_technical_recovery"):
         action = {"type": "blocked", "reason": payload.get("error"), "recovery_command": continuation}
+    elif payload.get("automatic_retry_allowed") is False:
+        action = {"type": "blocked", "reason": payload.get("error") or "automatic_retry_disabled",
+                  "automatic_continuation": False}
     elif payload.get("event") == "browser_work_required" and work.get("nonce") and payload.get("native_step_issued"):
         action = {"type": "native_work", "work_id": work.get("work_id"),
                   "allowed_mode": work.get("allowed_mode"), "task_field": "work.task",
@@ -137,7 +141,9 @@ def with_contract(payload: Any) -> Any:
     if payload.get("recovery_requires_confirmation"):
         current.update(confirmation_required=True, recovery_field="recovery",
                        automatic_continuation=False)
-    return {**payload, "action": payload.get("action") or current, "agent_action": {
+    # A stale caller-supplied run action must not override a stop instruction.
+    public_action = current if payload.get("automatic_retry_allowed") is False else payload.get("action") or current
+    return {**payload, "action": public_action, "agent_action": {
         "protocol": PROTOCOL, "protocol_version": 1,
         "state": (payload.get("onboarding") or {}).get("stage") or interaction.get("kind")
                  or work.get("action") or payload.get("event") or payload.get("error")
