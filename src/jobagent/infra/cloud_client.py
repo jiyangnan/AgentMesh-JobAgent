@@ -555,7 +555,7 @@ def discovery_start(
     round_id: str | None = None,
     criteria_revision: int | None = None,
     discovery_contract_version: int | None = None,
-    candidate_limit: int = 100,
+    candidate_limit: int | None = None,
     recommendation_limit: int | None = None,
 ) -> dict[str, Any]:
     from jobagent.infra.protocol import digest_payload
@@ -573,7 +573,9 @@ def discovery_start(
         body["intent_digest"] = digest_payload(round_intent)
     if discovery_contract_version is not None:
         body.update(discovery_contract_version=discovery_contract_version,
-                    candidate_limit=candidate_limit, recommendation_limit=recommendation_limit)
+                    recommendation_limit=recommendation_limit)
+        if candidate_limit is not None:
+            body["candidate_limit"] = candidate_limit
     if round_id:
         body["round_id"] = round_id
     if criteria_revision is not None:

@@ -29,7 +29,7 @@ def _add_login(parser: argparse.ArgumentParser) -> None:
 def _add_discover(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wait-seconds", type=int, default=6, help="Page load wait per search page")
     parser.add_argument("--page-delay", type=float, default=2.0, help="Delay between search pages")
-    parser.add_argument("--candidate-limit", type=int, help="Bulk collection limit; defaults to 100 for a new round")
+    parser.add_argument("--candidate-limit", type=int, help="Bulk collection limit; defaults to 30 for a new round")
     parser.add_argument("--recommendation-limit", type=int, help="Optional user-requested recommendation maximum; otherwise use actual matches")
     parser.add_argument("--accept-partial", action="store_true", help="Explicitly use the preserved partial collection for this Discover")
 

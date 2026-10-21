@@ -106,7 +106,7 @@ def _create_round(
         "browser_executor": DEFAULT_BROWSER_EXECUTOR,
         "collection_executor": "cdp_readonly",
         "delivery_executor": "codex_native",
-        "discovery_options": {"candidate_limit": 100, "recommendation_limit": None},
+        "discovery_options": {"candidate_limit": 30, "recommendation_limit": None},
         "browser_session_id": UNBOUND_BROWSER_SESSION,
         "native_session": None,
         "intent": intent or {

@@ -99,6 +99,8 @@ def discover(platform, *, wait_seconds=6, page_delay=2.0, candidate_limit=None,
         return {"ok": True, "event": "discovery_already_completed", "request_preserved": True,
                 "workflow": workflow, "next_suggested": workflow["next_suggested"]}
     assert_collection_available(platform)
+    # Rounds created before options were persisted used 100. Only newly
+    # created/explicitly opted-in rounds receive the smaller default.
     options = dict(active.get("discovery_options") or {"candidate_limit": 100, "recommendation_limit": None})
     requested = {"candidate_limit": candidate_limit, "recommendation_limit": recommendation_limit}
     from jobagent.infra.discovery_state import load_pending_start, load_pending_decision, load_collection_checkpoint
@@ -136,7 +138,7 @@ def enable_existing_round(*, confirmed=False):
         if checkpoint or load_pending_start(platform) or load_pending_decision(platform) or active.get("platforms", {}).get(platform, {}).get("native_delivery"):
             raise ValueError("Finish the preserved discovery/delivery before changing its collection executor")
     active.update(collection_executor="cdp_readonly", delivery_executor="codex_native")
-    active.setdefault("discovery_options", {"candidate_limit": 100, "recommendation_limit": None})
+    active.setdefault("discovery_options", {"candidate_limit": 30, "recommendation_limit": None})
     rounds.save_round(active)
     return {"ok": True, "request_preserved": True, "workflow": rounds.round_status(),
             "next_suggested": rounds.round_status()["next_suggested"]}

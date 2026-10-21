@@ -58,7 +58,7 @@ def contract(parser: argparse.ArgumentParser) -> dict:
         "rules": {
             "authority": "CLI and server state, signed decisions and explicit user answers",
             "business_data": "Read through CLI; never inspect the workbench UI as a data fallback.",
-            "collection": "New rounds use the CLI read-only CDP collector: default 100, explicit maximum 1000, all unique candidates matched in cloud, recommendation count depends on fit. Preserve old in-flight executors. Never replace Discover with manual native browsing.",
+            "collection": "New rounds use the CLI read-only CDP collector: default 30, explicit maximum 1000, all unique candidates matched in cloud, recommendation count depends on fit. Preserve old in-flight executors. Never replace Discover with manual native browsing.",
             "browser": "Only an issued work begin response permits its exact native task; obey allowed_mode, nonce, binding and result_schema.",
             "user_web_handoff": "The user opens the supplied URL and returns to this conversation; this does not authorize host browser automation.",
             "host_adapters": "Use only currently callable native tools. Render interaction.fallback_text when cards are unavailable. Missing browser capability uses the work pause schema; never switch driver or API.",

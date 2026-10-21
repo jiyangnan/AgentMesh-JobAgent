@@ -22,13 +22,41 @@ def active(monkeypatch, tmp_path):
     return value
 
 
-def test_new_round_defaults_to_100_and_adaptive_recommendations(active):
+def test_new_round_defaults_to_30_and_adaptive_recommendations(active):
     state.current_round_path().unlink()
     created = rounds.start_new_round({"status": "confirmed", "target_roles": ["产品经理"],
                                      "target_cities": ["上海"]})
     assert created["collection_executor"] == "cdp_readonly"
     assert created["delivery_executor"] == "codex_native"
-    assert created["discovery_options"] == {"candidate_limit": 100, "recommendation_limit": None}
+    assert created["discovery_options"] == {"candidate_limit": 30, "recommendation_limit": None}
+
+
+@pytest.mark.parametrize("saved_limit", [None, 30, 100, 500])
+def test_discover_keeps_existing_round_scope(active, monkeypatch, saved_limit):
+    from jobagent.application import discover
+    if saved_limit is not None:
+        active["discovery_options"] = {"candidate_limit": saved_limit, "recommendation_limit": None}
+    rounds.save_round(active)
+    before = state.current_round_path().read_bytes()
+    rounds.ensure_current_round()
+    assert state.current_round_path().read_bytes() == before
+    monkeypatch.setattr(hybrid_discovery, "assert_collection_available", lambda _: None)
+    observed = []
+    def collect(*args, **kwargs):
+        observed.append(rounds.ensure_current_round()["discovery_options"])
+        return {"ok": True}
+    monkeypatch.setattr(discover, "run_discover", collect)
+    assert hybrid_discovery.discover("boss")["ok"]
+    assert observed == [{"candidate_limit": saved_limit or 100, "recommendation_limit": None}]
+
+
+def test_explicit_idle_opt_in_uses_30_without_replacing_round(active):
+    active.pop("collection_executor")
+    rounds.save_round(active)
+    assert hybrid_discovery.enable_existing_round(confirmed=True)["ok"]
+    updated = rounds.ensure_current_round()
+    assert updated["round_id"] == active["round_id"]
+    assert updated["discovery_options"] == {"candidate_limit": 30, "recommendation_limit": None}
 
 
 def test_old_round_and_existing_receipts_are_not_migrated_to_bulk(active):

@@ -289,6 +289,8 @@ continue_delivery 必须复验原完整签名清单与授权，只扩大原 sour
 
 ## 未发布候选：批量发现与原生投递分阶段
 
-新轮次新增可选 collection_executor=cdp_readonly、delivery_executor=codex_native，默认采集100、推荐数不设固定默认。已有轮次不自动转换；待处理 request、Discover、采集断点、BrowserWork、授权和回执保留。只有无在途任务的轮次经过明确确认才可原地启用批量发现，round ID不变。
+新轮次新增可选 collection_executor=cdp_readonly、delivery_executor=codex_native，默认采集30、推荐数不设固定默认。旧版v1协议默认仍为100；既有轮次、签名计划及请求中冻结的100或其他数量保持原值。v2新请求省略数量时默认30，同一request重放省略数量则复用原计划，不能用新默认值改变旧任务。已有轮次不自动转换；待处理 request、Discover、采集断点、BrowserWork、授权和回执保留。只有无在途任务的轮次经过明确确认才可原地启用批量发现，round ID不变。
+
+新v2签名计划可带同账号、同平台的确认投递快照 excluded_delivered_ids；列表采集先排除这些岗位，再计算本轮30条目标。旧计划不追加字段，原请求重放与签名续期保持同一排除快照；既有采集断点、上传正文和请求预算不重置。云端决定与本地发送仍再次检查投递历史，结果不明的旧动作不得重发。
 
 新增 bulk-discovery 与 delivery-receipts 文件是账户绑定的恢复凭据，升级/回滚不得删除。上传和详情按原批次幂等重放，云端按原Discover扣费；结果返回前不新建任务。投递回执同步失败只重发回执，不重复外部投递。回滚旧客户端前应完成或保留这些任务，旧客户端不能继续v2任务，不能用新轮次替代。专用Chrome配置、登录态及历史审计不重置。

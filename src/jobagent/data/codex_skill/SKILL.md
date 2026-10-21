@@ -11,7 +11,7 @@ For `browser_work_required`, follow the current task's returned command and perm
 
 Use the official Job Agent CLI for account-bound progress, cloud decisions,
 confirmation and audit. New rounds collect through the CLI's read-only CDP
-adapter, defaulting to 100 unique candidates. The cloud matches the whole pool;
+adapter, defaulting to 30 unique candidates. The cloud matches the whole pool;
 recommendation count depends on the user's profile, constraints and job evidence.
 Run the returned Discover command and wait for it to finish; do not replace it
 with manual browser clicks. Use native Computer Use only for issued native work,
@@ -43,7 +43,7 @@ round with explicit user consent may use `jobagent round use-bulk-discovery
 ## Host-independent workflow contract
 
 New rounds split discovery from delivery: execute the CLI's read-only CDP
-collection command (100 candidates by default, up to 1000 when explicitly
+collection command (30 candidates by default, up to 1000 when explicitly
 requested), then wait for cloud matching of the full collected pool. The number
 of recommendations depends on actual fit and evidence. Do not browse each job
 with native UI instead of running Discover. After the CLI releases collection,

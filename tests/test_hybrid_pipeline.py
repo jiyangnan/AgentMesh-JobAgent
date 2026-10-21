@@ -22,7 +22,7 @@ def job(i, platform="boss"):
 
 
 @pytest.mark.parametrize("platform", ["boss", "liepin", "zhilian", "51job"])
-@pytest.mark.parametrize("count", [100, 200, 500, 1000])
+@pytest.mark.parametrize("count", [30, 100, 200, 500, 1000])
 def test_collection_full_scale_without_native_per_job_reads(monkeypatch, platform, count):
     calls = []
     def collect(query, page, remaining, *args):
@@ -33,6 +33,63 @@ def test_collection_full_scale_without_native_per_job_reads(monkeypatch, platfor
     result = discovery.collect_from_search_plan(plan(platform, count), driver=object(), page_delay=0)
     assert len(result) == count
     assert len(calls) == (count + 14) // 15
+
+
+@pytest.mark.parametrize("platform", ["boss", "liepin", "zhilian", "51job"])
+def test_prior_deliveries_do_not_consume_new_round_candidate_target(monkeypatch, platform):
+    current = plan(platform, 30)
+    current["excluded_delivered_ids"] = [str(i) for i in range(30)]
+    calls = []
+    def collect(query, page, remaining, *args):
+        calls.append(page)
+        return [job(i, platform) for i in range((page - 1) * 15, page * 15)]
+    monkeypatch.setattr(discovery, "_collect_boss", collect)
+    monkeypatch.setattr(discovery, "_collect_web_platform", lambda p, *args: discovery.CollectedPage(collect(*args)))
+    result = discovery.collect_from_search_plan(current, driver=object(), page_delay=0)
+    assert [item["id"] for item in result] == [str(i) for i in range(30, 60)]
+    assert calls == [1, 2, 3, 4]
+
+
+def test_delivered_exclusions_survive_resume_without_rereading_completed_pages(monkeypatch):
+    current = plan(count=30)
+    current["excluded_delivered_ids"] = [str(i) for i in range(30)]
+    snapshots, calls = [], []
+    interrupted = False
+    def collect(query, page, remaining, *args):
+        nonlocal interrupted
+        calls.append(page)
+        if page == 3 and not interrupted:
+            interrupted = True
+            raise discovery.CollectionError("fixture_interrupted", "synthetic interruption")
+        return [job(i) for i in range((page - 1) * 15, page * 15)]
+    monkeypatch.setattr(discovery, "_collect_boss", collect)
+    with pytest.raises(discovery.CollectionError, match="synthetic interruption"):
+        discovery.collect_from_search_plan(current, driver=object(), page_delay=0,
+            checkpoint_callback=lambda value: snapshots.append(copy.deepcopy(value)))
+    assert snapshots[-1]["candidates"] == []
+    result = discovery.collect_from_search_plan(current, driver=object(), page_delay=0,
+                                                resume_progress=snapshots[-1])
+    assert [item["id"] for item in result] == [str(i) for i in range(30, 60)]
+    assert calls == [1, 2, 3, 3, 4]
+
+
+@pytest.mark.parametrize("excluded", [[], ["job-1"], None, "job-1", [""], [123]])
+def test_signed_plan_validates_delivered_exclusion_snapshot(monkeypatch, excluded):
+    from jobagent.infra import protocol
+    from tests.test_cli_v3 import _future, _key_pair, _sign
+    private, public = _key_pair()
+    monkeypatch.setattr(protocol, "DECISION_SIGNING_PUBLIC_KEY", public)
+    profile = {"preferences": {"targetRoles": [{"title": "产品经理"}]}}
+    signed = _sign(private, {**plan(count=30), "manifest_type": "search_plan",
+        "protocol_version": 1, "profile_digest": protocol.digest_payload(profile),
+        "expires_at": _future(), "account_ref": "acct-fixture",
+        "collection_executor": "cdp_readonly", "delivery_executor": "codex_native",
+        "excluded_delivered_ids": excluded})
+    if excluded == [] or excluded == ["job-1"]:
+        assert protocol.verify_search_plan(signed, platform="boss", profile=profile)["excluded_delivered_ids"] == excluded
+    else:
+        with pytest.raises(protocol.ProtocolError, match="delivered exclusions invalid"):
+            protocol.verify_search_plan(signed, platform="boss", profile=profile)
 
 
 def test_repeated_page_preserves_last_safe_page_and_does_not_skip_it(monkeypatch):

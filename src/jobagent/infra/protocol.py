@@ -186,6 +186,11 @@ def verify_search_plan(
     if (not bulk and limit != 100) or (bulk and not 1 <= limit <= 1000):
         raise ProtocolError("search plan candidate limit mismatch")
     if bulk:
+        excluded = signed.get("excluded_delivered_ids", [])
+        if (not isinstance(excluded, list)
+                or any(not isinstance(identifier, str) or not 1 <= len(identifier.strip()) <= 200
+                       for identifier in excluded)):
+            raise ProtocolError("search plan delivered exclusions invalid")
         recommendation_limit = signed.get("recommendation_limit")
         if recommendation_limit is not None and (type(recommendation_limit) is not int or not 1 <= recommendation_limit <= 1000):
             raise ProtocolError("search plan recommendation limit invalid")

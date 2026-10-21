@@ -11,7 +11,7 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 ## Host-independent workflow contract
 
 New rounds split discovery from delivery: execute the CLI's read-only CDP
-collection command (100 candidates by default, up to 1000 when explicitly
+collection command (30 candidates by default, up to 1000 when explicitly
 requested), then wait for cloud matching of the full collected pool. The number
 of recommendations depends on actual fit and evidence. Do not browse each job
 with native UI instead of running Discover. After the CLI releases collection,

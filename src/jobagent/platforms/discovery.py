@@ -236,6 +236,10 @@ def collect_from_search_plan(
     )
     seen = {str(item["id"]) for item in candidates}
     bulk = plan.get("discovery_contract_version") == 2
+    if bulk:
+        # Verified prior deliveries do not consume this round's candidate
+        # target. The signed snapshot stays fixed across checkpoint resumes.
+        seen.update(plan.get("excluded_delivered_ids", []))
     page_fingerprints = dict((resume_progress or {}).get("page_fingerprints", {}))
     prior_seconds = float((resume_progress or {}).get("elapsed_seconds", 0))
     started = time.monotonic()
