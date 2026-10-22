@@ -152,6 +152,12 @@ if delivery cannot be verified. Never resend a terminal unresolved job. Existing
 issued work keeps its original contract and cannot gain a new send permission.
 
 Liepin delivery opens the approved conversation before submitting a resume.
+For an anonymous headhunter client, follow the task's
+`anonymous_company_identity` when the detail omits the client company. Report
+that absence honestly; never copy the signed label or another job's company
+into observed evidence. Verify the approved detail URL, title, salary and area
+and the actual recruiter/employer. Subsequent conversation work retains this
+recruiter identity and verifies the exact approved job before any action.
 Follow the CLI's subsequent read-only conversation inspection: a platform default
 greeting and an actual resume receipt are separate facts. Never submit a resume
 again when the conversation already proves it was sent, and never count the

@@ -174,6 +174,12 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
         success["page_url"] = "https://www.zhipin.com/web/geek/chat"
         if action == "inspect_delivery":
             success.update(communication_state="open", conversation_job_verified=True)
+    from jobagent.application.native_liepin_identity import contract as liepin_identity_contract
+    liepin_identity_contract(work, task, fields)
+    if task.get("anonymous_recruiter_identity"):
+        identity.update(company=None, company_visibility="not_disclosed",
+                        conversation_job_verified=True, **task["anonymous_recruiter_identity"])
+        success.update(identity)
     task["result_schema"] = {**task.get("result_schema", {}), "outcome": "success|uncertain|unresolved|unavailable",
         "evidence": fields,
         "outcome_rules": {
@@ -773,8 +779,10 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
         _error("native_job_binding_mismatch", "The observed job must exactly match the approved task.")
     from jobagent.application.native_discovery import validate_job_url
     validate_job_url(platform, e["job_url"], str(job["id"]))
-    if e.get("title") != job["title"] or e.get("company") != job["company"]:
-        _error("native_job_identity_mismatch", "The visible title and company must match the approved job.")
+    if e.get("title") != job["title"]:
+        _error("native_job_identity_mismatch", "The visible title must match the approved job.")
+    from jobagent.application.native_liepin_identity import validate as validate_liepin_identity
+    validate_liepin_identity(work, e)
     if result["outcome"] in {"uncertain", "unresolved", "unavailable"}:
         if e.get("receipt_checked") is not True:
             _error("native_receipt_check_required", "Check official receipt/history before an unresolved or unavailable outcome.")
@@ -1208,6 +1216,10 @@ def _delivery_next(platform: str) -> dict[str, Any]:
             if inspection["result"]["outcome"] != "unavailable" and source.get("stop_on_failure", True):
                 return _delivery_paused(platform)
             continue
+        from jobagent.application.native_liepin_identity import anchor_from
+        recruiter_identity = anchor_from(e)
+        if recruiter_identity:
+            task["anonymous_recruiter_identity"] = recruiter_identity
         needs_resume = platform != "boss"
         needs_greeting = platform in {"boss", "liepin"}
         resume_done = e.get("resume_state") == "sent"
