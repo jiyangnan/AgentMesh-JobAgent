@@ -392,6 +392,12 @@ def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
                   "\n本只读任务的观察次数已用完，前置窗口不会恢复观察额度。已有完整真实证据时可按 completion_command 提交；"
                   "若还需新的观察或采集，必须先明确确认下面的只读恢复范围，不能自动恢复或重复 begin。\n"
                 + response["user_prompt"])
+    if host_window_issue and work["action"] == "inspect_delivery" and not work["side_effect"] and work["task"].get("inspection_phase") != "after_communication":
+        response["window_recovery"] = {
+            "kind": "unattempted_delivery_inspection", "confirmation_required": True,
+            "after_confirmation_argv": ["jobagent", "work", "recover", "--work-id", work["work_id"], "--confirm-recover"],
+            "instruction": "After technical diagnosis and explicit confirmation, verify the same profile/account with the supported native host and resume this unattempted job inspection. Existing action history, changed approval or another pending work blocks recovery. No send permission, recollection or billing reset is granted.",
+        }
     from jobagent.application.native_continuation import contract as continuation_contract
     continuation = continuation_contract(work)
     if continuation:
@@ -601,18 +607,21 @@ def _resume_session_recovery(binding: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def recover(work_id: str, *, confirmed: bool) -> dict[str, Any]:
-    """Recover a cancelled read-only page without replacing its signed request.
+    """Recover a read-only page or unattempted pre-delivery inspection.
 
     The logical session stays bound to the original account/profile/checkpoint.
     Only a fresh, independently verified browser observation may replace its
-    physical window reference. Delivery intents are never eligible.
+    physical window reference. External action intents are never eligible.
     """
     if not confirmed:
-        _error("user_confirmation_required", "Explicit confirmation is required to recover this read-only collection.")
+        _error("user_confirmation_required", "Explicit confirmation is required to recover this read-only task.")
     binding = _binding()
     source = store.get_work(work_id, binding)
     platform = source["binding"]["platform"]
     rounds.assert_platform_turn(platform)
+    if source["action"] == "inspect_delivery" and not source["side_effect"]:
+        from jobagent.application.native_delivery_recovery import recover as recover_inspection
+        return recover_inspection(source)
     if source["action"] != "collect_search_page" or source["side_effect"] or source["task"].get("delivery_source"):
         _error("native_recovery_not_allowed", "Only a read-only search collection can use session recovery; delivery intents remain reconciliation-only.")
     works = store.list_work(binding)
@@ -939,6 +948,9 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
         active["browser_session_id"] = session["id"]
         active["browser_executor"] = EXECUTOR
     elif action == "recover_session":
+        from jobagent.application.native_delivery_recovery import SCOPE, finish
+        if work["task"].get("recovery_scope") == SCOPE:
+            return finish(work)
         session = active.get("native_session") or {}
         if (session.get("id") != work["binding"]["session_id"]
                 or session.get("account_ref") != current_account_ref()
@@ -1163,6 +1175,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
     from jobagent.platforms.message_contract import validate_personalized_message
     reviewed = _load_reviewed(platform, source["input_path"], preview_id=source["preview_id"], authorization_id=source["authorization_id"])
     all_work = store.list_account_work(binding["account_ref"])
+    from jobagent.application.native_delivery_recovery import superseded_inspections
+    superseded = superseded_inspections(all_work)
     for job in reviewed["send_candidates"][:source["limit"]]:
         validate_job_url(platform, str(job["url"]), str(job["id"]))
         if platform in {"boss", "liepin"}:
@@ -1172,7 +1186,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         job_binding = {**binding, "session_id": session["id"], "discover_id": reviewed["discover_id"],
                        "preview_id": source["preview_id"], "authorization_id": source["authorization_id"],
                        "candidate_digest": digest_payload(reviewed["send_candidates"]), "job_id": str(job["id"])}
-        own = [w for w in all_work if all(w["binding"].get(k) == v for k, v in job_binding.items())]
+        own = [w for w in all_work if w["work_id"] not in superseded
+               and all(w["binding"].get(k) == v for k, v in job_binding.items())]
         previous = [w for w in all_work if w.get("side_effect") and w["binding"].get("platform") == platform
                     and w["binding"].get("job_id") == str(job["id"]) and w not in own]
         inspection = next((w for w in own if w["action"] == "inspect_delivery" and w["state"] == "closed"

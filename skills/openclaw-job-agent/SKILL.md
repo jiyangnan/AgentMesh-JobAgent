@@ -70,6 +70,16 @@ and input schemas. Protocol 2 uses the top-level `action`. The legacy
 `workflow-contract` alias and `agent_action` field remain available for older
 integrations. Use the current protocol returned by the installed CLI.
 
+For a diagnosed native-window failure before any action on the current job,
+`window_recovery` may offer explicitly confirmed `work recover` for the initial
+read-only delivery inspection. It archives that inspection, independently
+verifies the original profile/account using the supported host, and resumes the
+same approved list. It never cancels the delivery authorization or reissues a
+communicate/send/submit action. Existing action history, post-communication work,
+changed scope and pending external actions are ineligible. Reuse the user's
+existing confirmation of this recovery scope; never reset state or fabricate a
+stable window ID when the supported host exposes an app reference.
+
 After the installation/account handoff, use this loop:
 
 1. When the user explicitly requests a new job-search round, save their actual

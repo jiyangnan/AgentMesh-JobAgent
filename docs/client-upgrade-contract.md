@@ -127,7 +127,7 @@ Analytics relay 使用已配置 API Key 在后台向 `/v1/analytics/events` 发�
 
 `account`、`init`、`doctor`、`upgrade-check`、`platforms` 和 `update` 等恢复或只读命令在冲突期间仍可运行。画像属于账户业务状态，`resume analyze` 必须等 owner 归属问题解决后再执行。平台自动化命令收到 `client_upgrade_required` 后，宿主 Agent 必须执行响应中的 `next_suggested`，不可绕过检查。
 
-若唯一冲突为 `native_browser_work_inflight`，`work next/begin/submit/status` 可继续原任务的恢复协议；`work recover` 仅能对客户端明确允许的只读采集任务执行下述恢复，不能借此重新发放已记录副作用的许可。账户与画像校验仍必需。Key、画像或账本兼容性冲突不能用 work 命令豁免。账本不可读时执行只读 `jobagent upgrade-check` 查看冲突，保留原文件并使用兼容客户端处理；不得删除账本来解除阻断。
+若唯一冲突为 `native_browser_work_inflight`，`work next/begin/submit/status` 可继续原任务的恢复协议；`work recover` 仅能对客户端明确允许的只读采集或尚无任何动作历史的初始投递检查执行下述恢复，不能借此重新发放已记录副作用的许可。账户与画像校验仍必需。Key、画像或账本兼容性冲突不能用 work 命令豁免。账本不可读时执行只读 `jobagent upgrade-check` 查看冲突，保留原文件并使用兼容客户端处理；不得删除账本来解除阻断。
 
 ## 发布门槛
 
@@ -253,8 +253,15 @@ Native responses add a `recovery` object for exhausted read-only tasks. This is
 an additive presentation contract, not a ledger migration or attempt reset.
 Eligible search-page collection exposes the existing explicitly confirmed
 `work recover` path consistently from next/status and rejected begin responses.
-Other exhausted tasks retain `receipt_only`; recovery tasks and delivery work
-cannot use this addition to obtain another execution budget. The last newly
+Other exhausted tasks retain `receipt_only`; recovery tasks and external-action work
+cannot use this addition to obtain another execution budget. A diagnosed window
+failure on an initial `inspect_delivery` has a separate explicitly confirmed
+`window_recovery` path only when that job has no action history. The old inspection
+and receipts remain archived, its nonce/attempts stay unchanged, and a new read-only
+inspection follows independent verification of the same profile/account. Original
+round, logical session, signed list, authorization and completed jobs are preserved.
+No automatic state migration, collection, billing or external-action replay occurs.
+The last newly
 issued observation permit remains usable for that observation; later reads
 never reissue it.
 
