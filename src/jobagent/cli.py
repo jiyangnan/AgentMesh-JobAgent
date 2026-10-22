@@ -563,7 +563,7 @@ def _doctor_env() -> dict[str, Any]:
                 key_valid = True
             except cloud_client.CloudError as exc:
                 key_error = exc.code or "api_key_verification_failed"
-                key_rejected = exc.status == 401 or exc.code == "invalid_api_key"
+                key_rejected = exc.status == 401 or exc.code in {"invalid_api_key", "revoked"}
                 if exc.details.get("tls_diagnostic"):
                     transport_details = exc.details
     python_available = bool(shutil.which("python3"))
