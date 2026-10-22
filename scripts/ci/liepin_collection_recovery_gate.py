@@ -56,6 +56,17 @@ def _search_document(mode: str) -> str:
     body = f'<input name="key" value="{html.escape(QUERY, quote=True)}">'
     if mode == "empty":
         body += "<p>非常抱歉！暂时没有合适的职位</p>"
+    elif mode == "modern":
+        for index in range(40):
+            route = "a" if index % 2 else "job"
+            body += (
+                '<div class="jobCardPcContainer"><div class="jobDetailBox">'
+                f'<a href="/{route}/modern-{index}.shtml">'
+                f'<div>Fixture AI 产品经理 {index}</div><div>【</div><div>深圳-南山区</div>'
+                '<div>】</div><div>20-30k</div><div>3-5年</div><div>本科</div></a>'
+                f'<div>Fixture Company {index}</div><div>互联网1000人以上</div></div>'
+                '<div>Fixture HR·招聘经理</div></div>'
+            )
     else:
         body += (
             '<article class="job-card-pc-container" data-job-id="fixture-1">'
@@ -285,6 +296,19 @@ def _run_cases(cdp: ObservedCDPClient, fixtures: FixtureInterceptor, root: Path)
         assert fixtures.search_pages == [1], fixtures.search_pages
         assert cdp.navigation_count - before == 1
         checks[f"{mode}_result_ends_query_without_page_two"] = True
+    fixtures.mode = "modern"
+    _controller_boot(cdp)
+    fixtures.search_pages.clear()
+    before = cdp.navigation_count
+    collector = LiepinReadOnlyCollector(driver, city_cache_path=root / "fixture-city-cache.json")
+    result = collector.collect(QUERY, limit=30, pages=2, page_delay=0, wait_seconds=1)
+    assert result.ok and len(result.jobs) == 30, result.to_payload(include_snapshot=True)
+    assert len({job.raw_data["jobId"] for job in result.jobs}) == 30
+    assert all(job.company.startswith("Fixture Company ") and job.city == "深圳"
+               and job.area == "南山区" for job in result.jobs), result.snapshot
+    assert any("/a/" in job.url for job in result.jobs)
+    assert fixtures.search_pages == [1] and cdp.navigation_count - before == 1
+    checks["modern_cards_collect_both_routes_and_company_without_page_two"] = True
     assert cdp.input_count == 0, "fixture gate unexpectedly used input actions"
     assert fixtures.rejected_count >= 1, "non-fixture denial probe was not intercepted"
     assert not fixtures.errors, fixtures.errors

@@ -728,6 +728,15 @@ The send command rechecks local delivery history. A stale or edited review file 
 
 ### 猎聘
 
+After a technically diagnosed incomplete list extraction, a fixed client can
+offer `jobagent liepin discover --repair-collection`. Obtain the user's explicit
+choice before using it. Repair retains the original signed plan, request and
+candidate prefix, archives the original progress inside the checkpoint, and
+permits at most one additional pass over its original completed pages. The
+original elapsed time still counts against the signed collection time budget.
+It cannot reopen finalized matching or reset a repair after interruption.
+Ordinary retries and login/verification recovery never authorize this repair.
+
 On Liepin `liepin_verification_required`, keep the existing browser tab and stop for the returned user prompt. Only after the user completes verification, run the exact `next_suggested` Discover command. Completed query pages and collected candidates resume from the preserved account-bound checkpoint; do not restart the round, request another login or repeat completed searches. Explicit no-results or verified final-page evidence retires only that query. An older request without a checkpoint remains preserved; never invent missing progress.
 
 ```bash

@@ -85,7 +85,7 @@ def detail_url_allowed(platform, url):
         if platform == "boss":
             return bool(re.fullmatch(r"/job_detail/[^/]+\.html", path))
         if platform == "liepin":
-            return bool(re.fullmatch(r"/job/[^/]+\.(s?html)", path))
+            return bool(re.fullmatch(r"/(?:job|a)/[^/]+\.(s?html)", path))
         if platform == "zhilian":
             return bool(re.fullmatch(r"/jobdetail/[^/]+(?:/)?", path)
                         or (host == "jobs.zhaopin.com" and re.fullmatch(r"/[^/]+\.html?", path)))

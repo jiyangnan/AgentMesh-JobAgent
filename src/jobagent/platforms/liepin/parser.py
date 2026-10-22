@@ -37,7 +37,7 @@ def liepin_job_id(raw: dict[str, Any]) -> str:
     if explicit:
         return str(explicit)
     url = str(_first(raw, "url", "jobUrl", "pcUrl") or "")
-    match = re.search(r"/job/([^/?#]+?)(?:\.shtml)?(?:[?#]|$)", url)
+    match = re.search(r"/(?:job|a)/([^/?#]+?)(?:\.shtml)?(?:[?#]|$)", url)
     return match.group(1) if match else ""
 
 

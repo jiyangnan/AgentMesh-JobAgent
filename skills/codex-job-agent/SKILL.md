@@ -28,6 +28,14 @@ Keep the original request, Discover ID, candidate checkpoint and upload receipts
 when interrupted. `--accept-partial` requires the user's explicit choice to use
 an available partial pool; show target and actual coverage. Do not start over.
 
+After technical diagnosis of an incomplete Liepin extraction, an explicit user
+choice may authorize `jobagent liepin discover --repair-collection` with the
+fixed client. This bounded repair preserves the original plan, request,
+candidate prefix, completed pages and billing identity; it reparses only pages
+from that original checkpoint once. Ordinary retries never activate repair or
+reset its progress. Login/verification interruptions keep their own recovery.
+Do not use repair to reopen a finalized Discover or to expand its signed scope.
+
 After matching, the CLI disconnects CDP and native delivery verifies the same
 dedicated Chrome profile and platform account. Show the complete preview and
 wait for the user's final-list confirmation. CDP must never send a message or

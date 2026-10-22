@@ -89,10 +89,15 @@ def login(platform, args):
 
 
 def discover(platform, *, wait_seconds=6, page_delay=2.0, candidate_limit=None,
-             recommendation_limit=None, accept_partial=False):
+             recommendation_limit=None, accept_partial=False, repair_collection=False):
     from jobagent.application.discover import run_discover
     active = rounds.ensure_current_round()
     item = active.get("platforms", {}).get(platform, {})
+    if repair_collection and (platform != "liepin" or accept_partial or item.get("status") in {
+            "discovered", "awaiting_delivery_confirmation", "reviewed", "sent", "completed"}):
+        from jobagent.platforms.discovery import CollectionError
+        raise CollectionError("collection_repair_not_allowed", "Collection repair cannot reopen finalized work",
+            details={"request_preserved": True, "no_charge": True, "retryable": False})
     # Repeating Discover after success is a continuation, never a new bill.
     if item.get("status") in {"discovered", "awaiting_delivery_confirmation", "reviewed", "sent", "completed"}:
         workflow = rounds.round_status()
@@ -117,7 +122,8 @@ def discover(platform, *, wait_seconds=6, page_delay=2.0, candidate_limit=None,
     rounds.save_round(active)
     started = monotonic()
     result = run_discover(platform, wait_seconds=wait_seconds, page_delay=page_delay,
-                          **({"accept_partial": True} if accept_partial else {}))
+                          **({"accept_partial": True} if accept_partial else {}),
+                          **({"repair_collection": True} if repair_collection else {}))
     return {**result, "collection_executor": "cdp_readonly", "delivery_executor": "codex_native",
             "elapsed_seconds": round(monotonic() - started, 3)}
 

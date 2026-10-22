@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-LIEPIN_SELECTOR_VERSION = "2026-08-22.1"
+LIEPIN_SELECTOR_VERSION = "2026-10-22.1"
 
 LIEPIN_CARD_SELECTORS: tuple[str, ...] = (
     "[data-job-id]",
     "[data-nick]",
+    ".jobCardPcContainer",
     ".job-card-pc-container",
     ".job-card",
     ".sojob-item-main",
@@ -21,7 +22,15 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
     (function(){{
       const limit = {int(limit)};
       const selectorVersion = '{LIEPIN_SELECTOR_VERSION}';
-      const candidates = Array.from(document.querySelectorAll({selectors!r}));
+      const cardSelectors = {selectors!r};
+      const detailLinks = 'a[href*="/job/"], a[href*="/a/"]';
+      // Prefer complete cards so company/recruiter siblings are retained. Some
+      // older layouts expose only a title link inside a list item.
+      const candidates = Array.from(new Set([
+        ...document.querySelectorAll(cardSelectors),
+        ...Array.from(document.querySelectorAll(detailLinks)).map(link =>
+          link.closest(cardSelectors) || link)
+      ]));
       const title = document.title || '';
       const href = location.href || '';
       const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
@@ -38,7 +47,7 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
       const seen = new Set();
       const cards = [];
       const resultCardCount = document.querySelectorAll(
-        '.job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"]'
+        '.jobCardPcContainer, .job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"], a[href*="/a/"]'
       ).length;
       const dq = document.querySelector('input[name="dq"]');
       function visible(el) {{
@@ -124,15 +133,26 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
         // Identity: prefer a child <a> with /job/ href; also accept the
         // candidate itself when it IS the <a> (Liepin wraps job titles in
         // <a href="/job/XXX.shtml"> directly, with no inner <a>).
-        let link = el.querySelector('a[href*="/job/"], a[href*="liepin.com/job"]');
+        let link = el.querySelector(detailLinks);
         if (!link && el.tagName === 'A') {{
           const selfHref = el.getAttribute('href') || '';
-          if (selfHref.indexOf('/job/') >= 0 || selfHref.indexOf('liepin.com/job') >= 0) {{
+          if (/\\/(?:job|a)\\//.test(selfHref)) {{
             link = el;
           }}
         }}
         const url = link ? absUrl(link.getAttribute('href') || '') : '';
+        let routeIdentity = null;
+        try {{
+          const parsed = new URL(url);
+          if (parsed.protocol === 'https:' && parsed.hostname === 'www.liepin.com'
+              && !parsed.username && !parsed.password && (!parsed.port || parsed.port === '443'))
+            routeIdentity = parsed.pathname.match(/^\\/(?:job|a)\\/([A-Za-z0-9_-]+)\\.shtml$/);
+        }} catch (error) {{ routeIdentity = null; }}
         const id = el.getAttribute('data-job-id') || el.getAttribute('data-id') || '';
+        if (url && !routeIdentity) {{
+          rejected.missingIdentity += 1;
+          continue;
+        }}
         if (!url && !id) {{
           rejected.missingIdentity += 1;
           continue;
@@ -142,13 +162,12 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
           rejected.duplicate += 1;
           continue;
         }}
-        seen.add(dedupe);
-
         const lines = text.split('\\n').map(cleanLine).filter(Boolean);
         if (lines.length < 4) {{
           rejected.weakSignal += 1;
           continue;
         }}
+        seen.add(dedupe);
         const salaryIndex = lines.findIndex(x => /k|薪|万|元/i.test(x));
         // City extraction (two strategies):
         //   1. Prefer the 【城市-区域】 bracketed pattern Liepin uses on job
@@ -157,7 +176,7 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
         //   2. Fall back to a major-city whitelist for cards without brackets.
         let cityIndex = -1;
         for (let i = 0; i < lines.length; i++) {{
-          if (/^[【\\[]?[\\u4e00-\\u9fa5]{2,8}-[\\u4e00-\\u9fa5]{2,8}[】\\]]?$/.test(lines[i])) {{
+          if (/^[【\\[]?[\\u4e00-\\u9fa5]{{2,8}}-[\\u4e00-\\u9fa5]{{2,8}}[】\\]]?$/.test(lines[i])) {{
             cityIndex = i; break;
           }}
         }}
@@ -181,8 +200,8 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
           && !isNoiseLine(x)
         ) || '';
         cards.push({{
-          jobId: id,
-          jobTitle: lines[0] || '',
+          jobId: id || (routeIdentity ? routeIdentity[1] : ''),
+          jobTitle: (textOf(link).split('\\n').map(cleanLine).filter(Boolean)[0] || lines[0] || ''),
           salary,
           companyName: company,
           cityName: city,

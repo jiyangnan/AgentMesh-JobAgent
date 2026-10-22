@@ -79,6 +79,36 @@ def test_discovery_bypasses_native_capability_but_send_remains_native(active, mo
     assert hybrid_discovery.enabled()
 
 
+def test_explicit_liepin_repair_flag_reaches_cli_handler(active, monkeypatch):
+    active["platforms"]["boss"]["status"] = "completed"
+    rounds.save_round(active)
+    calls = []
+    monkeypatch.setattr(hybrid_discovery, "discover", lambda *a, **k: calls.append((a, k)) or {"ok": True})
+    result = cli._native_dispatch(cli.build_parser().parse_args(["liepin", "discover", "--repair-collection"]))
+    assert result["ok"] and calls[0][0] == ("liepin",)
+    assert calls[0][1]["repair_collection"] is True
+
+
+@pytest.mark.parametrize("status", ["discovered", "awaiting_delivery_confirmation", "reviewed", "sent", "completed"])
+def test_repair_cannot_reopen_a_finalized_liepin_discover(active, monkeypatch, status):
+    from jobagent.platforms.discovery import CollectionError
+    active["platforms"]["liepin"]["status"] = status
+    rounds.save_round(active)
+    monkeypatch.setattr(hybrid_discovery, "assert_collection_available", lambda _: pytest.fail("repair entered browser path"))
+    with pytest.raises(CollectionError) as error:
+        hybrid_discovery.discover("liepin", repair_collection=True)
+    assert error.value.code == "collection_repair_not_allowed"
+
+
+def test_repair_without_preserved_request_does_not_start_or_charge(active, monkeypatch):
+    from jobagent.application import discover, resume_freshness
+    from jobagent.platforms.discovery import CollectionError
+    monkeypatch.setattr(resume_freshness, "gate_search", lambda _: pytest.fail("repair started a fresh workflow"))
+    with pytest.raises(CollectionError) as error:
+        discover.run_discover("liepin", repair_collection=True)
+    assert error.value.code == "collection_repair_not_allowed"
+
+
 def test_open_native_work_blocks_collection_before_browser_or_cloud(active, monkeypatch):
     from jobagent.infra import browser_work
     monkeypatch.setattr(browser_work, "has_open", lambda: True)

@@ -430,7 +430,17 @@ def run_discover(
     wait_seconds: int = 6,
     page_delay: float = 2.0,
     accept_partial: bool = False,
+    repair_collection: bool = False,
 ) -> dict[str, Any]:
+    if repair_collection:
+        from jobagent.infra.discovery_state import load_pending_decision
+        saved = load_collection_checkpoint(platform)
+        if (platform != "liepin" or accept_partial or saved is None
+                or saved["plan"].get("discovery_contract_version") != 2
+                or load_pending_decision(platform) is not None):
+            raise CollectionError("collection_repair_not_allowed",
+                "Repair requires the original unfinalized Liepin collection",
+                details={"request_preserved": True, "no_charge": True, "retryable": False})
     from jobagent.application.resume_freshness import gate_search
     gate = gate_search(platform)
     if gate:
@@ -656,6 +666,7 @@ def run_discover(
         collection_kwargs = {
             "resume_progress": collection["progress"] if collection else None,
             "checkpoint_callback": checkpoint,
+            **({"repair_collection": True} if repair_collection else {}),
         }
         if collection:
             emit_stage("browser_collection_resumed", platform=platform,

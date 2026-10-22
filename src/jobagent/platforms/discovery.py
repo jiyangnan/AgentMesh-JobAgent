@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -214,6 +215,7 @@ def collect_from_search_plan(
     progress_callback: Callable[..., None] | None = None,
     resume_progress: dict[str, Any] | None = None,
     checkpoint_callback: Callable[[dict[str, Any]], None] | None = None,
+    repair_collection: bool = False,
 ) -> list[dict[str, Any]]:
     from jobagent.drivers.boss import create_driver
     from jobagent.infra.exceptions import (
@@ -234,13 +236,48 @@ def collect_from_search_plan(
     candidates, completed_pages, exhausted_queries = _restore_progress(
         resume_progress, queries=queries, candidate_limit=candidate_limit
     )
-    seen = {str(item["id"]) for item in candidates}
     bulk = plan.get("discovery_contract_version") == 2
+    saved_repair = (resume_progress or {}).get("repair")
+    repair = deepcopy(saved_repair)
+    if repair_collection and saved_repair is None:
+        if (platform != "liepin" or not bulk or not 0 < len(candidates) < candidate_limit
+                or not completed_pages or (resume_progress or {}).get("stop_reason") != "collection_query_budget_reached"):
+            raise CollectionError("collection_repair_not_allowed",
+                "Only a preserved, incomplete Liepin query-limit extraction can be repaired",
+                details={"request_preserved": True, "no_charge": True, "retryable": False})
+        from jobagent.platforms.liepin.selectors import LIEPIN_SELECTOR_VERSION
+        repair = {"selector_version": LIEPIN_SELECTOR_VERSION,
+                  "source_completed_pages": [list(item) for item in sorted(completed_pages)],
+                  "original_candidate_count": len(candidates),
+                  "original_progress": deepcopy(resume_progress),
+                  "completed_pages": [], "page_fingerprints": {}}
+    repair_pages: set[tuple[int, int]] = set()
+    repair_source: set[tuple[int, int]] = set()
+    if repair is not None:
+        from jobagent.platforms.liepin.selectors import LIEPIN_SELECTOR_VERSION
+        try:
+            repair_pages = {tuple(item) for item in repair["completed_pages"]}
+            repair_source = {tuple(item) for item in repair["source_completed_pages"]}
+            valid_repair = (platform == "liepin" and bulk
+                and repair["selector_version"] == LIEPIN_SELECTOR_VERSION
+                and 0 < repair["original_candidate_count"] <= len(candidates)
+                and candidates[:repair["original_candidate_count"]] == repair["original_progress"]["candidates"]
+                and repair["original_progress"]["stop_reason"] == "collection_query_budget_reached"
+                and repair_source == completed_pages and repair_pages <= repair_source
+                and all(len(item) == 2 for item in repair_source)
+                and isinstance(repair["page_fingerprints"], dict))
+        except (KeyError, TypeError, ValueError):
+            valid_repair = False
+        if not valid_repair:
+            raise CollectionError("collection_repair_not_allowed", "Preserved collection repair context is invalid",
+                details={"request_preserved": True, "no_charge": True, "retryable": False})
+    seen = {str(item["id"]) for item in candidates}
     if bulk:
         # Verified prior deliveries do not consume this round's candidate
         # target. The signed snapshot stays fixed across checkpoint resumes.
         seen.update(plan.get("excluded_delivered_ids", []))
-    page_fingerprints = dict((resume_progress or {}).get("page_fingerprints", {}))
+    page_fingerprints = deepcopy((resume_progress or {}).get("page_fingerprints", {}))
+    active_fingerprints = repair["page_fingerprints"] if repair is not None else page_fingerprints
     prior_seconds = float((resume_progress or {}).get("elapsed_seconds", 0))
     started = time.monotonic()
     stop_reason = ""
@@ -248,6 +285,8 @@ def collect_from_search_plan(
 
     def checkpoint() -> None:
         if checkpoint_callback is not None:
+            if repair is not None:
+                repair["completed_pages"] = [list(item) for item in sorted(repair_pages)]
             checkpoint_callback({
                 "candidates": list(candidates),
                 "completed_pages": [list(item) for item in sorted(completed_pages)],
@@ -255,21 +294,31 @@ def collect_from_search_plan(
                 **({"page_fingerprints": page_fingerprints,
                     "elapsed_seconds": round(prior_seconds + time.monotonic() - started, 3),
                     "stop_reason": stop_reason} if bulk else {}),
+                **({"repair": deepcopy(repair)} if repair is not None else {}),
             })
+
+    def complete_page(query_index: int, page: int) -> None:
+        (repair_pages if repair is not None else completed_pages).add((query_index, page))
+
+    if repair_collection and saved_repair is None:
+        checkpoint()  # Persist the bounded repair before the first browser read.
 
     try:
         for page in range(1, max_pages + 1):
             for query_index, query in enumerate(queries):
                 if query_index in exhausted_queries:
                     continue
-                if (query_index, page) in completed_pages:
+                if repair is not None:
+                    if (query_index, page) not in repair_source or (query_index, page) in repair_pages:
+                        continue
+                elif (query_index, page) in completed_pages:
                     continue
                 if page > int(query.get("page_limit", 1)):
                     continue
                 remaining = candidate_limit - len(candidates)
                 if remaining <= 0:
                     return candidates
-                if bulk and (len(completed_pages) >= plan["page_budget"] or prior_seconds + time.monotonic() - started >= plan["collection_time_budget_seconds"]):
+                if bulk and (len(repair_pages if repair is not None else completed_pages) >= plan["page_budget"] or prior_seconds + time.monotonic() - started >= plan["collection_time_budget_seconds"]):
                     stop_reason = "collection_budget_reached"
                     checkpoint()
                     raise CollectionError(stop_reason, "Collection budget reached; the partial pool is preserved",
@@ -283,6 +332,7 @@ def collect_from_search_plan(
                     "query_count": len(queries),
                     "page": page,
                     "page_limit": int(query.get("page_limit", 1)),
+                    **({"repair_collection": True} if repair is not None else {}),
                 }
                 if progress_callback is not None:
                     progress_callback(
@@ -342,7 +392,7 @@ def collect_from_search_plan(
                     )
                 if bulk and jobs:
                     fingerprint = hashlib.sha256("|".join(sorted(_job_id(platform, j) for j in jobs)).encode()).hexdigest()
-                    previous = page_fingerprints.get(str(query_index), [])
+                    previous = active_fingerprints.get(str(query_index), [])
                     if fingerprint in previous:
                         stop_reason = "collection_page_not_advancing"
                         checkpoint()
@@ -350,7 +400,7 @@ def collect_from_search_plan(
                             details={"request_preserved": True, "retryable": False,
                                      "partial_result_command": f"jobagent {platform} discover --accept-partial",
                                      "collected_candidate_count": len(candidates)})
-                    page_fingerprints[str(query_index)] = previous + [fingerprint]
+                    active_fingerprints[str(query_index)] = previous + [fingerprint]
                 if platform == "boss" and not jobs:
                     exhausted_queries.add(query_index)
                 for job in jobs:
@@ -360,10 +410,10 @@ def collect_from_search_plan(
                     seen.add(candidate["id"])
                     candidates.append(candidate)
                     if len(candidates) >= candidate_limit:
-                        completed_pages.add((query_index, page))
+                        complete_page(query_index, page)
                         checkpoint()
                         return candidates
-                completed_pages.add((query_index, page))
+                complete_page(query_index, page)
                 checkpoint()
                 if page_delay > 0:
                     time.sleep(page_delay)

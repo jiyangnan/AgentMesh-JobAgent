@@ -32,6 +32,7 @@ def _add_discover(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--candidate-limit", type=int, help="Bulk collection limit; defaults to 30 for a new round")
     parser.add_argument("--recommendation-limit", type=int, help="Optional user-requested recommendation maximum; otherwise use actual matches")
     parser.add_argument("--accept-partial", action="store_true", help="Explicitly use the preserved partial collection for this Discover")
+    parser.add_argument("--repair-collection", action="store_true", help="Explicitly reparse a technically diagnosed incomplete Liepin collection within its original signed pages; preserves prior candidates")
 
 
 def _add_review(parser: argparse.ArgumentParser) -> None:
@@ -1699,7 +1700,8 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
         if hybrid_discovery.enabled():
             return hybrid_discovery.discover(platform, wait_seconds=args.wait_seconds,
                 page_delay=args.page_delay, candidate_limit=args.candidate_limit,
-                recommendation_limit=args.recommendation_limit, accept_partial=args.accept_partial)
+                recommendation_limit=args.recommendation_limit, accept_partial=args.accept_partial,
+                **({"repair_collection": True} if getattr(args, "repair_collection", False) else {}))
         return native_work.request_discovery(platform)
     if action == "audit":
         active = state.load_json(state.current_round_path()) or {}

@@ -758,7 +758,7 @@ class LiepinReadOnlyCollector:
           let urlQuery = '';
           try { urlQuery = new URL(location.href).searchParams.get('key') || ''; }
           catch (error) { urlQuery = ''; }
-          const jobCardCount = document.querySelectorAll('.job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"]').length;
+          const jobCardCount = document.querySelectorAll('.jobCardPcContainer, .job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"], a[href*="/a/"]').length;
           const body = (document.body && (document.body.innerText || document.body.textContent) || '').slice(0, 3000);
           const noResults = jobCardCount === 0 && /暂无相关职位|暂时没有合适|没有找到相关职位|未找到相关职位/.test(body);
           return JSON.stringify({
