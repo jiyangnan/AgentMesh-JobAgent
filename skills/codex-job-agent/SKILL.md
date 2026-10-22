@@ -5,6 +5,12 @@ description: Install and set up Job Agent in Codex, connect an API Key, discover
 
 # Job Agent for Codex
 
+Use Codex's own native Computer Use capability, such as the native-app interface
+documented by the current `cua_repl` tool. Verify the tool source and current
+documentation before use. Optional desktop plugins installed for another agent
+are not Job Agent dependencies merely because they are callable in this session.
+Do not use them as substitutes or count their results as standard Codex acceptance.
+
 After every navigation, scroll, dialog change, UI action or interruption, obtain a fresh native UI snapshot before choosing the next control. Never reuse stale element references or coordinates. The actual callable host tool documentation is authoritative; do not invent APIs.
 
 For `browser_work_required`, follow the current task's returned command and permission. Run its `work begin` only when offered to obtain the current nonce and task schema; a recovery offer or exhausted observation budget is not permission to begin again. If native capability is unavailable, do not operate any browser: submit the returned `pause_result_example` with the actual missing-capability observation and `reason=permission_required`, then relay the returned user prompt. Never fabricate an observed window/profile merely to satisfy a schema.
@@ -49,6 +55,17 @@ round with explicit user consent may use `jobagent round use-bulk-discovery
 --confirm`; do not convert pending work, decisions, authorizations or receipts.
 
 ## Host-independent workflow contract
+
+Use native Computer Use supplied by the current supported agent host, or an
+integration explicitly documented as a Job Agent dependency. Tool availability
+alone does not make an optional plugin installed for another agent a supported
+dependency. In Codex, use Codex's own native app interface and current tool
+documentation. Verify the source before binding or acting; do not substitute
+another provider when supported capability is missing. Preserve existing work,
+bindings and actual delivery records. Do not rewrite a binding or replay a send
+to change tools. Tests using additional unsupported plugins do not establish
+acceptance in the documented customer environment. These instructions guide the
+host agent; the CLI cannot attest which external tool the host actually called.
 
 New rounds split discovery from delivery: execute the CLI's read-only CDP
 collection command (30 candidates by default, up to 1000 when explicitly
@@ -332,8 +349,9 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
 1. Read the complete response from `jobagent work next`, including the current
    instructions, task, binding, allowed actions, evidence requirements,
    `result_schema` and any sample. A sample is a format example, not evidence.
-2. Discover native Computer Use capabilities from tools actually available in
-   this host. Read their current instructions before using app/window discovery,
+2. Identify Codex's own native Computer Use capabilities among the available
+   tools; callable third-party plugins are not substitutes. Read the selected
+   official tool's current instructions before using app/window discovery,
    screenshots, accessibility reading, clicks or typing. Do not invent an API
    name. If the required capability is unavailable, pause and report the missing
    capability through the returned schema when possible. Never fall back to CDP,

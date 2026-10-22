@@ -56,6 +56,10 @@ The installer checks HTTPS connectivity using the installed Python and bundled p
 
 ### Codex native Computer Use
 
+Delivery uses Codex's own native Computer Use capability. Optional desktop
+plugins installed for another agent are not required or supported substitutes.
+Use the current Codex tool documentation to verify native app access.
+
 The default Codex workflow uses the CLI's read-only CDP collector for discovery,
 cloud matching for all collected candidates, and native Computer Use for
 user-confirmed delivery in the same dedicated Chrome session. Recommendations

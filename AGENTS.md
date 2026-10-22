@@ -32,6 +32,8 @@ This is the public Job Agent CLI repository in the AgentMesh ecosystem. It conta
 
 ### Collection and delivery use separate executors
 
+- Use native Computer Use supplied by the current supported agent host or a dependency explicitly documented by Job Agent. In Codex, use Codex's own native app tools. Do not treat optional plugins installed for another agent as product dependencies just because they are callable. Verify tool provenance before binding or acting. Results obtained through unsupported extra plugins are not standard customer-environment acceptance; preserve actual delivery records and do not replay them to change tools.
+
 - Installation requests include the setup handoff. Read the final `onboarding_handoff` or run the read-only `jobagent onboarding` after every user-requested install/reinstall/update. Show the current user prompt with the account URL, how to return to the same Agent conversation after obtaining/configuring a Key, and what the Agent will do next. Never end with only installation/version success. Existing credentials require `jobagent doctor env`, not another Key; successful `init` also continues to doctor. Respect user-action and account-recovery boundaries. Install alone does not authorize paid analysis, a new round or delivery. See [installation handoff](docs/agent-onboarding.md#installation-to-account-handoff).
 
 - New rounds use the CLI read-only CDP collector for `login`, `discover` and `browser diagnose`: default 30 unique candidates, optionally up to 1000, with cloud matching of the entire pool and no fixed recommendation count. Existing rounds retain their persisted executor; only an idle round can explicitly opt in with `round use-bulk-discovery --confirm`. Never rewrite in-flight work.

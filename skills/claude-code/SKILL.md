@@ -10,6 +10,17 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 
 ## Host-independent workflow contract
 
+Use native Computer Use supplied by the current supported agent host, or an
+integration explicitly documented as a Job Agent dependency. Tool availability
+alone does not make an optional plugin installed for another agent a supported
+dependency. In Codex, use Codex's own native app interface and current tool
+documentation. Verify the source before binding or acting; do not substitute
+another provider when supported capability is missing. Preserve existing work,
+bindings and actual delivery records. Do not rewrite a binding or replay a send
+to change tools. Tests using additional unsupported plugins do not establish
+acceptance in the documented customer environment. These instructions guide the
+host agent; the CLI cannot attest which external tool the host actually called.
+
 New rounds split discovery from delivery: execute the CLI's read-only CDP
 collection command (30 candidates by default, up to 1000 when explicitly
 requested), then wait for cloud matching of the full collected pool. The number

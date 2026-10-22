@@ -9,6 +9,14 @@ from jobagent.infra.browser_work import BrowserWorkError
 APP_SCOPED = "app_scoped_window"
 KINDS = ("native_window_id", "host_window_handle", APP_SCOPED)
 HOST_WINDOW_ISSUES = ("window_unavailable", "ax_visual_mismatch")
+HOST_TOOL_SCOPE = (
+    "Use native Computer Use supplied by the current supported agent host, or an integration "
+    "explicitly documented as a Job Agent dependency. A callable optional plugin installed for "
+    "another agent is not an approved substitute. In Codex, use Codex's own native app interface "
+    "and its current documentation. Verify the tool source before binding or acting; do not "
+    "infer support from a tool name or availability alone. Missing supported capability must "
+    "be reported without switching providers, rewriting a session binding or replaying actions."
+)
 REFERENCE = ("Actual host window ID/handle when exposed. For app_scoped_window, use the actual "
              "native app reference accepted by the host; this identifies an app, not a persistent window. "
              "Never use a page title or snapshot element index as a stable identifier.")
@@ -47,6 +55,7 @@ BEFORE_ACTION = (
     "remain technical blockers, not requests for the user to diagnose a window."
 )
 BIND_INSTRUCTION = (
+    HOST_TOOL_SCOPE + " "
     "Verify native Computer Use is callable and app access is allowed. Missing window IDs alone do "
     "not mean Computer Use is unavailable. Inspect existing Chrome windows and reuse the intended "
     "profile/task window when identifiable. Use native_window_id or host_window_handle if actually "
