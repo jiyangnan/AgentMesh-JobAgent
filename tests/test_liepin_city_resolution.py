@@ -44,11 +44,11 @@ def _route_evidence(
     return {
         "ok": True,
         "url": url,
-        "controlCity": "",
+        "controlCity": city,
         "controlCode": "",
         "metaCity": city,
         "titleCity": city,
-        "visibleCity": "",
+        "visibleCity": city,
         "inputQuery": query,
         "urlQuery": query,
         "jobCardCount": card_count,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-LIEPIN_SELECTOR_VERSION = "2026-10-22.1"
+LIEPIN_SELECTOR_VERSION = "2026-10-22.2"
 
 LIEPIN_CARD_SELECTORS: tuple[str, ...] = (
     "[data-job-id]",
@@ -13,6 +13,43 @@ LIEPIN_CARD_SELECTORS: tuple[str, ...] = (
     ".sojob-item-main",
     "li",
 )
+
+
+def build_liepin_city_controls_script() -> str:
+    """Read current search controls; an SEO city heading is not a filter."""
+    return r"""
+    (function(){
+      const normalize = value => String(value || '').trim().replace(/市$/, '');
+      const dq = document.querySelector('input[name="dq"]');
+      const body = String(document.body && document.body.innerText || '');
+      // Modern pages render the chosen filters and subscription scope instead
+      // of the old dq input. Require both visible pieces before using a URL code.
+      const selection = body.match(/已选条件[：:]\s*([\s\S]*?)清空筛选条件/);
+      const subscription = body.match(/订阅\s*「([^」\n]+)」/);
+      const scope = subscription ? subscription[1].trim() : '';
+      const split = scope.lastIndexOf('·');
+      const subscriptionCity = split >= 0 ? normalize(scope.slice(split + 1)) : '';
+      const subscriptionQuery = split >= 0 ? scope.slice(0, split).trim() : '';
+      const selected = selection ? selection[1].trim().split(/\s+/).map(normalize) : [];
+      const modernSelected = Boolean(subscriptionCity && selected.includes(subscriptionCity));
+      let urlCode = '';
+      try {
+        const params = new URL(location.href).searchParams;
+        const city = params.get('city') || '';
+        const area = params.get('dq') || '';
+        if (modernSelected && /^\d+$/.test(city) && city === area
+            && params.get('key') === subscriptionQuery) urlCode = city;
+      } catch (error) { urlCode = ''; }
+      return {
+        controlCity: normalize(dq && dq.getAttribute('data-name'))
+          || (modernSelected ? subscriptionCity : ''),
+        controlCode: String(dq && (dq.value || dq.getAttribute('value')) || '').trim() || urlCode,
+        visibleCity: subscriptionCity,
+        subscriptionQuery,
+        cityFilterConflict: Boolean(selection && subscriptionCity && !modernSelected)
+      };
+    })()
+    """
 
 
 def build_liepin_snapshot_script(limit: int = 20) -> str:
@@ -49,7 +86,7 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
       const resultCardCount = document.querySelectorAll(
         '.jobCardPcContainer, .job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"], a[href*="/a/"]'
       ).length;
-      const dq = document.querySelector('input[name="dq"]');
+      const cityControls = {build_liepin_city_controls_script()};
       function visible(el) {{
         if (!el) return false;
         const style = window.getComputedStyle(el);
@@ -226,11 +263,9 @@ def build_liepin_snapshot_script(limit: int = 20) -> str:
         rejected,
         cityEvidence: {{
           url: href,
-          controlCity: dq ? String(dq.getAttribute('data-name') || '').trim().replace(/市$/, '') : '',
-          controlCode: dq ? String(dq.value || dq.getAttribute('value') || '').trim() : '',
+          ...cityControls,
           metaCity: metaCityMatch ? String(metaCityMatch[1] || '').trim().replace(/市$/, '') : '',
           titleCity: titleCityMatch ? String(titleCityMatch[1] || '').trim().replace(/市$/, '') : '',
-          visibleCity: '',
           inputQuery: keyInput ? String(keyInput.value || keyInput.getAttribute('value') || keyInput.getAttribute('data-name') || '').trim() : '',
           urlQuery,
           jobCardCount: resultCardCount,

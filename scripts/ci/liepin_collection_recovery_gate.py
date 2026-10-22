@@ -30,6 +30,7 @@ from jobagent.drivers.boss.cdp_client import CDPClient
 from jobagent.drivers.boss.cdp_driver import CDPBossDriver
 from jobagent.platforms.liepin.collect import (
     LiepinReadOnlyCollector,
+    build_liepin_city_route_search_url,
     build_liepin_search_url,
 )
 
@@ -54,9 +55,14 @@ def _document(title: str, body: str) -> str:
 
 def _search_document(mode: str) -> str:
     body = f'<input name="key" value="{html.escape(QUERY, quote=True)}">'
+    if mode in {"modern_city", "nationwide_city"}:
+        city = "深圳" if mode == "modern_city" else "全国"
+        if city == "深圳":
+            body += '<div>已选条件：</div><div>深圳</div><div>清空筛选条件</div>'
+        body += f'<div>订阅</div><div>「{QUERY}·{city}」</div>'
     if mode == "empty":
         body += "<p>非常抱歉！暂时没有合适的职位</p>"
-    elif mode == "modern":
+    elif mode in {"modern", "modern_city", "nationwide_city"}:
         for index in range(40):
             route = "a" if index % 2 else "job"
             body += (
@@ -78,7 +84,11 @@ def _search_document(mode: str) -> str:
             '<span class="ant-pagination-next ant-pagination-disabled" '
             'aria-disabled="true">下一页</span></div>'
         )
-    return _document("猎聘离线搜索测试", body)
+    title = "深圳招聘信息" if mode in {"modern_city", "nationwide_city"} else "猎聘离线搜索测试"
+    page = _document(title, body)
+    if mode in {"modern_city", "nationwide_city"}:
+        page = page.replace('</head>', '<meta name="location" content="city=深圳"></head>')
+    return page
 
 
 class FixtureInterceptor:
@@ -154,7 +164,7 @@ class FixtureInterceptor:
             )
         elif trusted and request["url"] == CHALLENGE_URL:
             document = _document("安全验证", "<h1>安全验证</h1><p>本地测试页面</p>")
-        elif trusted and parsed.hostname == "www.liepin.com" and parsed.path == "/zhaopin/":
+        elif trusted and parsed.hostname == "www.liepin.com" and parsed.path in {"/zhaopin/", "/city-sz/zhaopin/"}:
             params = parse_qs(parsed.query)
             if params.get("key") == [QUERY] and params.get("currentPage") in (["0"], ["1"]):
                 self.search_pages.append(int(params["currentPage"][0]) + 1)
@@ -309,6 +319,29 @@ def _run_cases(cdp: ObservedCDPClient, fixtures: FixtureInterceptor, root: Path)
     assert any("/a/" in job.url for job in result.jobs)
     assert fixtures.search_pages == [1] and cdp.navigation_count - before == 1
     checks["modern_cards_collect_both_routes_and_company_without_page_two"] = True
+    fixtures.mode = "modern_city"
+    _controller_boot(cdp)
+    fixtures.search_pages.clear()
+    before = cdp.navigation_count
+    collector = LiepinReadOnlyCollector(driver, city_cache_path=root / "modern-city-cache.json")
+    result = collector.collect(QUERY, city="深圳", limit=30, pages=2, page_delay=0, wait_seconds=1)
+    assert result.ok and len(result.jobs) == 30, result.to_payload(include_snapshot=True)
+    assert result.snapshot["cityVerification"]["verified"] is True
+    assert collector.city_resolver.lookup("深圳") == ("050090", "verified_cache")
+    assert fixtures.search_pages == [1] and cdp.navigation_count - before == 1
+    checks["modern_city_filter_collects_once_without_directory_fallback"] = True
+
+    fixtures.mode = "nationwide_city"
+    _controller_boot(cdp)
+    city_route = "https://www.liepin.com/city-sz/"
+    opened = driver.open_url_in_new_tab(build_liepin_city_route_search_url(city_route, QUERY), wait_seconds=1)
+    assert opened.get("ok"), opened
+    evidence = collector._extract_snapshot()["cityEvidence"]
+    assert evidence["visibleCity"] == "全国", evidence
+    verified = collector.city_resolver.verify_route_evidence(evidence, city="深圳", query=QUERY,
+        expected_route=city_route, previous_url=BOOT_URL)
+    assert verified["verified"] is False and "city" in verified["conflicts"], verified
+    checks["nationwide_filter_rejected_despite_city_route_title_and_metadata"] = True
     assert cdp.input_count == 0, "fixture gate unexpectedly used input actions"
     assert fixtures.rejected_count >= 1, "non-fixture denial probe was not intercepted"
     assert not fixtures.errors, fixtures.errors

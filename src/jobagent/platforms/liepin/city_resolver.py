@@ -103,6 +103,8 @@ class LiepinCityResolver:
             if observed and observed == expected_city
         ]
         conflicts: list[str] = []
+        if evidence.get("cityFilterConflict") is True:
+            conflicts.append("city_filter")
         if any(observed and observed != expected_city for observed in city_values.values()):
             conflicts.append("city")
         if expected_code and code and code != str(expected_code):
@@ -111,6 +113,7 @@ class LiepinCityResolver:
         query_values = {
             "input": str(evidence.get("inputQuery") or "").strip(),
             "url": str(evidence.get("urlQuery") or "").strip(),
+            "subscription": str(evidence.get("subscriptionQuery") or "").strip(),
         }
         query_sources = [
             source
@@ -173,12 +176,15 @@ class LiepinCityResolver:
             if observed and observed == expected_city
         ]
         conflicts: list[str] = []
+        if evidence.get("cityFilterConflict") is True:
+            conflicts.append("city_filter")
         if any(observed and observed != expected_city for observed in city_values.values()):
             conflicts.append("city")
 
         query_values = {
             "input": str(evidence.get("inputQuery") or "").strip(),
             "url": str(evidence.get("urlQuery") or "").strip(),
+            "subscription": str(evidence.get("subscriptionQuery") or "").strip(),
         }
         query_sources = [
             source
@@ -211,6 +217,7 @@ class LiepinCityResolver:
         verified = bool(
             route_verified
             and route_changed
+            and city_values["control"] == expected_city
             and city_values["meta"] == expected_city
             and city_values["title"] == expected_city
             and query_values["input"] == expected_query
