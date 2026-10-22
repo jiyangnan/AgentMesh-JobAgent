@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from jobagent.application import resume_freshness as freshness
@@ -635,8 +633,7 @@ def test_cli_round_skip_dispatch_clears_awaiting_card(fresh_env):
     platforms = {p: {"status": "pending"} for p in PLATFORMS}
     platforms["boss"] = {"status": "reviewed"}
     write_round(binding_fixture(), platforms=platforms)
-    card = freshness.gate_delivery("boss", source=source_fixture())
-    interaction_id = card["interaction"]["interaction_id"]
+    freshness.gate_delivery("boss", source=source_fixture())
     parser = build_parser()
     args = parser.parse_args(["round", "skip", "--platform", "boss", "--confirm-skip"])
     result = _dispatch(args)
@@ -666,6 +663,30 @@ def test_v2_search_sync_before_cloud_and_user_attestation(fresh_env, monkeypatch
     active['native_session']['accounts']['boss'] = 'other-account'
     state_mod.save_json(state_mod.current_round_path(), active)
     assert freshness.gate_search('boss')['requires_user_action']
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_bulk_search_without_native_session_preserves_resume_confirmation(fresh_env, monkeypatch, platform):
+    monkeypatch.setattr(freshness, "FRESHNESS_POLICY_VERSION", 2)
+    original = write_round(binding_fixture(), extra={
+        "collection_executor": "cdp_readonly", "delivery_executor": "codex_native", "native_session": None,
+    })
+    monkeypatch.setattr(freshness.cloud_client, "resume_binding_material",
+                        lambda _: {"binding": binding_fixture()})
+
+    card = freshness.gate_search(platform)
+    assert card["requires_user_action"] and card["no_charge"]
+    interaction_id = card["interaction"]["interaction_id"]
+    assert freshness.gate_search(platform)["interaction"]["interaction_id"] == interaction_id
+    result = freshness.respond(interaction_id, choice="synced")
+    assert result["basis"] == "user_attested"
+    assert result["next_suggested"] == f"jobagent {platform} discover"
+    assert freshness.gate_search(platform) is None
+    active = state_mod.load_json(state_mod.current_round_path())
+    assert active["round_id"] == original["round_id"]
+    assert active["resume_binding"] == original["resume_binding"]
+    assert active["native_session"] is None
+    assert freshness.load_baselines()["platforms"][platform]["platform_account"] == ""
 
 
 def test_v2_pause_platform_is_terminal_skip(fresh_env, monkeypatch):
