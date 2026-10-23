@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from .modern import MODERN_LIST_JS
 
-ZHILIAN_SELECTOR_VERSION = "2026-08-22.2"
+ZHILIAN_SELECTOR_VERSION = "2026-10-23.1"
 
 _ZHILIAN_SESSION_PROBE_JS = r"""
       function zhilianSessionProbe(){
@@ -1180,6 +1181,21 @@ def build_zhilian_pagination_script(page: int) -> str:
     (function(){{
       const mode = 'zhilian_pagination';
       const targetPage = {safe_page};
+      {MODERN_LIST_JS}
+      const modern = zhilianModernList();
+      if (modern) {{
+        const reached = modern.renderedCount >= targetPage * 20;
+        const exhausted = modern.hasMore === false && !modern.loading;
+        return JSON.stringify({{
+          ok: modern.invalid === 0 && modern.hasMore !== null,
+          error: modern.invalid ? 'zhilian_card_coverage_incomplete' : '',
+          mode, paginationMode:'infinite_list', page:targetPage,
+          currentPage:modern.currentPage, loadedCount:modern.renderedCount,
+          hasNextPage:modern.hasMore, loading:modern.loading,
+          alreadySelected:reached, exhausted:!reached && exhausted,
+          action:reached || exhausted ? '' : 'load_more', url:location.href
+        }});
+      }}
       function clean(value){{
         return String(value || '').replace(/\\s+/g, ' ').trim();
       }}
@@ -1654,6 +1670,8 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
     (function(){{
       const selectorVersion = "{ZHILIAN_SELECTOR_VERSION}";
       const limit = {safe_limit};
+      {MODERN_LIST_JS}
+      const modern = zhilianModernList();
       {_ZHILIAN_SESSION_PROBE_JS}
       const session = zhilianSessionProbe();
       const text = (document.body && (document.body.innerText || document.body.textContent) || '').trim();
@@ -1852,9 +1870,9 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         .filter((item) => item.rect.top < 420)
         .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
       const visibleCity = selectedCityCandidates.length ? selectedCityCandidates[0].city : '';
-      const cards = [];
+      const cards = modern ? modern.cards.slice(0, limit) : [];
       const seen = new Set();
-      for (const anchor of jobAnchors) {{
+      for (const anchor of modern ? [] : jobAnchors) {{
         const url = anchor.href || '';
         const label = clean(anchor.innerText || anchor.textContent || '');
         if (!url || !isJobUrl(url)) continue;
@@ -1900,7 +1918,7 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
           label: clean(titleNode && (titleNode.innerText || titleNode.textContent) || '')
         }};
       }}).filter((item) => item.url);
-      for (const item of surfaceCardCandidates) {{
+      for (const item of modern ? [] : surfaceCardCandidates) {{
         if (cards.length >= limit) break;
         const rawText = clean(item.surface.innerText || item.surface.textContent || '');
         if (!rawText || rawText.length < 20) continue;
@@ -1994,15 +2012,19 @@ def build_zhilian_snapshot_script(limit: int = 20) -> str:
         visibleCity,
         searchKeyword: searchInput ? clean(searchInput.value) : '',
         searchKeywordVisible: !!searchInput,
-        platformError,
+        platformError: platformError || (modern && (modern.invalid || modern.hasMore === null)
+          ? 'zhilian_card_coverage_incomplete' : ''),
         jobLinkCount: jobAnchors.length,
         jobSurfaceCount: jobSurfaces.length,
         jobActionCount: jobActions.length,
         noResults,
-        paginationDetected: paginationContainers.length > 0,
+        paginationDetected: !!modern || paginationContainers.length > 0,
+        paginationMode: modern ? 'infinite_list' : 'numbered',
+        renderedCardCount: modern ? modern.renderedCount : null,
+        invalidCardCount: modern ? modern.invalid : null,
         availablePages,
-        currentPage,
-        hasNextPage,
+        currentPage: modern ? modern.currentPage : currentPage,
+        hasNextPage: modern ? modern.hasMore : hasNextPage,
         candidateCount: cards.length,
         collectableSurfaceCount: cards.length,
         surfaceCandidateCount: surfaceCardCandidates.length,

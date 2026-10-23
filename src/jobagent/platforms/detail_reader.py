@@ -66,10 +66,14 @@ def _background_detail(reader, platform, url):
     parser = _DetailHTML(platform)
     parser.feed(str(result.get("html") or ""))
     text = " ".join(parser.body)
+    jd = "".join(parser.parts).strip()
+    if platform == "zhilian":
+        from jobagent.platforms.zhilian.modern import description_from_document
+        jd = description_from_document(str(result.get("html") or ""), url) or jd
     return {"url": result.get("url", ""),
             "restricted": bool(re.search(r"安全验证|滑动验证|访问过于频繁|访问受限|请完成验证", text)),
             "login": bool(re.search(r"登录后查看|请先登录|登录后继续", text)),
-            "jd": "".join(parser.parts).strip()[:20000]}
+            "jd": jd[:20000]}
 
 
 def detail_url_allowed(platform, url):

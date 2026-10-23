@@ -195,7 +195,7 @@ def verify_search_plan(
         if recommendation_limit is not None and (type(recommendation_limit) is not int or not 1 <= recommendation_limit <= 1000):
             raise ProtocolError("search plan recommendation limit invalid")
         if (signed.get("collection_executor") != "cdp_readonly"
-                or signed.get("delivery_executor") != "codex_native"
+                or signed.get("delivery_executor") not in ("codex_native", "playwright")
                 or not isinstance(signed.get("account_ref"), str)
                 or type(signed.get("page_budget")) is not int or not 1 <= signed["page_budget"] <= 200
                 or type(signed.get("collection_time_budget_seconds")) is not int

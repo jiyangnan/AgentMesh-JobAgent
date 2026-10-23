@@ -16,6 +16,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -372,7 +373,8 @@ def main() -> None:
             "--disable-extensions", "--disable-component-extensions-with-background-pages",
             "--disable-component-update", "--disable-sync", "--disable-default-apps",
             "--no-first-run", "--no-default-browser-check", "--metrics-recording-only",
-            "--password-store=basic", "--disable-quic", "--window-size=1000,800", "about:blank",
+            "--password-store=basic", "--disable-quic", "--window-size=1000,800",
+            *(["--use-mock-keychain"] if sys.platform == "darwin" else []), "about:blank",
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         fixtures = None
         cdp = ObservedCDPClient()

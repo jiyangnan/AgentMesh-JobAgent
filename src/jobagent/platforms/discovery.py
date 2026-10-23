@@ -195,7 +195,7 @@ def _collect_web_platform(
     return CollectedPage(
         jobs=result.jobs,
         exhausted=(
-            platform in {"zhilian", "liepin"}
+            platform in {"zhilian", "liepin", "51job"}
             and (
                 str(snapshot.get("terminationReason") or "")
                 in {"pagination_exhausted", "no_results", "last_page"}

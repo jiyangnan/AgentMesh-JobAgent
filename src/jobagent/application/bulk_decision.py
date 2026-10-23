@@ -32,6 +32,12 @@ def upload_candidates(plan, jobs, *, final=False):
     discover_id = plan["discover_id"]
     path = _checkpoint_path(discover_id)
     saved = state.load_json(path) or {"discover_id": discover_id, "uploads": {}, "details": {}}
+    repaired = saved.get("collection_repair_receipt")
+    if repaired is not None:
+        if (repaired.get("candidate_digest") != candidate_digest(jobs)
+                or repaired.get("candidate_count") != len(jobs)):
+            raise ProtocolError("repaired candidate pool changed")
+        return repaired["batch_ids"]
     end = len(jobs) if final else len(jobs) // BATCH_SIZE * BATCH_SIZE
     ids = []
     for start in range(0, end, BATCH_SIZE):

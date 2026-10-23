@@ -92,3 +92,18 @@ def test_preexisting_action_cannot_gain_anonymous_identity_without_preflight(env
     assert "anonymous_recruiter_identity" not in work["task"]
     with pytest.raises(store.BrowserWorkError):
         submit(env, work, evidence(work))
+
+
+@pytest.mark.parametrize("area,accepted", [("深圳-南山区", True), ("深圳 - 南山区", True),
+    ("深圳－南山区", True), ("深圳", False), ("深圳-福田区", False), ("北京-南山区", False)])
+def test_area_separator_is_equivalent_but_city_and_district_remain_bound(env, area, accepted):
+    from jobagent.application.native_liepin_identity import validate
+    work = start(env)
+    work["task"]["job"]["area"] = "深圳·南山区"
+    result = evidence(work, detail_area=area)["evidence"]
+    if accepted:
+        validate(work, result)
+        assert result["detail_area"] == area
+    else:
+        with pytest.raises(store.BrowserWorkError, match="salary and area"):
+            validate(work, result)

@@ -1,4 +1,4 @@
-"""Instruction-driven browser work. This module never controls a browser."""
+"""Shared delivery state machine and compatibility for host-driven work."""
 
 from __future__ import annotations
 
@@ -65,6 +65,9 @@ def _binding(platform: str | None = None) -> dict[str, Any]:
 
 def _session() -> dict[str, Any] | None:
     active = rounds.ensure_current_round()
+    from jobagent.application import playwright_work
+    if playwright_work.enabled(active):
+        return playwright_work.session(active)
     session = active.get("native_session")
     if not isinstance(session, dict):
         return None
@@ -194,6 +197,9 @@ def _delivery_contract(work: dict[str, Any], task: dict[str, Any]) -> None:
 
 
 def present(work: dict[str, Any], *, execution: bool = False) -> dict[str, Any]:
+    from jobagent.application import playwright_work
+    if playwright_work.owns(work):
+        return playwright_work.present(work)
     from jobagent.infra.codex_skill import skill_contract
     work = dict(work)
     if work.get("state") == "closed" and (work.get("result") or {}).get("outcome") == "cancelled":
@@ -443,6 +449,9 @@ def _collection_handoff_task(task):
 
 
 def ensure_session(platform: str) -> dict[str, Any] | None:
+    from jobagent.application import playwright_work
+    if playwright_work.enabled():
+        return playwright_work.ensure_session(platform)
     if _session():
         return None
     # An explicit platform command restarting session work supersedes an
@@ -510,6 +519,9 @@ def request_login(platform: str, *, diagnose: bool = False) -> dict[str, Any]:
         "required_evidence": ["page_url", "login_state", "account_label", "account_navigation", "resume_or_activity", "window_reference", "profile_label"],
         "result_schema": {"evidence": {"login_state": "authenticated|login_required|verification_required|unknown",
             "account_label": "visible account label", "account_navigation": "boolean", "resume_or_activity": "boolean"}}}
+    from jobagent.application import playwright_work
+    if playwright_work.enabled():
+        task["executor"] = playwright_work.EXECUTOR
     # A new explicit diagnosis must not recycle stale successful login evidence.
     active = rounds.ensure_current_round()
     revision = len(store.list_work(binding))
@@ -569,7 +581,9 @@ def request_discovery(platform: str) -> dict[str, Any]:
 
 def _common_evidence(work: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     evidence = result.get("evidence")
-    if not isinstance(evidence, dict) or evidence.get("source") != "host_ui_observation":
+    from jobagent.application import playwright_work
+    expected_source = playwright_work.SOURCE if playwright_work.owns(work) else "host_ui_observation"
+    if not isinstance(evidence, dict) or evidence.get("source") != expected_source:
         _error("native_evidence_required", "Provide typed host UI observations, not a bare success flag.")
     if not all(isinstance(evidence.get(k), str) and evidence[k].strip() for k in ("observed_at", "observation")):
         _error("native_evidence_incomplete", "Observation text and timestamp are required.")
@@ -580,6 +594,9 @@ def _common_evidence(work: dict[str, Any], result: dict[str, Any]) -> dict[str, 
             raise ValueError()
     except ValueError:
         _error("native_observation_expired", "Use a fresh timezone-qualified UI observation.")
+    if playwright_work.owns(work):
+        playwright_work.validate_evidence(work, result, evidence)
+        return evidence
     if work["action"] == "bind_session":
         return evidence
     session = _session()
@@ -744,6 +761,9 @@ def _review_for(work: dict[str, Any]) -> dict[str, Any]:
 def begin(work_id: str) -> dict[str, Any]:
     binding = _binding()
     work = store.get_work(work_id, binding)
+    from jobagent.application import playwright_work
+    if playwright_work.owns(work):
+        return playwright_work.present(work)
     rounds.assert_platform_turn(work["binding"]["platform"])
     if "delivery_source" in work["task"] and work["state"] == "ready":
         _review_for(work)
@@ -801,7 +821,12 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             _error("native_delivery_preflight_required", "Verify the active account and previous application/chat history first.")
         if e.get("resume_state") not in {"sent", "not_sent", "not_applicable", "unknown"} or e.get("communication_state") not in {"open", "not_open", "not_applicable", "unknown"}:
             _error("native_delivery_preflight_incomplete", "Report independent communication and resume states.")
-        if e.get("resume_state") == "sent" and (not e.get("resume_reference") or e.get("receipt_kind") not in {"application_history", "resume_card", "application_success_and_history"}):
+        from jobagent.platforms.zhilian.playwright_delivery import verified_prior_application
+        from jobagent.platforms.job51.playwright_delivery import verified_prior_application as verified_job51_prior
+        prior_verified = verified_prior_application(work, e) or verified_job51_prior(work, e)
+        if e.get('prior_application') is True and not prior_verified:
+            _error('native_prior_application_unverified', 'A prior-application claim needs complete exact-job official history; do not infer the old resume name.')
+        if e.get("resume_state") == "sent" and not prior_verified and (not e.get("resume_reference") or e.get("receipt_kind") not in {"application_history", "resume_card", "application_success_and_history"}):
             _error("native_resume_receipt_required", "Verify the named resume and job-bound official receipt for an existing application.")
         if e.get("existing_outgoing_text") and (e.get("conversation_job_verified") is not True or e.get("message_state") not in {"sent", "delivered", "not_sent", "unknown"}):
             _error("native_greeting_unverified", "Existing text must be checked in this job's verified conversation.")
@@ -845,7 +870,7 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             _error("native_attachment_changed", "Verify the exact user-selected attachment before submission and preserve its receipt; do not submit again to fix a mismatch.")
 
 
-def submit(work_id: str, result_path: str) -> dict[str, Any]:
+def submit(work_id: str, result_path: str, *, _capability=None) -> dict[str, Any]:
     path = Path(result_path).expanduser()
     if not path.is_file() or path.stat().st_size > 2_000_000:
         _error("native_result_file_invalid", "Provide a local JSON result file no larger than 2 MB.")
@@ -863,6 +888,9 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         result["outcome"] = "uncertain"
     binding = _binding()
     work = store.get_work(work_id, binding)
+    from jobagent.application import playwright_work
+    if playwright_work.owns(work) and _capability is not playwright_work._RECEIPT_CAPABILITY:
+        _error("playwright_receipt_internal_only", "Playwright receipts are produced by jobagent work run, not host-authored files.")
     rounds.assert_platform_turn(work["binding"]["platform"])
     if result.get("requires_user_action"):
         if result.get("reason") not in {"login_required", "verification_required", "challenge", "permission_required", "session_unknown"}:
@@ -875,7 +903,8 @@ def submit(work_id: str, result_path: str) -> dict[str, Any]:
         closed = store.submit_work(work_id, binding, result)
         return _continue(closed)
     e = _common_evidence(work, result)
-    native_window.validate_host_pause(result, e)
+    if not playwright_work.owns(work):
+        native_window.validate_host_pause(result, e)
     if result.get("requires_user_action") or result.get("requires_technical_recovery"):
         pass
     elif result.get("outcome") not in {"success", "page_collected", "uncertain", "unresolved", "unavailable"}:
@@ -981,7 +1010,9 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
             del active["native_cancelled_work"]
         active["platforms"][platform].update(status="login_verified", next_suggested=f"jobagent {platform} discover")
     elif action == "inspect_session":
-        active["native_session"].setdefault("accounts", {})[platform] = result["evidence"]["account_label"]
+        from jobagent.application import playwright_work
+        session_key = "playwright_session" if playwright_work.owns(work) else "native_session"
+        active[session_key].setdefault("accounts", {})[platform] = result["evidence"]["account_label"]
         if active.get("native_cancelled_work", {}).get("platform") == platform:
             # A verified re-login is the explicit user-driven recovery the
             # cancel gate promises; it must actually clear that gate.
@@ -1009,6 +1040,10 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_work() -> dict[str, Any]:
+    active = state.load_json(state.current_round_path()) or {}
+    if active.get("playwright_migration_pending"):
+        from jobagent.application import playwright_work
+        return playwright_work.migrate(confirmed=True)
     from jobagent.application.delivery_receipts import flush_pending
     flush_pending()
     from jobagent.application.native_delivery_followup import pending as followup_pending
@@ -1185,6 +1220,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
     all_work = store.list_account_work(binding["account_ref"])
     from jobagent.application.native_delivery_recovery import superseded_inspections
     superseded = superseded_inspections(all_work)
+    for migration in active.get("playwright_migrations", []):
+        superseded.update(migration["superseded_inspections"])
     for job in reviewed["send_candidates"][:source["limit"]]:
         validate_job_url(platform, str(job["url"]), str(job["id"]))
         if platform in {"boss", "liepin"}:
@@ -1205,6 +1242,9 @@ def _delivery_next(platform: str) -> dict[str, Any]:
                 "required_evidence": ["job_id", "job_url", "title", "company", "page_url", "account_label", "window_reference", "profile_label", "observation", "observed_at"],
                 "result_schema": {"outcome": "success|uncertain|unresolved|unavailable",
                                   "evidence": {"source": "host_ui_observation", "receipt_checked": "boolean"}}}
+        from jobagent.application import playwright_work
+        if playwright_work.enabled(active):
+            task["executor"] = playwright_work.EXECUTOR
         if not inspection:
             task.update(instruction="Read the exact approved detail and its job-bound chat/application history. Confirm visible job ID, title, company and account. No apply/communicate/send clicks. Report resume_state, communication_state, existing_outgoing_text and message_state separately.",
                         historical_action_requires_reconciliation=bool(previous or _legacy_history(platform, job["url"], job["id"])))
@@ -1220,6 +1260,8 @@ def _delivery_next(platform: str) -> dict[str, Any]:
         recruiter_identity = anchor_from(e)
         if recruiter_identity:
             task["anonymous_recruiter_identity"] = recruiter_identity
+        if platform == "boss" and e.get("recruiter_name") and e.get("recruiter_id"):
+            task["boss_recruiter_identity"] = {k: e[k] for k in ("recruiter_name", "recruiter_id")}
         needs_resume = platform != "boss"
         needs_greeting = platform in {"boss", "liepin"}
         resume_done = e.get("resume_state") == "sent"
@@ -1395,7 +1437,8 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
     if not active.get("round_id") or not current_account_ref():
         _error("account_round_required", "Verify an account-bound round before reading its audit.")
     binding = {"account_ref": current_account_ref(), "round_id": active["round_id"], "platform": platform}
-    records = [w for w in store.list_work(binding) if w["task"].get("delivery_source")]
+    superseded = {wid for migration in active.get("playwright_migrations", []) for wid in migration["superseded_inspections"]}
+    records = [w for w in store.list_work(binding) if w["task"].get("delivery_source") and w["work_id"] not in superseded]
     by_job: dict[str, list[dict[str, Any]]] = {}
     for work in records:
         by_job.setdefault(work["binding"]["job_id"], []).append(work)
@@ -1407,7 +1450,10 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
         greeting_verified = any(w["action"] == "send_greeting" and w["result"].get("outcome") == "success" for w in closed) or any(e.get("existing_outgoing_text") == works[0]["task"]["job"].get("cloud_greeting") and e.get("message_state") in {"sent", "delivered"} for e in observations if works[0]["task"]["job"].get("cloud_greeting"))
         if greeting_verified:
             summary["greeting_sent"] += 1
-        if any(e.get("resume_state") == "sent" for e in observations):
+        prior_verified = any(e.get('prior_application') is True for e in observations)
+        if prior_verified:
+            summary['previously_delivered'] = summary.get('previously_delivered', 0) + 1
+        if any(e.get("resume_state") == "sent" for e in observations) and not prior_verified:
             summary["resume_submitted"] += 1
         if any(w["result"].get("outcome") == "unavailable" for w in closed):
             summary["unavailable"] += 1
@@ -1430,8 +1476,9 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
     _record_completed_native_delivery_fact(platform, by_job, completed=bool(
         complete and not summary["pending"] and not summary["unresolved"]
         and workflow.get("platforms", {}).get(platform, {}).get("status") == "completed"))
-    response = {"ok": True, "executor": EXECUTOR, "platform": platform,
-                "evidence_source": "host_ui_observation", "summary": summary,
+    sources = sorted({w["result"]["evidence"]["source"] for w in records if (w.get("result") or {}).get("evidence", {}).get("source")})
+    response = {"ok": True, "executor": active.get("delivery_executor", EXECUTOR), "platform": platform,
+                "evidence_source": sources[0] if len(sources) == 1 else "mixed_observation", "evidence_sources": sources, "summary": summary,
                 "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
     if active.get("collection_executor") == "cdp_readonly":
         from jobagent.application.delivery_receipts import sync_verified
@@ -1448,11 +1495,13 @@ def audit_round(platform: str | None = None) -> dict[str, Any]:
     from jobagent.application.delivery import audit_round as legacy_audit
     legacy = legacy_audit(platform=platform)
     current = state.load_json(state.current_round_path()) or {}
-    native = {p: audit(p, complete=False)["summary"] for p in PLATFORMS
+    reports = {p: audit(p, complete=False) for p in PLATFORMS
               if (platform is None or p == platform) and current.get("platforms", {}).get(p, {}).get("native_delivery")}
     # Keep sources separate: legacy and host observations have different evidence
     # contracts and summing them could double-count the same application.
-    return {**legacy, "native_audit": native, "native_evidence_source": "host_ui_observation"}
+    sources = {report["evidence_source"] for report in reports.values()}
+    return {**legacy, "native_audit": {p: report["summary"] for p, report in reports.items()},
+            "native_evidence_source": (next(iter(sources)) if len(sources) == 1 else "mixed_browser_observation")}
 
 
 def status() -> dict[str, Any]:
@@ -1475,8 +1524,10 @@ def status() -> dict[str, Any]:
         # Pure presentation: status must expose the technical stop, not send
         # the host back around next -> status without explaining the boundary.
         return present(blocked)
-    return {"ok": True, "executor": EXECUTOR, "protocol_version": 1, "workflow": workflow,
-            "session": active.get("native_session"), "work_counts": {s: sum(w["state"] == s for w in works) for s in ("ready", "intent_recorded", "reconcile_only", "closed")},
+    from jobagent.application import playwright_work
+    executor = playwright_work.EXECUTOR if playwright_work.enabled(active) else EXECUTOR
+    return {"ok": True, "executor": executor, "protocol_version": 1, "workflow": workflow,
+            "session": _session(), "work_counts": {s: sum(w["state"] == s for w in works) for s in ("ready", "intent_recorded", "reconcile_only", "closed")},
             "next_suggested": "jobagent work next"}
 
 

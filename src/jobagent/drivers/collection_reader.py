@@ -14,7 +14,7 @@ class CollectionReader:
     bulk_readonly = True
     _READ_METHODS = frozenset({"open_url_in_new_tab", "snapshot_search_page",
         "check_login_status", "ensure_logged_in", "_exec_js", "_click_at",
-        "capture_platform_target_state", "adopt_changed_platform_target",
+        "capture_platform_target_state", "adopt_platform_target_transition",
         "dismiss_javascript_dialog"})
 
     def __init__(self, platform="boss", *, driver=None):

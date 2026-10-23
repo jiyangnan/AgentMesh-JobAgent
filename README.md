@@ -54,40 +54,34 @@ Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creat
 
 The installer checks HTTPS connectivity using the installed Python and bundled public roots. If a certificate or network check remains blocked, the Agent follows `jobagent doctor tls` while preserving your existing task. Certificate verification and custom trust settings remain enforced.
 
-### Codex native Computer Use
+### Built-in browser execution
 
-Delivery uses Codex's own native Computer Use capability. Optional desktop
-plugins installed for another agent are not required or supported substitutes.
-Use the current Codex tool documentation to verify native app access.
+Job Agent collects jobs through its read-only CDP adapter, matches the full pool
+in the cloud, and performs user-confirmed delivery through its own
+Playwright-compatible runtime (Patchright). The runtime is installed with the CLI
+and connects to the existing dedicated Chrome profile. No Codex Computer Use or
+optional desktop plugin is required. The default collection is 30 jobs;
+recommendation count depends on the user's profile and complete job evidence.
 
-The default Codex workflow uses the CLI's read-only CDP collector for discovery,
-cloud matching for all collected candidates, and native Computer Use for
-user-confirmed delivery in the same dedicated Chrome session. Recommendations
-follow the user's profile and job evidence, without a fixed count. Job Agent supplies one account-bound task at a time and keeps
-cloud decisions, final-list confirmation, progress and audit in the CLI. Read
-the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
+Read the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
 
 ```bash
 jobagent workflow next
 ```
 
-Read each returned task and result schema. When the current response offers
-`jobagent work begin --work-id ID`, run it before its browser action and report the observed result with
-`jobagent work submit --work-id ID --result FILE`. `jobagent work status` is the
-read-only recovery entry. Issued native delivery tasks do not use CDP, browser scripts or hidden
-site APIs. If this host lacks native Computer Use, pause rather than switching
-drivers. Browser permissions and real UI observations still belong to the host;
-the task protocol cannot intercept actions taken outside it.
+Run the returned `jobagent work run --work-id ID` command. It verifies the
+profile, account, exact approved job and resume choice, then records each action
+and its observed receipt. `jobagent work status` is the read-only recovery entry.
+An uncertain send or submission is reconciled without repeating the click.
+Wait for every CLI command to exit and forward its progress events.
 
-Hosts that expose only a native app reference can use the app-scoped window
-branch. The agent verifies the selected window, profile and account before each
-action; it does not invent a window ID or use a changing page title as one.
-Unresolved window selection still pauses the task and preserves the round.
+Older in-flight rounds keep their existing executor and receipts. An explicit
+migration uses `jobagent browser use-playwright --confirm`; an outstanding
+external action must first be reconciled. No round, approval, login profile or
+history is cleared. Legacy native tasks retain their original result contract.
+Technical errors do not imply logout and never justify resetting Keychain.
 
-Wait for each CLI process to exit before parsing its complete response or
-starting the next command. Technical page/identity failures have a separate
-preserved-work recovery branch; they must not be presented as a need to log in
-again or close Chrome windows. Recovery never reauthorizes an uncertain send.
+The following recovery guidance applies to legacy native tasks.
 For eligible read-only collection failures, `jobagent work recover` verifies the
 same Chrome profile and platform account before resuming the preserved request,
 after one explicit recovery confirmation. It preserves completed pages and
@@ -112,11 +106,9 @@ overwritten. Extra user files are preserved. Current instructions are also
 available from the installed package with
 `python -m jobagent.infra.codex_skill contract`; choose that installation's Python.
 
-The platform commands below remain compatible entry points. In native mode,
-browser-facing commands return host work rather than starting the legacy browser
-driver; the native task instructions take precedence over driver-specific
-diagnostic descriptions below. Finish or reconcile an active work item before
-upgrading its protocol. See the [canonical workflow](docs/agent-onboarding.md).
+The platform commands below remain compatible entry points. Follow the returned
+executor and exact continuation; do not substitute a different browser driver.
+Finish or reconcile an active action before changing its execution protocol. See the [canonical workflow](docs/agent-onboarding.md).
 State preservation and recovery are defined in the [upgrade contract](docs/client-upgrade-contract.md).
 
 ### Official client installer
@@ -440,7 +432,7 @@ The canonical agent workflow is in [docs/agent-onboarding.md](docs/agent-onboard
 
 - [Claude Code](skills/claude-code/SKILL.md)
 - [OpenClaw / ClawHub](skills/openclaw-job-agent/SKILL.md)
-- [Codex native Computer Use](skills/codex-job-agent/SKILL.md)
+- [Codex workflow](skills/codex-job-agent/SKILL.md)
 
 ## Safety and Privacy
 

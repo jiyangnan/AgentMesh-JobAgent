@@ -49,6 +49,7 @@ def save_pending_start(
     profile_digest: str,
     intent_digest: str | None,
     account_ref: str | None,
+    delivery_executor: str | None = None,
 ) -> Path:
     path = pending_start_path(platform)
     payload = {
@@ -61,6 +62,10 @@ def save_pending_start(
         "account_ref": account_ref,
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
+    if delivery_executor is not None:
+        if delivery_executor not in {"codex_native", "playwright"}:
+            raise ValueError("Unsupported delivery executor")
+        payload["delivery_executor"] = delivery_executor
     _write_pending_start(path, payload)
     return path
 

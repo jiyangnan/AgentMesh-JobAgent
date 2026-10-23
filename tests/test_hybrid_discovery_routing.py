@@ -27,7 +27,7 @@ def test_new_round_defaults_to_30_and_adaptive_recommendations(active):
     created = rounds.start_new_round({"status": "confirmed", "target_roles": ["产品经理"],
                                      "target_cities": ["上海"]})
     assert created["collection_executor"] == "cdp_readonly"
-    assert created["delivery_executor"] == "codex_native"
+    assert created["delivery_executor"] == "playwright"
     assert created["discovery_options"] == {"candidate_limit": 30, "recommendation_limit": None}
 
 

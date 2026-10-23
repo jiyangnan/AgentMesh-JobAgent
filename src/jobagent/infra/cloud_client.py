@@ -557,6 +557,7 @@ def discovery_start(
     discovery_contract_version: int | None = None,
     candidate_limit: int | None = None,
     recommendation_limit: int | None = None,
+    delivery_executor: str | None = None,
 ) -> dict[str, Any]:
     from jobagent.infra.protocol import digest_payload
 
@@ -576,6 +577,10 @@ def discovery_start(
                     recommendation_limit=recommendation_limit)
         if candidate_limit is not None:
             body["candidate_limit"] = candidate_limit
+    if delivery_executor is not None:
+        if discovery_contract_version != 2 or delivery_executor not in {"codex_native", "playwright"}:
+            raise ValueError("Delivery executor negotiation requires a supported v2 executor")
+        body["delivery_executor"] = delivery_executor
     if round_id:
         body["round_id"] = round_id
     if criteria_revision is not None:
@@ -598,6 +603,9 @@ def discovery_start(
     )
     if discovery_contract_version is not None and plan.get("discovery_contract_version") != discovery_contract_version:
         raise CloudError("The server does not support bulk discovery yet", code="bulk_discovery_unavailable",
+                         retryable=False, details={"request_preserved": True, "no_charge": True})
+    if delivery_executor is not None and plan.get("delivery_executor") != delivery_executor:
+        raise CloudError("The server did not retain the requested delivery executor", code="delivery_executor_unavailable",
                          retryable=False, details={"request_preserved": True, "no_charge": True})
     return plan
 

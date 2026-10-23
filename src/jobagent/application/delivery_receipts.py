@@ -7,7 +7,7 @@ from jobagent.infra.protocol import digest_payload
 
 _FIELDS = {"source", "observed_at", "observation", "job_id", "job_url", "account_label",
            "message_state", "outgoing_text", "existing_outgoing_text", "conversation_job_verified",
-           "resume_state", "receipt_checked"}
+           "resume_state", "receipt_checked", "prior_application", "history_record"}
 
 
 def sync_verified(platform, by_job):

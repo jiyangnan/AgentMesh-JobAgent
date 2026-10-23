@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-JOB51_SELECTOR_VERSION = "2026-07-10.0"
+from .modern import BOUND_LIST_JS
+
+JOB51_SELECTOR_VERSION = "2026-10-23.0"
 
 
 def build_job51_snapshot_script(limit: int = 20) -> str:
     safe_limit = max(1, int(limit))
-    return f"""
+    return BOUND_LIST_JS + f"""
     (function(){{
       const selectorVersion = "{JOB51_SELECTOR_VERSION}";
       const limit = {safe_limit};
@@ -37,6 +39,10 @@ def build_job51_snapshot_script(limit: int = 20) -> str:
       const cards = [];
       const seen = new Set();
       const nodes = Array.from(document.querySelectorAll('.joblist-item'));
+      const bound = job51BoundRows(nodes);
+      const currentPage = Number(document.querySelector('.el-pager .active')?.textContent) || null;
+      const dataPages = [...new Set(nodes.map(n=>Number(parseSensors(n.querySelector('[sensorsdata]')).pageNum)).filter(Number.isFinite))];
+      const loadedPage = dataPages.length===1 ? dataPages[0] : null;
       const app = document.querySelector('#app');
       const appMounted = Boolean(app && app.children.length > 0 && !placeholder);
       const noResults = /暂无相关职位|没有找到相关职位|换个条件试试/.test(bodyText);
@@ -79,13 +85,17 @@ def build_job51_snapshot_script(limit: int = 20) -> str:
             hasApply: Boolean(card.querySelector('button.apply, .btn.apply')),
             applyText: text(card, 'button.apply, .btn.apply')
           }},
-          sensors
+          sensors,
+          ...(bound?.rows.get(jobId) || {{}})
         }});
       }}
       return JSON.stringify({{
         ok: true,
         platform: '51job',
         selectorVersion,
+        currentPage, loadedPage, query:document.querySelector('#keywordInput')?.value || '',
+        invalidCardCount:bound?.invalid || 0,
+        paginationExhausted:Boolean(document.querySelector('.el-pagination button.btn-next')?.disabled),
         url: href,
         title,
         pageReady,

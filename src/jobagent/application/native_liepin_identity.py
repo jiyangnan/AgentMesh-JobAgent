@@ -1,5 +1,15 @@
 """Native identity evidence for Liepin's undisclosed-client headhunter jobs."""
+import re
 from urllib.parse import urlsplit
+
+
+def _area_key(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    # The list uses a middle dot while the detail uses a hyphen. Preserve
+    # every geographic component; never reduce a district to its city.
+    parts = tuple(p.strip() for p in re.split(r"[·\-－]", value))
+    return parts if all(parts) else None
 
 
 def eligible(work: dict) -> bool:
@@ -53,7 +63,7 @@ def validate(work: dict, evidence: dict) -> None:
         page, expected = urlsplit(str(evidence.get("page_url") or "")), urlsplit(job["url"])
         if (page.scheme != "https" or page.hostname != expected.hostname or page.path != expected.path
                 or not job.get("salary") or evidence.get("detail_salary") != job["salary"]
-                or not job.get("area") or evidence.get("detail_area") != job["area"]):
+                or not _area_key(job.get("area")) or _area_key(evidence.get("detail_area")) != _area_key(job["area"])):
             native._error("native_anonymous_detail_unverified", "Verify the exact approved detail route, title, salary and area before establishing its recruiter identity.")
     elif (not anchor or any(evidence.get(k) != anchor[k] for k in ("recruiter_name", "recruiter_company"))
           or evidence.get("conversation_job_verified") is not True):

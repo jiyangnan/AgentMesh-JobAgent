@@ -294,10 +294,24 @@ rewriting the persisted task.
 
 continue_delivery 必须复验原完整签名清单与授权，只扩大原 source.limit 到该清单总数，已完成和历史记录不重发。finish_platform 明确记录本轮未执行岗位被跳过，之后按原平台顺序续行。pause_delivery 保留卡片。平台完成审计后提供 continue_platforms / pause_delivery，下一平台的最终投递仍单独确认。重复同一应答幂等，冲突应答拒绝；账户、轮次、会话或原 source 变化拒绝，无有效签名授权不得继续。应答落盘后 pending slot 清理中断可安全恢复，不增发浏览器许可。
 
-## 未发布候选：批量发现与原生投递分阶段
+## 0.6.22：批量发现与投递分阶段
 
-新轮次新增可选 collection_executor=cdp_readonly、delivery_executor=codex_native，默认采集30、推荐数不设固定默认。旧版v1协议默认仍为100；既有轮次、签名计划及请求中冻结的100或其他数量保持原值。v2新请求省略数量时默认30，同一request重放省略数量则复用原计划，不能用新默认值改变旧任务。已有轮次不自动转换；待处理 request、Discover、采集断点、BrowserWork、授权和回执保留。只有无在途任务的轮次经过明确确认才可原地启用批量发现，round ID不变。
+新轮次新增可选 collection_executor=cdp_readonly、delivery_executor=playwright，默认采集30、推荐数不设固定默认。早期候选已经冻结为 codex_native 的请求保持原合同。旧版v1协议默认仍为100；既有轮次、签名计划及请求中冻结的100或其他数量保持原值。v2新请求省略数量时默认30，同一request重放省略数量则复用原计划，不能用新默认值改变旧任务。已有轮次不自动转换；待处理 request、Discover、采集断点、BrowserWork、授权和回执保留。只有无在途任务的轮次经过明确确认才可原地启用批量发现，round ID不变。
 
 新v2签名计划可带同账号、同平台的确认投递快照 excluded_delivered_ids；列表采集先排除这些岗位，再计算本轮30条目标。旧计划不追加字段，原请求重放与签名续期保持同一排除快照；既有采集断点、上传正文和请求预算不重置。云端决定与本地发送仍再次检查投递历史，结果不明的旧动作不得重发。
 
 新增 bulk-discovery 与 delivery-receipts 文件是账户绑定的恢复凭据，升级/回滚不得删除。上传和详情按原批次幂等重放，云端按原Discover扣费；结果返回前不新建任务。投递回执同步失败只重发回执，不重复外部投递。回滚旧客户端前应完成或保留这些任务，旧客户端不能继续v2任务，不能用新轮次替代。专用Chrome配置、登录态及历史审计不重置。
+
+## 0.6.22：内置 Playwright 执行器
+
+新轮次本地投递执行器为 `playwright`，使用随产品安装的 Playwright API 兼容依赖，复用现有专用 Chrome。发现阶段仍为只读 CDP、默认 30 条及完整 JD 云端匹配。历史签名计划中的 executor 字段不回写；已有轮次默认保留原执行器。
+
+新 V2 请求在首次网络调用前把 `delivery_executor` 存入原 pending-start，并由服务端签入 SearchPlan。旧 pending-start 缺少字段时继续省略，重放与续期保留原计划；明确冲突拒绝，不另建请求。服务端未支持所请求执行器时，在采集与扣费前停止并保留请求。此字段为增量扩展，没有自动迁移或清理。
+
+用户明确请求切换后，`browser use-playwright --confirm` 通过持久化迁移日志保留 round、profile/account、resume binding、Discover、已确认清单、授权、已完成动作和旧回执来源。只允许替代当前岗位尚无任何外部动作的初始只读检查；已发出动作、会话打开后的检查、附件准备和未知外部结果必须先核验。迁移可幂等恢复，不能重开原发送意图。
+
+`work run` 是内置执行入口，也是已发出动作的只读核验入口。升级前检查必须允许该恢复命令处理原账本，不能把它误拦为新投递。发送/提交前原子保存工作项、nonce、完整 binding 和实际选中附件；断线后只比较新增且得到确认的回执，不重复点击。相同招聘人的旧卡片、旧招呼和发送中状态均不算新结果。
+
+账户状态范围增加 `playwright_receipts`、`playwright_history` 和会话 tab 记录。账号切换、升级、回滚、归档均不得删除历史发送与同步队列。云端回执携带实际 `playwright_dom_observation`；旧 `host_ui_observation` 与混合历史保持原来源。同步失败仅保留/重放回执，不重新匹配、扣费或投递。
+
+浏览器交互失败保留原 profile。普通单元测试不启动真实 Chrome；显式浏览器验收使用隔离测试环境。不得为处理浏览器、证书或插件问题重置钥匙串、改写用户加密 Cookie、重建原 profile。依赖和平台兼容性、实网投递与正式发布必须分别验收。

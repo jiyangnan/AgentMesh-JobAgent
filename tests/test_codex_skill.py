@@ -24,7 +24,7 @@ def test_source_and_packaged_skill_are_identical_and_valid():
         assert data == (ROOT / "skills" / "codex-job-agent" / name).read_bytes()
     frontmatter = yaml.safe_load(bundle["SKILL.md"].decode().split("---", 2)[1])
     assert frontmatter["name"] == "codex-job-agent"
-    assert "native Computer Use" in frontmatter["description"]
+    assert "Playwright" in frontmatter["description"]
     metadata = yaml.safe_load(bundle["agents/openai.yaml"])
     assert "$codex-job-agent" in metadata["interface"]["default_prompt"]
     assert 25 <= len(metadata["interface"]["short_description"]) <= 64

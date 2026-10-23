@@ -46,7 +46,7 @@ def _response(record):
 def _check(record, active):
     from jobagent.application import native_work as native
     work = store.get_work(record["work_id"], native._binding())
-    if (work["binding"] != record["binding"] or active.get("native_session") != work["task"]["session"]
+    if (work["binding"] != record["binding"] or native._session() != work["task"]["session"]
             or active["platforms"]["liepin"].get("native_delivery") != work["task"]["delivery_source"]):
         native._error("native_resume_choice_context_mismatch", "Preserve the original account, session, job and delivery authorization.")
     return work
@@ -54,13 +54,28 @@ def _check(record, active):
 
 def selection(work):
     """Return a selected target, or the persistent unanswered interaction."""
+    from jobagent.application import native_work as native
     evidence = work["result"]["evidence"]
     validate_preparation(work, evidence)
     if evidence["submission_mode"] == "online_only":
         return {"submission_mode": "online_only", "attachment_reference": None}, None
     active = rounds.ensure_current_round()
+    preference = active.get("playwright_resume_preference") or {}
+    references = sorted(o["reference"] for o in evidence["attachment_options"])
+    if (preference.get("authorization_id") == work["binding"].get("authorization_id")
+            and preference.get("account_ref") == work["binding"].get("account_ref")
+            and preference.get("online_reference") == evidence["resume_reference"]
+            and preference.get("option_references") == references
+            and preference.get("attachment_reference") in references):
+        return {"submission_mode": "online_and_attachment",
+                "attachment_reference": preference["attachment_reference"],
+                "attachment_interaction_id": preference["consent_id"]}, None
     records = active.setdefault("native_resume_choices", {})
     record = records.get(work["work_id"])
+    if record and record["binding"] != work["binding"]:
+        native._error("native_resume_choice_context_mismatch", "Preserve the original account, session, job and delivery authorization.")
+    if record and sorted(record["options"].values()) != references:
+        native._error("native_resume_choice_context_mismatch", "The prepared attachment options changed; inspect the current dialog before choosing.")
     if record is None:
         interaction_id = "attachment:" + digest_payload([work["work_id"], work["binding"]])[7:]
         options = [{"option_id": "attachment_" + digest_payload(o["reference"])[7:31],

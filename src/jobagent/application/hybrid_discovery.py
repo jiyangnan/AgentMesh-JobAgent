@@ -85,7 +85,7 @@ def login(platform, args):
                 "next_suggested": rounds.round_status()["next_suggested"]}
     with collection_reader(platform) as reader:
         result = cli._login(platform, args, driver=reader)
-    return {**result, "collection_executor": "cdp_readonly", "delivery_executor": "codex_native"}
+    return {**result, "collection_executor": "cdp_readonly", "delivery_executor": rounds.ensure_current_round().get("delivery_executor", "codex_native")}
 
 
 def discover(platform, *, wait_seconds=6, page_delay=2.0, candidate_limit=None,
@@ -93,7 +93,7 @@ def discover(platform, *, wait_seconds=6, page_delay=2.0, candidate_limit=None,
     from jobagent.application.discover import run_discover
     active = rounds.ensure_current_round()
     item = active.get("platforms", {}).get(platform, {})
-    if repair_collection and (platform != "liepin" or accept_partial or item.get("status") in {
+    if repair_collection and (platform not in {"liepin", "zhilian"} or accept_partial or item.get("status") in {
             "discovered", "awaiting_delivery_confirmation", "reviewed", "sent", "completed"}):
         from jobagent.platforms.discovery import CollectionError
         raise CollectionError("collection_repair_not_allowed", "Collection repair cannot reopen finalized work",
@@ -124,7 +124,7 @@ def discover(platform, *, wait_seconds=6, page_delay=2.0, candidate_limit=None,
     result = run_discover(platform, wait_seconds=wait_seconds, page_delay=page_delay,
                           **({"accept_partial": True} if accept_partial else {}),
                           **({"repair_collection": True} if repair_collection else {}))
-    return {**result, "collection_executor": "cdp_readonly", "delivery_executor": "codex_native",
+    return {**result, "collection_executor": "cdp_readonly", "delivery_executor": rounds.ensure_current_round().get("delivery_executor", "codex_native"),
             "elapsed_seconds": round(monotonic() - started, 3)}
 
 
@@ -143,7 +143,7 @@ def enable_existing_round(*, confirmed=False):
         checkpoint = load_collection_checkpoint(platform)
         if checkpoint or load_pending_start(platform) or load_pending_decision(platform) or active.get("platforms", {}).get(platform, {}).get("native_delivery"):
             raise ValueError("Finish the preserved discovery/delivery before changing its collection executor")
-    active.update(collection_executor="cdp_readonly", delivery_executor="codex_native")
+    active.update(collection_executor="cdp_readonly", delivery_executor=active.get("delivery_executor", "codex_native"))
     active.setdefault("discovery_options", {"candidate_limit": 30, "recommendation_limit": None})
     rounds.save_round(active)
     return {"ok": True, "request_preserved": True, "workflow": rounds.round_status(),

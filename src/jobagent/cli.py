@@ -32,7 +32,7 @@ def _add_discover(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--candidate-limit", type=int, help="Bulk collection limit; defaults to 30 for a new round")
     parser.add_argument("--recommendation-limit", type=int, help="Optional user-requested recommendation maximum; otherwise use actual matches")
     parser.add_argument("--accept-partial", action="store_true", help="Explicitly use the preserved partial collection for this Discover")
-    parser.add_argument("--repair-collection", action="store_true", help="Explicitly reparse a technically diagnosed incomplete Liepin collection within its original signed pages; preserves prior candidates")
+    parser.add_argument("--repair-collection", action="store_true", help="Repair a diagnosed incomplete Liepin or Zhilian collection within the original signed scope; retain its history and billing identity")
 
 
 def _add_review(parser: argparse.ArgumentParser) -> None:
@@ -133,7 +133,6 @@ def build_parser() -> argparse.ArgumentParser:
     platforms_sub.add_parser("status")
     health = platforms_sub.add_parser("health")
     health.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
-
     browser = sub.add_parser("browser", help="Inspect the dedicated browser without navigation")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
     diagnose = browser_sub.add_parser("diagnose")
@@ -142,13 +141,22 @@ def build_parser() -> argparse.ArgumentParser:
     resume_collection.add_argument("--platform", required=True, choices=["boss"])
     resume_collection.add_argument("--confirm", action="store_true", help="Requires the user's explicit confirmation after page recovery")
 
-    work = sub.add_parser("work", help="Continue native Computer Use tasks without a browser driver")
+    resume_preference = browser_sub.add_parser("select-resume", help="Choose an observed existing platform resume with explicit user confirmation")
+    resume_preference.add_argument("--platform", choices=["liepin", "zhilian"], required=True)
+    resume_preference.add_argument("--reference", required=True)
+    resume_preference.add_argument("--confirm", action="store_true")
+    migrate_executor = browser_sub.add_parser("use-playwright", help="Preserve this round and explicitly select the built-in executor")
+    migrate_executor.add_argument("--confirm", action="store_true")
+
+    work = sub.add_parser("work", help="Continue durable browser tasks with the configured executor")
     work_sub = work.add_subparsers(dest="work_command", required=True)
     for name in ("next", "status", "contract"):
         work_sub.add_parser(name)
-    for name in ("begin", "submit", "cancel", "recover", "continue"):
+    for name in ("begin", "submit", "cancel", "recover", "continue", "run"):
         action = work_sub.add_parser(name)
         action.add_argument("--work-id", required=True)
+        if name == "run":
+            action.add_argument("--max-steps", type=int, default=1)
         if name in {"submit", "continue"}:
             action.add_argument("--result", required=True, help="Local typed UI-observation JSON")
         if name == "cancel":
@@ -662,8 +670,10 @@ def _doctor_env() -> dict[str, Any]:
     payload = {
         "ok": environment_healthy,
         "environment_healthy": environment_healthy,
-        "browser_executor": "codex_native",
-        "host_capability": {"native_computer_use": "requires_host_verification", "browser_driver": "none"},
+        "browser_executor": (workflow or {}).get("delivery_executor", "playwright"),
+        "host_capability": ({"native_computer_use": "not_required", "browser_driver": "playwright"}
+                            if (workflow or {}).get("delivery_executor", "playwright") == "playwright" else
+                            {"native_computer_use": "requires_host_verification", "browser_driver": "none"}),
         "python": sys.version.split()[0],
         "chrome": chrome_available,
         "api_key_configured": key_present,
@@ -1662,6 +1672,9 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return native_work.next_work()
         if args.work_command == "status":
             return native_work.status()
+        if args.work_command == "run":
+            from jobagent.application import playwright_work
+            return playwright_work.run(args.work_id, max_steps=args.max_steps)
         if args.work_command == "begin":
             return native_work.begin(args.work_id)
         if args.work_command == "submit":
@@ -1673,6 +1686,12 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return continue_unattempted(args.work_id, args.result)
         return native_work.cancel(args.work_id, confirmed=args.confirm_cancel)
     if args.command == "browser":
+        if args.browser_command == "select-resume":
+            from jobagent.application import playwright_work
+            return playwright_work.select_resume(args.platform, args.reference, confirmed=args.confirm)
+        if args.browser_command == "use-playwright":
+            from jobagent.application import playwright_work
+            return playwright_work.migrate(confirmed=args.confirm)
         if args.browser_command == "resume-collection":
             return hybrid_discovery.resume_collection(args.platform, confirmed=args.confirm)
         if hybrid_discovery.enabled():
@@ -1685,8 +1704,10 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
         if any(item.get("native_delivery") for item in active.get("platforms", {}).values()):
             return native_work.audit_round(args.platform)
     if args.command == "platforms" and args.platforms_command == "health":
-        return {"ok": True, "browser_executor": "codex_native", "browser_probe_executed": False,
-                "message": "Browser health is verified through the current platform's native session task; no separate browser is started.",
+        active = state.load_json(state.current_round_path()) or {}
+        executor = active.get("delivery_executor", active.get("browser_executor", "playwright"))
+        return {"ok": True, "browser_executor": executor, "browser_probe_executed": False,
+                "message": "Browser health is verified by the current platform session task; this command does not start another browser.",
                 "next_suggested": "jobagent work next"}
     if args.command not in native_work.PLATFORMS:
         return None

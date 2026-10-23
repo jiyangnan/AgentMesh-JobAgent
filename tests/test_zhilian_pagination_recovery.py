@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -1601,11 +1602,16 @@ def test_live_vue_anchor_requeries_current_control_and_verifies_dom_click_transi
     assert driver.form_submit_attempts == 0
 
 
+@pytest.mark.parametrize("bulk_reader", [False, True])
 def test_live_vue_anchor_adopts_new_cdp_target_before_result_collection(
     monkeypatch,
     tmp_path,
+    bulk_reader,
 ):
     driver = _LiveVueSearchAnchorDriver(transition_method="new_target")
+    from jobagent.drivers.collection_reader import CollectionReader
+    driver.manager = SimpleNamespace(user_data_dir=tmp_path / "chrome")
+    reader = CollectionReader("zhilian", driver=driver) if bulk_reader else driver
     monkeypatch.setattr("jobagent.platforms.zhilian.city_resolver.APP_DIR", tmp_path)
     monkeypatch.setattr("jobagent.platforms.zhilian.collect.time.sleep", lambda _seconds: None)
     monkeypatch.setattr(
@@ -1618,7 +1624,7 @@ def test_live_vue_anchor_adopts_new_cdp_target_before_result_collection(
     )
 
     result = ZhilianReadOnlyCollector(
-        driver=driver,
+        driver=reader,
         login_verification=_login_verification(),
     ).collect(
         query="第一查询",
@@ -1897,7 +1903,7 @@ def test_snapshot_script_emits_real_no_result_and_pagination_evidence():
     assert "allowUnknownSession = true" in city_script
     assert "readable_city_anchor:" in city_script
     assert "navigate_city_homepage" in city_script
-    assert ZHILIAN_SELECTOR_VERSION == "2026-08-22.2"
+    assert ZHILIAN_SELECTOR_VERSION == "2026-10-23.1"
 
 
 @pytest.mark.parametrize(

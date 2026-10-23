@@ -2,6 +2,21 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.22] - 2026-10-23
+
+### Changed
+
+- New rounds collect 30 jobs by default through the read-only browser collector, then match the complete pool in the cloud. Recommendations require full job descriptions and follow the user's actual fit.
+- Confirmed delivery uses Job Agent's packaged Playwright-compatible runtime in the existing dedicated Chrome profile. Codex Computer Use and optional host desktop plugins are no longer prerequisites for new rounds.
+
+### Fixed
+
+- Recover current Liepin, Zhilian and 51Job listing layouts, pagination and complete descriptions while retaining interrupted requests, saved candidates and billing identities.
+- Bind delivery to the approved job, platform account, exact greeting and confirmed resume choice. Persist actions before sending; interrupted work checks receipts without sending again.
+- Preserve completed applications across rounds, import verified receipts idempotently, and keep job tabs separate from account history and resume tabs.
+- Negotiate the new executor with the server before collection. Existing rounds and signed requests retain their original executor until an eligible, explicitly confirmed migration.
+- Keep the original browser profile and credentials during recovery. A failed connection or unexpected blank navigation stops with preserved work and never resets Keychain or replaces the profile.
+
 ## [0.6.21] - 2026-10-11
 
 ### Fixed
