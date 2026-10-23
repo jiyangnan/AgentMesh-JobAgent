@@ -35,6 +35,20 @@ def chrome(tmp_path):
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     profile = tmp_path / "isolated-profile"
+    profile.mkdir()
+    browser_env = os.environ.copy()
+    if sys.platform == "win32":
+        # Chrome checks its default data directory through SHGetFolderPath.
+        # An isolated USERPROFILE must also contain the standard Windows
+        # folders or that check fails closed before CDP can start.
+        browser_home = tmp_path / "browser-home"
+        for variable, directory in (
+            ("USERPROFILE", browser_home),
+            ("APPDATA", browser_home / "AppData" / "Roaming"),
+            ("LOCALAPPDATA", browser_home / "AppData" / "Local"),
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+            browser_env[variable] = str(directory)
     args = [executable, "--headless=new", "--no-first-run", "--no-default-browser-check", "--enable-logging=stderr",
             "--disable-background-networking", "--disable-sync", "--disable-extensions",
             "--password-store=basic", f"--remote-debugging-port={port}", f"--user-data-dir={profile}"]
@@ -47,7 +61,7 @@ def chrome(tmp_path):
     args.append("about:blank")
     log = tmp_path / "chrome-startup.log"
     with log.open("wb") as output:
-        process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, env=browser_env)
     try:
         assert _wait_for_cdp_port(port), (
             f"Isolated Chrome did not open CDP: executable={executable!r}, exit={process.poll()}; "
