@@ -15,7 +15,7 @@ from jobagent.drivers.boss import create_driver
 from .constants import LIEPIN_LOGIN_USER_PROMPT
 from .city_resolver import BUNDLED_CITY_CODES, LiepinCityResolver, normalize_city_name
 from .parser import liepin_job_id, parse_liepin_job
-from .selectors import build_liepin_snapshot_script
+from .selectors import build_liepin_city_controls_script, build_liepin_snapshot_script
 
 LIEPIN_CITY_CODES = BUNDLED_CITY_CODES
 
@@ -732,7 +732,7 @@ class LiepinReadOnlyCollector:
         (function(){
           const mode = 'liepin_city_search_evidence';
           const normalize = value => String(value || '').trim().replace(/市$/, '');
-          const dq = document.querySelector('input[name="dq"]');
+          const cityControls = __LIEPIN_CITY_CONTROLS__;
           const visible = el => {
             if (!el) return false;
             const style = window.getComputedStyle(el);
@@ -751,25 +751,19 @@ class LiepinReadOnlyCollector:
           const metaMatch = metaContent.match(/(?:^|;)\s*city=([^;]+)/);
           const title = document.title || '';
           const titleMatch = title.match(/【?([\u4e00-\u9fa5]{2,8})(?:招聘|人才)/);
-          const visibleCityNode = Array.from(document.querySelectorAll('[data-name], .active, .selected')).find(el => {
-            const value = normalize(el.getAttribute && el.getAttribute('data-name') || el.textContent);
-            return value && dq && value === normalize(dq.getAttribute('data-name'));
-          });
           let urlQuery = '';
           try { urlQuery = new URL(location.href).searchParams.get('key') || ''; }
           catch (error) { urlQuery = ''; }
-          const jobCardCount = document.querySelectorAll('.job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"]').length;
+          const jobCardCount = document.querySelectorAll('.jobCardPcContainer, .job-card-pc-container, .job-card, .sojob-item-main, a[href*="/job/"], a[href*="/a/"]').length;
           const body = (document.body && (document.body.innerText || document.body.textContent) || '').slice(0, 3000);
           const noResults = jobCardCount === 0 && /暂无相关职位|暂时没有合适|没有找到相关职位|未找到相关职位/.test(body);
           return JSON.stringify({
             ok: true,
             mode,
             url: location.href || '',
-            controlCity: dq ? normalize(dq.getAttribute('data-name')) : '',
-            controlCode: dq ? String(dq.value || dq.getAttribute('value') || '').trim() : '',
+            ...cityControls,
             metaCity: metaMatch ? normalize(metaMatch[1]) : '',
             titleCity: titleMatch ? normalize(titleMatch[1]) : '',
-            visibleCity: visibleCityNode ? normalize(visibleCityNode.getAttribute('data-name') || visibleCityNode.textContent) : '',
             inputQuery: key ? String(key.value || key.getAttribute('value') || key.getAttribute('data-name') || '').trim() : '',
             urlQuery,
             jobCardCount,
@@ -778,7 +772,9 @@ class LiepinReadOnlyCollector:
           });
         })()
         """
-        result = self.driver._exec_js(js)
+        result = self.driver._exec_js(
+            js.replace("__LIEPIN_CITY_CONTROLS__", build_liepin_city_controls_script())
+        )
         if isinstance(result, dict) and "raw" in result:
             try:
                 parsed = json.loads(result["raw"])

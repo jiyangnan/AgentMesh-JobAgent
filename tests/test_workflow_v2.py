@@ -166,3 +166,63 @@ def test_workflow_dispatches_tls_recovery_before_resuming_doctor(isolated, monke
     assert flow.advance(action.action_id, action.expected_revision)["event"] == "tls_preflight"
     assert sorted(calls) == ["agentmesh_cloud", "agentmesh_core"]
     assert flow.next_action()["action"]["business_argv"] == ["jobagent", "doctor", "env"]
+
+
+@pytest.fixture
+def interrupted_collection(isolated, monkeypatch):
+    active = rounds.start_new_round({"status": "confirmed", "target_roles": ["产品经理"],
+        "target_cities": ["深圳"], "source": "user_explicit"})
+    active["platforms"]["boss"]["status"] = "login_verified"
+    rounds.save_round(active)
+    monkeypatch.setattr(flow, "_source", lambda _: {"ok": True, "next_suggested": "jobagent boss discover"})
+    def crash(_):
+        raise RuntimeError("preflight failed")
+    monkeypatch.setattr(cli, "_dispatch_unlocked", crash)
+    action = cli.build_parser().parse_args(flow.next_action()["action"]["argv"][1:])
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        flow.advance(action.action_id, action.expected_revision)
+    result = {"ok": True, "workflow": rounds.round_status(), "work_counts": {
+        "ready": 0, "intent_recorded": 0, "reconcile_only": 0, "closed": 0},
+        "next_suggested": "jobagent work next"}
+    return action.action_id, result
+
+
+def test_empty_bulk_preflight_status_recovers_journal_without_executing_search(interrupted_collection):
+    operation_id, result = interrupted_collection
+    before = state.current_round_path().read_bytes()
+    flow.remember_result(SimpleNamespace(command="work", work_command="status"), result)
+    operation = flow._load()["operations"][operation_id]
+    assert operation["status"] == "recovered"
+    assert "result" not in operation
+    assert operation["recovery_result"]["work_counts"] == result["work_counts"]
+    assert state.current_round_path().read_bytes() == before
+    assert flow.next_action()["action"]["business_argv"] == ["jobagent", "boss", "discover"]
+
+
+@pytest.mark.parametrize("uncertainty", ["pending_start", "pending_decision", "missing_counts", "native_executor",
+                                        "native_session", "other_round", "other_platform", "delivery_command"])
+def test_collection_preflight_recovery_keeps_uncertain_work_claimed(interrupted_collection, monkeypatch, uncertainty):
+    from jobagent.infra import discovery_state
+
+    operation_id, result = interrupted_collection
+    active = state.load_json(state.current_round_path())
+    if uncertainty in {"pending_start", "pending_decision"}:
+        monkeypatch.setattr(discovery_state, "load_" + uncertainty, lambda _: {"request_id": "preserved"})
+    elif uncertainty == "missing_counts":
+        result["work_counts"] = {}
+    elif uncertainty == "native_executor":
+        active["collection_executor"] = "codex_native"
+    elif uncertainty == "native_session":
+        active["native_session"] = {"accounts": {"boss": "existing-account"}}
+    elif uncertainty == "other_round":
+        result["workflow"]["round_id"] = "another-round"
+    elif uncertainty == "other_platform":
+        result["workflow"]["current_platform"] = "liepin"
+    elif uncertainty == "delivery_command":
+        journal = flow._load()
+        journal["operations"][operation_id]["argv"] = ["jobagent", "boss", "greet", "send"]
+        flow._save(journal)
+    rounds.save_round(active)
+    flow.remember_result(SimpleNamespace(command="work", work_command="status"), result)
+    assert flow._load()["operations"][operation_id]["status"] == "claimed"
+    assert flow.next_action()["error"] == "workflow_result_unresolved"

@@ -7,7 +7,7 @@ from jobagent.infra.delivery_preview import DeliveryPreviewError, preview_requir
 def enabled():
     workflow = state.load_json(state.STATE_DIR / "workflow.json") or {}
     active = state.load_json(state.current_round_path()) or {}
-    return bool(workflow.get("intent") or active.get("round_criteria"))
+    return bool(workflow.get("intent") or active.get("round_criteria") or active.get("collection_executor") == "cdp_readonly")
 
 
 def _verify(payload, kind, review):

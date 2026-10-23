@@ -294,7 +294,7 @@ def test_preserves_review_options_before_lazy_session_request(env, monkeypatch):
 
 
 def test_invalid_explicit_promotion_stops_before_browser_work(env):
-    with pytest.raises(ValueError, match="Only review jobs"):
+    with pytest.raises(ValueError, match="Only review.*jobs"):
         native.prepare_review("zhilian", input_path=str(env.source), promoted_ids=["job-4"], confirm_promote=True)
     assert ledger.list_account_work("account-test") == []
 

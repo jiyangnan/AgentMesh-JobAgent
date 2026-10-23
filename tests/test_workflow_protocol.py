@@ -54,6 +54,17 @@ def test_user_handoffs_cannot_execute_the_continuation_before_answer():
     assert 'argv' not in result['agent_action']
 
 
+@pytest.mark.parametrize('handoff', [False, True])
+def test_nonretryable_collection_cannot_be_reissued_by_either_action_contract(handoff):
+    result = with_contract({'ok': False, 'error': 'boss_detail_request_rejected',
+        'automatic_retry_allowed': False, 'requires_user_action': handoff,
+        'next_suggested': 'jobagent boss discover',
+        'action': {'type': 'run', 'argv': ['jobagent', 'boss', 'discover']}})
+    assert result['action']['type'] == ('handoff' if handoff else 'blocked')
+    assert result['agent_action']['type'] == ('wait_user' if handoff else 'blocked')
+    assert 'argv' not in result['action'] and 'argv' not in result['agent_action']
+
+
 def test_receipt_reconciliation_cannot_be_mistaken_for_send_permission():
     response = {'event': 'browser_work_required', 'native_step_issued': True,
         'work': {'work_id': 'work-test', 'nonce': 'nonce-test', 'allowed_mode': 'reconcile_only'},

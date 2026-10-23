@@ -24,6 +24,23 @@ class _Response:
         return self.raw
 
 
+@pytest.mark.parametrize("limit", [None, 30, 100, 500])
+def test_discovery_start_preserves_explicit_scope_or_server_default(monkeypatch, limit):
+    bodies = []
+    monkeypatch.setattr(cloud_client, "_workflow_price_stage", lambda *args: None)
+    def request(method, path, body, **kwargs):
+        bodies.append(body)
+        return {"discovery_contract_version": 2}
+    monkeypatch.setattr(cloud_client, "_request", request)
+    cloud_client.discovery_start(platform="boss", profile={}, request_id="round-scope-test",
+                                 discovery_contract_version=2, candidate_limit=limit)
+    if limit is None:
+        assert "candidate_limit" not in bodies[0]
+    else:
+        assert bodies[0]["candidate_limit"] == limit
+    assert bodies[0]["recommendation_limit"] is None
+
+
 @pytest.mark.parametrize("code,retryable,preserved", [
     ("network_timeout", True, True),
     ("criteria_revision_conflict", False, False),

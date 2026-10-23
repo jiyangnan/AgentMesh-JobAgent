@@ -26,7 +26,12 @@ from jobagent.infra.rounds import (
     set_platform_status,
     utc_now,
 )
-from jobagent.infra.state import current_round_path, load_json, resume_freshness_path, save_json
+from jobagent.infra.state import (
+    current_round_path,
+    load_json,
+    resume_freshness_path,
+    save_json,
+)
 
 INTERACTION_KIND = "resume_freshness"
 BASELINE_SCHEMA_VERSION = 1
@@ -87,7 +92,7 @@ def baseline_is_fresh(platform: str, binding: dict[str, Any]) -> bool:
 
 def _platform_account(platform: str) -> str:
     active = _active_round() or {}
-    return str((active.get("native_session", {}).get("accounts") or {}).get(platform) or "")
+    return str(((active.get("native_session") or {}).get("accounts") or {}).get(platform) or "")
 
 
 # ------------------------------------------------------------------- cards
@@ -98,7 +103,7 @@ def _month_day(confirmed_at: Any) -> str:
 
     text = str(confirmed_at or "").strip()
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return "最近"
     return f"{parsed.month} 月 {parsed.day} 日"
@@ -263,7 +268,7 @@ def _invalid_response(pending_or_record: dict[str, Any], message: str) -> dict[s
 
 def gate_search(platform: str) -> dict[str, Any] | None:
     """Gate a new search, preserving older in-flight collection/decision work."""
-    from jobagent.infra.discovery_state import load_pending_start, load_pending_decision
+    from jobagent.infra.discovery_state import load_pending_decision, load_pending_start
 
     active = _active_round()
     if not active:

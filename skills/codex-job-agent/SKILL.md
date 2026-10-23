@@ -1,25 +1,118 @@
 ---
 name: codex-job-agent
-description: Install and set up Job Agent in Codex, connect an API Key, discover jobs, review signed recommendations, and deliver user-confirmed applications through native Computer Use in the user's browser.
+description: Install and set up Job Agent in Codex, connect an API Key, discover jobs, review signed recommendations, and deliver user-confirmed applications through Job Agent's built-in Playwright runtime in the user's browser.
 ---
 
 # Job Agent for Codex
 
-After every navigation, scroll, dialog change, UI action or interruption, obtain a fresh native UI snapshot before choosing the next control. Never reuse stale element references or coordinates. The actual callable host tool documentation is authoritative; do not invent APIs.
+Use the official Job Agent CLI for account-bound progress, cloud matching,
+confirmation, browser execution and audit. New rounds collect 30 unique jobs by
+default through the read-only CDP collector. Every recommendation requires the
+full JD, and the number recommended follows the user's actual fit.
 
-For `browser_work_required`, follow the current task's returned command and permission. Run its `work begin` only when offered to obtain the current nonce and task schema; a recovery offer or exhausted observation budget is not permission to begin again. If native capability is unavailable, do not operate any browser: submit the returned `pause_result_example` with the actual missing-capability observation and `reason=permission_required`, then relay the returned user prompt. Never fabricate an observed window/profile merely to satisfy a schema.
+For `executor=playwright`, execute the returned `jobagent work run --work-id ID`
+command. Job Agent installs and controls its own Playwright-compatible dependency;
+Codex Computer Use and other agents' optional desktop plugins are not required.
+The CLI owns the action intent and receipt. Do not click, type or submit separately,
+run ad-hoc browser scripts, or send host-authored success evidence for that work.
+Use `jobagent work status` after interruption and preserve its reconciliation mode.
 
-Use the official Job Agent CLI for account-bound progress, cloud decisions,
-confirmation and audit. Use the host's native Computer Use tools for the browser.
-The CLI's current task and result schema are authoritative; this skill is an
-operating procedure, not a mechanism that can intercept host UI actions.
+Legacy `native_work` retains its returned host-tool contract until an explicit,
+supported migration succeeds. The legacy sections below apply only to that mode.
+
+## Collection and delivery are separate phases
+
+The signed SearchPlan controls collection scope. An explicit `--candidate-limit`
+can request up to 1000 candidates; 200/500/1000 are optional, not defaults.
+`--recommendation-limit` is optional; do not invent a quota or fill a short list.
+Keep the original request, Discover ID, candidate checkpoint and upload receipts
+when interrupted. `--accept-partial` requires the user's explicit choice to use
+an available partial pool; show target and actual coverage. Do not start over.
+
+After technical diagnosis of an incomplete Liepin extraction, an explicit user
+choice may authorize `jobagent liepin discover --repair-collection` with the
+fixed client. This bounded repair preserves the original plan, request,
+candidate prefix, completed pages and billing identity; it reparses only pages
+from that original checkpoint once. Ordinary retries never activate repair or
+reset its progress. Login/verification interruptions keep their own recovery.
+Do not use repair to reopen a finalized Discover or to expand its signed scope.
+
+After matching, show the complete preview and obtain the user's final-list
+confirmation. The built-in executor verifies the same dedicated Chrome profile,
+platform account and approved job before delivery. It records conversation,
+platform default message, exact signed greeting, online resume and attachment
+separately. A click alone is not a successful receipt.
+
+Upgrades preserve active older rounds. Use `jobagent browser use-playwright
+--confirm` only for an explicit request to migrate; the CLI decides whether the
+current work is eligible. `round use-bulk-discovery --confirm` changes only the
+collection phase and does not authorize delivery or migrate an issued action.
 
 ## Host-independent workflow contract
+
+New and explicitly migrated rounds use Job Agent's built-in Playwright-compatible
+runtime for confirmed delivery. Run the exact returned `jobagent work run`
+command. The CLI verifies the existing dedicated Chrome profile, account, job,
+selected resume and receipt. Codex, Claude Code and OpenClaw do not need a host
+Computer Use plugin for this executor. Do not operate its tasks through another
+browser tool or manufacture result JSON. An issued action survives interruption;
+reconciliation inspects its receipt without clicking send or submit again.
+
+New rounds use CLI-managed read-only CDP collection (30 candidates by default,
+up to 1000 when explicitly requested), followed by cloud matching of the full
+pool. Recommendations depend on actual fit and complete job descriptions; never
+fill a quota or replace Discover with one-by-one host UI browsing. After the
+complete preview and explicit user confirmation, delivery uses the same Chrome
+profile and account. Collection commands grant no recruiting permission. Delivery
+uses the documented browser controls, without direct recruiting API requests.
+Background reads still depend on the network; incomplete descriptions require
+reader recovery and cannot become recommendation evidence.
+
+Existing rounds retain their executor, frozen requests, signatures and receipts.
+An explicit user request can authorize `jobagent browser use-playwright --confirm`.
+The migration preserves the round and approved list, supersedes only eligible
+initial read-only work, and refuses an outstanding external action. Finish or
+reconcile that action first. Never clear state, recreate a profile, copy cookies,
+reset Keychain or reapply completed jobs to change executors.
+
+The native-tool instructions below apply only to legacy tasks whose returned
+action is `native_work`. Such a task retains its original permission and result
+schema. Use only its documented host capability until an explicit supported
+migration succeeds; optional plugins for another host are not dependencies.
+
+Boss list and detail reads share a persistent request budget for the dedicated
+Chrome profile. Changing rounds, accounts or processes does not reset it.
+Detail work uses persisted small batches; each successful description is saved
+before its batch upload. The next request's due time is also persisted before
+the current request. A restart must not redraw a shorter delay, rebuild batches
+or reread completed descriptions after a lost upload acknowledgement. These
+controls limit local load; they are not evidence of a platform's request limits.
+On a rejected request or visible verification, stop without foreground fallback
+or automatic retries. `automatic_retry_allowed=false` takes precedence over any
+older continuation command. Keep already collected descriptions and resume only
+missing work with the same Discover and billing key. A user-confirmed page
+recovery uses `jobagent browser resume-collection --platform boss --confirm`;
+this checks the existing page without navigation and does not collect jobs.
+The local cooldown alone never authorizes a retry. Technical reader failures
+need a technical repair; do not present them as missing published job content.
+An explicit engineering suspension returns `collection_read_suspended`. It
+cannot be released by completing verification, waiting or an ordinary
+`resume-collection --confirm`; retain the task pending technical review.
 
 Read `jobagent workflow contract` once for the installed protocol, command catalog
 and input schemas. Protocol 2 uses the top-level `action`. The legacy
 `workflow-contract` alias and `agent_action` field remain available for older
 integrations. Use the current protocol returned by the installed CLI.
+
+For a diagnosed native-window failure before any action on the current job,
+`window_recovery` may offer explicitly confirmed `work recover` for the initial
+read-only delivery inspection. It archives that inspection, independently
+verifies the original profile/account using the supported host, and resumes the
+same approved list. It never cancels the delivery authorization or reissues a
+communicate/send/submit action. Existing action history, post-communication work,
+changed scope and pending external actions are ineligible. Reuse the user's
+existing confirmation of this recovery scope; never reset state or fabricate a
+stable window ID when the supported host exposes an app reference.
 
 After the installation/account handoff, use this loop:
 
@@ -33,7 +126,9 @@ After the installation/account handoff, use this loop:
    - `run`: execute the complete `action.argv` without a shell. For an issued
      workflow action this calls `workflow advance` with its ID and expected
      revision. Do not construct commands from `business_argv`, alter arguments,
-     parallelize steps or retry an action with a new ID.
+     parallelize steps or retry an action with a new ID. A Playwright `work run`
+     command performs its own browser work; never also perform that action through
+     a host UI tool. Forward progress events and wait for its complete response.
    - `ask`: display the product's complete card and all delivery-preview rows,
      including unknown filtering evidence and coverage notices. Wait for an
      actual answer, then use the exact interaction ID. An answer JSON file may
@@ -54,7 +149,7 @@ After the installation/account handoff, use this loop:
    - `done`: report its scope. Only `scope=round` means the four-platform round
      is complete; a setup or command result is not the end of a requested round.
 
-After a native batch, report the verified counts and display the complete
+After a delivery batch, report the verified counts and display the complete
 `delivery_batch_followup` card whenever the original authorized list has
 unattempted jobs. Ask whether to `continue_delivery`, `finish_platform`, or
 `pause_delivery`, using that exact interaction ID. Never treat a batch limit as
@@ -63,7 +158,7 @@ only unattempted jobs; ending explicitly skips the remainder for this round.
 Pausing preserves the same card, list, authorization and receipts. Do not change
 `--limit`, open a new round, recollect, or infer an answer from a status check.
 
-After a completed native platform audit, display `delivery_platform_followup`
+After a completed platform audit, display `delivery_platform_followup`
 and ask whether to `continue_platforms` or `pause_delivery`. Name the next
 platform and preserve the original round. Do not end the conversation with only
 a completion summary while this card is awaiting an answer. If cards are
@@ -104,6 +199,12 @@ if delivery cannot be verified. Never resend a terminal unresolved job. Existing
 issued work keeps its original contract and cannot gain a new send permission.
 
 Liepin delivery opens the approved conversation before submitting a resume.
+For an anonymous headhunter client, follow the task's
+`anonymous_company_identity` when the detail omits the client company. Report
+that absence honestly; never copy the signed label or another job's company
+into observed evidence. Verify the approved detail URL, title, salary and area
+and the actual recruiter/employer. Subsequent conversation work retains this
+recruiter identity and verifies the exact approved job before any action.
 Follow the CLI's subsequent read-only conversation inspection: a platform default
 greeting and an actual resume receipt are separate facts. Never submit a resume
 again when the conversation already proves it was sent, and never count the
@@ -265,8 +366,9 @@ execute_once by assumption. A command timeout alone is not a terminal job outcom
 1. Read the complete response from `jobagent work next`, including the current
    instructions, task, binding, allowed actions, evidence requirements,
    `result_schema` and any sample. A sample is a format example, not evidence.
-2. Discover native Computer Use capabilities from tools actually available in
-   this host. Read their current instructions before using app/window discovery,
+2. Identify Codex's own native Computer Use capabilities among the available
+   tools; callable third-party plugins are not substitutes. Read the selected
+   official tool's current instructions before using app/window discovery,
    screenshots, accessibility reading, clicks or typing. Do not invent an API
    name. If the required capability is unavailable, pause and report the missing
    capability through the returned schema when possible. Never fall back to CDP,

@@ -15,6 +15,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from jobagent.application import discover as existing
 from jobagent.application import native_discovery as native
+# Load the consumer before fixtures temporarily replace the ledger module.
+# Otherwise its module-level reference can retain a previous test's ledger.
+from jobagent.application import native_delivery_followup as _delivery_followup
 from jobagent.infra import discovery_state as storage, protocol
 from jobagent.platforms.discovery import CollectionError
 

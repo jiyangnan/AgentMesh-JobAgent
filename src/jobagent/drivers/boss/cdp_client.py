@@ -23,7 +23,7 @@ class CDPClient:
     def connect(self, ws_url: str, timeout: float = 10.0) -> None:
         """Open WebSocket connection to a CDP endpoint."""
         self.disconnect()
-        self.ws = websocket.create_connection(ws_url, timeout=timeout)
+        self.ws = websocket.create_connection(ws_url, timeout=timeout, suppress_origin=True)
         self.ws_url = ws_url
 
     def disconnect(self) -> None:

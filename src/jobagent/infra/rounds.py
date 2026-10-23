@@ -16,7 +16,7 @@ TERMINAL_PLATFORM_STATUSES = {"completed", "skipped_this_round"}
 # picked as the current platform: the agent continues later platforms.
 FRESHNESS_HOLD_STATUS = "resume_freshness_hold"
 ROUND_SCHEMA_VERSION = 4
-DEFAULT_BROWSER_EXECUTOR = "codex_native"
+DEFAULT_BROWSER_EXECUTOR = "playwright"
 UNBOUND_BROWSER_SESSION = "native-unbound"
 PLATFORM_LOGIN_VERIFICATION_TTL_SECONDS = 30 * 60
 DELIVERY_POLICY = {
@@ -104,6 +104,9 @@ def _create_round(
         "updated_at": now,
         "platform_order": list(DEFAULT_PLATFORM_ORDER),
         "browser_executor": DEFAULT_BROWSER_EXECUTOR,
+        "collection_executor": "cdp_readonly",
+        "delivery_executor": DEFAULT_BROWSER_EXECUTOR,
+        "discovery_options": {"candidate_limit": 30, "recommendation_limit": None},
         "browser_session_id": UNBOUND_BROWSER_SESSION,
         "native_session": None,
         "intent": intent or {
@@ -250,7 +253,7 @@ def migrate_round_payload(state: dict[str, Any]) -> dict[str, Any]:
 
 def _migrate_browser_executor(state: dict[str, Any]) -> dict[str, Any]:
     """Change transport metadata without discarding an existing native binding."""
-    state["browser_executor"] = DEFAULT_BROWSER_EXECUTOR
+    state["browser_executor"] = "codex_native"
     if not isinstance(state.get("native_session"), dict):
         previous = state.get("browser_session_id")
         if previous and previous != UNBOUND_BROWSER_SESSION:
@@ -718,8 +721,13 @@ def round_status() -> dict[str, Any]:
         },
         "platform_order": order,
         "browser_session_id": state.get("browser_session_id"),
-        "browser_executor": state.get("browser_executor", DEFAULT_BROWSER_EXECUTOR),
+        "browser_executor": state.get("browser_executor", "codex_native"),
+        "collection_executor": state.get("collection_executor", state.get("browser_executor", "codex_native")),
+        "delivery_executor": state.get("delivery_executor", state.get("browser_executor", "codex_native")),
+        "discovery_options": deepcopy(state.get("discovery_options")),
+        "browser_phase": state.get("browser_phase"),
         "native_session": deepcopy(state.get("native_session")),
+        "playwright_session": deepcopy(state.get("playwright_session")),
         "intent": state.get("intent"),
         "resume_binding": state.get("resume_binding"),
         "round_criteria": state.get("round_criteria"),

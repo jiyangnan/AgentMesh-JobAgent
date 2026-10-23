@@ -114,25 +114,30 @@ class Job51ReadOnlyCollector:
 
         for index, current_page in enumerate(range(start_page, start_page + page_count)):
             url = build_job51_search_url(query, city, page=current_page)
-            open_result = self.driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
-            if not open_result.get("ok"):
-                return Job51CollectResult(
-                    query=query,
-                    city=city,
-                    url=url,
-                    jobs=jobs,
-                    snapshot=_combined_snapshot(snapshots, {"open_result": open_result, "page": current_page, "url": url}),
-                    page=start_page,
-                    pages=page_count,
-                    ok=False,
-                    error=str(open_result.get("error", "open_url_failed")),
-                )
+            if getattr(self.driver, "bulk_readonly", False):
+                from .modern import collect_page
+                snapshot = collect_page(self.driver, query, city, current_page, wait_seconds)
+                open_result = {"url": snapshot.get("url", url)}
+            else:
+                open_result = self.driver.open_url_in_new_tab(url, wait_seconds=wait_seconds)
+                if not open_result.get("ok"):
+                    return Job51CollectResult(
+                        query=query,
+                        city=city,
+                        url=url,
+                        jobs=jobs,
+                        snapshot=_combined_snapshot(snapshots, {"open_result": open_result, "page": current_page, "url": url}),
+                        page=start_page,
+                        pages=page_count,
+                        ok=False,
+                        error=str(open_result.get("error", "open_url_failed")),
+                    )
 
-            remaining = max(1, limit - len(jobs))
-            snapshot = self._extract_snapshot(
-                limit=remaining,
-                wait_seconds=wait_seconds,
-            )
+                remaining = max(1, limit - len(jobs))
+                snapshot = self._extract_snapshot(
+                    limit=remaining,
+                    wait_seconds=wait_seconds,
+                )
             snapshot["page"] = current_page
             snapshot["requestedUrl"] = url
             snapshots.append(snapshot)
@@ -264,6 +269,8 @@ def _job_dedupe_key(job: Job, raw: dict[str, Any]) -> str:
 
 
 def _snapshot_failure(snapshot: dict[str, Any]) -> str:
+    if snapshot.get("invalidCardCount"):
+        return "job51_card_coverage_incomplete"
     if snapshot.get("loginRequired"):
         return "job51_login_required"
     if snapshot.get("ok") is False:

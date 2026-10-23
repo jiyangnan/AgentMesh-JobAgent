@@ -23,7 +23,8 @@ def test_round_state_is_created_and_platform_skip_is_round_local(monkeypatch, tm
 
     assert state["round_id"] == "round-1"
     assert state["platforms"]["boss"]["status"] == "pending"
-    assert state["browser_executor"] == "codex_native"
+    assert state["browser_executor"] == "playwright"
+    assert state["delivery_executor"] == "playwright"
     assert state["browser_session_id"] == "native-unbound"
     assert state["native_session"] is None
 

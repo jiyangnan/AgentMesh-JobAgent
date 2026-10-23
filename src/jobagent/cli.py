@@ -29,6 +29,10 @@ def _add_login(parser: argparse.ArgumentParser) -> None:
 def _add_discover(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wait-seconds", type=int, default=6, help="Page load wait per search page")
     parser.add_argument("--page-delay", type=float, default=2.0, help="Delay between search pages")
+    parser.add_argument("--candidate-limit", type=int, help="Bulk collection limit; defaults to 30 for a new round")
+    parser.add_argument("--recommendation-limit", type=int, help="Optional user-requested recommendation maximum; otherwise use actual matches")
+    parser.add_argument("--accept-partial", action="store_true", help="Explicitly use the preserved partial collection for this Discover")
+    parser.add_argument("--repair-collection", action="store_true", help="Repair a diagnosed incomplete Liepin or Zhilian collection within the original signed scope; retain its history and billing identity")
 
 
 def _add_review(parser: argparse.ArgumentParser) -> None:
@@ -129,19 +133,30 @@ def build_parser() -> argparse.ArgumentParser:
     platforms_sub.add_parser("status")
     health = platforms_sub.add_parser("health")
     health.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
-
     browser = sub.add_parser("browser", help="Inspect the dedicated browser without navigation")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
     diagnose = browser_sub.add_parser("diagnose")
     diagnose.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
+    resume_collection = browser_sub.add_parser("resume-collection", help="Resume preserved Boss reads after the user confirms the page has recovered")
+    resume_collection.add_argument("--platform", required=True, choices=["boss"])
+    resume_collection.add_argument("--confirm", action="store_true", help="Requires the user's explicit confirmation after page recovery")
 
-    work = sub.add_parser("work", help="Continue native Computer Use tasks without a browser driver")
+    resume_preference = browser_sub.add_parser("select-resume", help="Choose an observed existing platform resume with explicit user confirmation")
+    resume_preference.add_argument("--platform", choices=["liepin", "zhilian"], required=True)
+    resume_preference.add_argument("--reference", required=True)
+    resume_preference.add_argument("--confirm", action="store_true")
+    migrate_executor = browser_sub.add_parser("use-playwright", help="Preserve this round and explicitly select the built-in executor")
+    migrate_executor.add_argument("--confirm", action="store_true")
+
+    work = sub.add_parser("work", help="Continue durable browser tasks with the configured executor")
     work_sub = work.add_subparsers(dest="work_command", required=True)
     for name in ("next", "status", "contract"):
         work_sub.add_parser(name)
-    for name in ("begin", "submit", "cancel", "recover", "continue"):
+    for name in ("begin", "submit", "cancel", "recover", "continue", "run"):
         action = work_sub.add_parser(name)
         action.add_argument("--work-id", required=True)
+        if name == "run":
+            action.add_argument("--max-steps", type=int, default=1)
         if name in {"submit", "continue"}:
             action.add_argument("--result", required=True, help="Local typed UI-observation JSON")
         if name == "cancel":
@@ -235,6 +250,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip resume binding and use the local profile for this round",
     )
     round_sub.add_parser("status")
+    round_bulk = round_sub.add_parser("use-bulk-discovery")
+    round_bulk.add_argument("--confirm", action="store_true", help="Migrate an idle existing round, preserving all history")
     round_update = round_sub.add_parser("update")
     round_update.add_argument("--input", required=True, help="JSON request_id and criteria patch")
     round_update.add_argument("--expected-revision", type=int, required=True)
@@ -555,7 +572,7 @@ def _doctor_env() -> dict[str, Any]:
                 key_valid = True
             except cloud_client.CloudError as exc:
                 key_error = exc.code or "api_key_verification_failed"
-                key_rejected = exc.status == 401 or exc.code == "invalid_api_key"
+                key_rejected = exc.status == 401 or exc.code in {"invalid_api_key", "revoked"}
                 if exc.details.get("tls_diagnostic"):
                     transport_details = exc.details
     python_available = bool(shutil.which("python3"))
@@ -653,8 +670,10 @@ def _doctor_env() -> dict[str, Any]:
     payload = {
         "ok": environment_healthy,
         "environment_healthy": environment_healthy,
-        "browser_executor": "codex_native",
-        "host_capability": {"native_computer_use": "requires_host_verification", "browser_driver": "none"},
+        "browser_executor": (workflow or {}).get("delivery_executor", "playwright"),
+        "host_capability": ({"native_computer_use": "not_required", "browser_driver": "playwright"}
+                            if (workflow or {}).get("delivery_executor", "playwright") == "playwright" else
+                            {"native_computer_use": "requires_host_verification", "browser_driver": "none"}),
         "python": sys.version.split()[0],
         "chrome": chrome_available,
         "api_key_configured": key_present,
@@ -1458,13 +1477,14 @@ def _with_login_workflow(platform: str, payload: dict[str, Any]) -> dict[str, An
     return payload
 
 
-def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
+def _login(platform: str, args: argparse.Namespace, *, driver=None) -> dict[str, Any]:
     if platform == "boss":
         from jobagent.drivers.boss import create_driver
         from jobagent.drivers.boss.cdp_driver import CDPBossDriver
 
-        driver = create_driver(platform="boss")
-        if not isinstance(driver, CDPBossDriver):
+        from jobagent.drivers.collection_reader import CollectionReader
+        driver = driver or create_driver(platform="boss")
+        if not isinstance(driver, (CDPBossDriver, CollectionReader)):
             result = driver.open_url_in_new_tab(
                 "https://www.zhipin.com/web/user/?ka=header-login", wait_seconds=2
             )
@@ -1506,15 +1526,15 @@ def _login(platform: str, args: argparse.Namespace) -> dict[str, Any]:
     if platform == "liepin":
         from jobagent.platforms.liepin.session import LiepinSessionGuide
 
-        guide = LiepinSessionGuide()
+        guide = LiepinSessionGuide(**({"driver": driver} if driver is not None else {}))
     elif platform == "zhilian":
         from jobagent.platforms.zhilian.session import ZhilianSessionGuide
 
-        guide = ZhilianSessionGuide()
+        guide = ZhilianSessionGuide(**({"driver": driver} if driver is not None else {}))
     else:
         from jobagent.platforms.job51.session import Job51SessionGuide
 
-        guide = Job51SessionGuide()
+        guide = Job51SessionGuide(**({"driver": driver} if driver is not None else {}))
     if args.check:
         status = guide.check()
     elif args.wait:
@@ -1631,11 +1651,12 @@ def _prepare_client_upgrade(args: argparse.Namespace) -> dict[str, Any]:
 
 def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
     from jobagent.application import native_work
+    from jobagent.application import hybrid_discovery
     from jobagent.infra import browser_work, rounds, state
     changes_context = (
         args.command == "init"
         or (args.command == "account" and args.account_command in {"bind", "switch"})
-        or (args.command == "round" and args.round_command in {"start", "skip", "update"})
+        or (args.command == "round" and args.round_command in {"start", "skip", "update", "use-bulk-discovery"})
         or (args.command == "resume" and args.resume_command == "analyze")
         or args.command == "interaction"
     )
@@ -1651,6 +1672,9 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return native_work.next_work()
         if args.work_command == "status":
             return native_work.status()
+        if args.work_command == "run":
+            from jobagent.application import playwright_work
+            return playwright_work.run(args.work_id, max_steps=args.max_steps)
         if args.work_command == "begin":
             return native_work.begin(args.work_id)
         if args.work_command == "submit":
@@ -1662,22 +1686,43 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
             return continue_unattempted(args.work_id, args.result)
         return native_work.cancel(args.work_id, confirmed=args.confirm_cancel)
     if args.command == "browser":
+        if args.browser_command == "select-resume":
+            from jobagent.application import playwright_work
+            return playwright_work.select_resume(args.platform, args.reference, confirmed=args.confirm)
+        if args.browser_command == "use-playwright":
+            from jobagent.application import playwright_work
+            return playwright_work.migrate(confirmed=args.confirm)
+        if args.browser_command == "resume-collection":
+            return hybrid_discovery.resume_collection(args.platform, confirmed=args.confirm)
+        if hybrid_discovery.enabled():
+            hybrid_discovery.assert_collection_available(args.platform, allow_read_recovery=True)
+            from jobagent.infra.browser_diagnostics import diagnose_browser
+            return diagnose_browser(args.platform)
         return native_work.request_login(args.platform, diagnose=True)
     if args.command == "round" and args.round_command == "audit":
         active = state.load_json(state.current_round_path()) or {}
         if any(item.get("native_delivery") for item in active.get("platforms", {}).values()):
             return native_work.audit_round(args.platform)
     if args.command == "platforms" and args.platforms_command == "health":
-        return {"ok": True, "browser_executor": "codex_native", "browser_probe_executed": False,
-                "message": "Browser health is verified through the current platform's native session task; no separate browser is started.",
+        active = state.load_json(state.current_round_path()) or {}
+        executor = active.get("delivery_executor", active.get("browser_executor", "playwright"))
+        return {"ok": True, "browser_executor": executor, "browser_probe_executed": False,
+                "message": "Browser health is verified by the current platform session task; this command does not start another browser.",
                 "next_suggested": "jobagent work next"}
     if args.command not in native_work.PLATFORMS:
         return None
     platform = args.command
     action = args.platform_command
     if action == "login":
+        if hybrid_discovery.enabled():
+            return hybrid_discovery.login(platform, args)
         return native_work.request_login(platform)
     if action == "discover":
+        if hybrid_discovery.enabled():
+            return hybrid_discovery.discover(platform, wait_seconds=args.wait_seconds,
+                page_delay=args.page_delay, candidate_limit=args.candidate_limit,
+                recommendation_limit=args.recommendation_limit, accept_partial=args.accept_partial,
+                **({"repair_collection": True} if getattr(args, "repair_collection", False) else {}))
         return native_work.request_discovery(platform)
     if action == "audit":
         active = state.load_json(state.current_round_path()) or {}
@@ -1783,6 +1828,9 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             return check_platform_health(args.platform).to_dict()
         return {"platforms": [health.to_dict() for health in check_all_platforms()]}
     if args.command == "browser":
+        if args.browser_command == "resume-collection":
+            from jobagent.application.hybrid_discovery import resume_collection
+            return resume_collection(args.platform, confirmed=args.confirm)
         from jobagent.infra.browser_diagnostics import diagnose_browser
 
         return diagnose_browser(args.platform)
@@ -2049,6 +2097,9 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             }
         if args.round_command == "status":
             return {"ok": True, "workflow": round_status()}
+        if args.round_command == "use-bulk-discovery":
+            from jobagent.application.hybrid_discovery import enable_existing_round
+            return enable_existing_round(confirmed=args.confirm)
         if args.round_command == "audit":
             from jobagent.application.delivery import audit_round
 

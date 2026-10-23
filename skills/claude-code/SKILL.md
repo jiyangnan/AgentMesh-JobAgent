@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job. Use for 找工作, 投简历, 简历分析, job matching and recruiter greetings.
-version: 0.6.21
+version: 0.6.22
 ---
 
 # Job Agent
@@ -10,10 +10,69 @@ Operate Job Agent as an Agent-native CLI. The user controls API Key setup, platf
 
 ## Host-independent workflow contract
 
+New and explicitly migrated rounds use Job Agent's built-in Playwright-compatible
+runtime for confirmed delivery. Run the exact returned `jobagent work run`
+command. The CLI verifies the existing dedicated Chrome profile, account, job,
+selected resume and receipt. Codex, Claude Code and OpenClaw do not need a host
+Computer Use plugin for this executor. Do not operate its tasks through another
+browser tool or manufacture result JSON. An issued action survives interruption;
+reconciliation inspects its receipt without clicking send or submit again.
+
+New rounds use CLI-managed read-only CDP collection (30 candidates by default,
+up to 1000 when explicitly requested), followed by cloud matching of the full
+pool. Recommendations depend on actual fit and complete job descriptions; never
+fill a quota or replace Discover with one-by-one host UI browsing. After the
+complete preview and explicit user confirmation, delivery uses the same Chrome
+profile and account. Collection commands grant no recruiting permission. Delivery
+uses the documented browser controls, without direct recruiting API requests.
+Background reads still depend on the network; incomplete descriptions require
+reader recovery and cannot become recommendation evidence.
+
+Existing rounds retain their executor, frozen requests, signatures and receipts.
+An explicit user request can authorize `jobagent browser use-playwright --confirm`.
+The migration preserves the round and approved list, supersedes only eligible
+initial read-only work, and refuses an outstanding external action. Finish or
+reconcile that action first. Never clear state, recreate a profile, copy cookies,
+reset Keychain or reapply completed jobs to change executors.
+
+The native-tool instructions below apply only to legacy tasks whose returned
+action is `native_work`. Such a task retains its original permission and result
+schema. Use only its documented host capability until an explicit supported
+migration succeeds; optional plugins for another host are not dependencies.
+
+Boss list and detail reads share a persistent request budget for the dedicated
+Chrome profile. Changing rounds, accounts or processes does not reset it.
+Detail work uses persisted small batches; each successful description is saved
+before its batch upload. The next request's due time is also persisted before
+the current request. A restart must not redraw a shorter delay, rebuild batches
+or reread completed descriptions after a lost upload acknowledgement. These
+controls limit local load; they are not evidence of a platform's request limits.
+On a rejected request or visible verification, stop without foreground fallback
+or automatic retries. `automatic_retry_allowed=false` takes precedence over any
+older continuation command. Keep already collected descriptions and resume only
+missing work with the same Discover and billing key. A user-confirmed page
+recovery uses `jobagent browser resume-collection --platform boss --confirm`;
+this checks the existing page without navigation and does not collect jobs.
+The local cooldown alone never authorizes a retry. Technical reader failures
+need a technical repair; do not present them as missing published job content.
+An explicit engineering suspension returns `collection_read_suspended`. It
+cannot be released by completing verification, waiting or an ordinary
+`resume-collection --confirm`; retain the task pending technical review.
+
 Read `jobagent workflow contract` once for the installed protocol, command catalog
 and input schemas. Protocol 2 uses the top-level `action`. The legacy
 `workflow-contract` alias and `agent_action` field remain available for older
 integrations. Use the current protocol returned by the installed CLI.
+
+For a diagnosed native-window failure before any action on the current job,
+`window_recovery` may offer explicitly confirmed `work recover` for the initial
+read-only delivery inspection. It archives that inspection, independently
+verifies the original profile/account using the supported host, and resumes the
+same approved list. It never cancels the delivery authorization or reissues a
+communicate/send/submit action. Existing action history, post-communication work,
+changed scope and pending external actions are ineligible. Reuse the user's
+existing confirmation of this recovery scope; never reset state or fabricate a
+stable window ID when the supported host exposes an app reference.
 
 After the installation/account handoff, use this loop:
 
@@ -27,7 +86,9 @@ After the installation/account handoff, use this loop:
    - `run`: execute the complete `action.argv` without a shell. For an issued
      workflow action this calls `workflow advance` with its ID and expected
      revision. Do not construct commands from `business_argv`, alter arguments,
-     parallelize steps or retry an action with a new ID.
+     parallelize steps or retry an action with a new ID. A Playwright `work run`
+     command performs its own browser work; never also perform that action through
+     a host UI tool. Forward progress events and wait for its complete response.
    - `ask`: display the product's complete card and all delivery-preview rows,
      including unknown filtering evidence and coverage notices. Wait for an
      actual answer, then use the exact interaction ID. An answer JSON file may
@@ -48,7 +109,7 @@ After the installation/account handoff, use this loop:
    - `done`: report its scope. Only `scope=round` means the four-platform round
      is complete; a setup or command result is not the end of a requested round.
 
-After a native batch, report the verified counts and display the complete
+After a delivery batch, report the verified counts and display the complete
 `delivery_batch_followup` card whenever the original authorized list has
 unattempted jobs. Ask whether to `continue_delivery`, `finish_platform`, or
 `pause_delivery`, using that exact interaction ID. Never treat a batch limit as
@@ -57,7 +118,7 @@ only unattempted jobs; ending explicitly skips the remainder for this round.
 Pausing preserves the same card, list, authorization and receipts. Do not change
 `--limit`, open a new round, recollect, or infer an answer from a status check.
 
-After a completed native platform audit, display `delivery_platform_followup`
+After a completed platform audit, display `delivery_platform_followup`
 and ask whether to `continue_platforms` or `pause_delivery`. Name the next
 platform and preserve the original round. Do not end the conversation with only
 a completion summary while this card is awaiting an answer. If cards are
@@ -98,6 +159,12 @@ if delivery cannot be verified. Never resend a terminal unresolved job. Existing
 issued work keeps its original contract and cannot gain a new send permission.
 
 Liepin delivery opens the approved conversation before submitting a resume.
+For an anonymous headhunter client, follow the task's
+`anonymous_company_identity` when the detail omits the client company. Report
+that absence honestly; never copy the signed label or another job's company
+into observed evidence. Verify the approved detail URL, title, salary and area
+and the actual recruiter/employer. Subsequent conversation work retains this
+recruiter identity and verifies the exact approved job before any action.
 Follow the CLI's subsequent read-only conversation inspection: a platform default
 greeting and an actual resume receipt are separate facts. Never submit a resume
 again when the conversation already proves it was sent, and never count the
@@ -218,11 +285,16 @@ An install alone does not authorize a new round, paid analysis or delivery.
 Preserve existing rounds and confirmations. All later platform actions retain
 Boss -> Liepin -> Zhilian -> 51Job order and final-list confirmation.
 
-## Native mode takes precedence
+## Built-in delivery and legacy recovery
+
+For `executor=playwright`, run the CLI's returned `work run` command; no host
+Computer Use plugin is needed. Keep the existing dedicated Chrome profile and
+original approval. The remaining native-tool guidance in this section applies
+only when an older preserved task explicitly returns `native_work`.
 
 In Codex, use the dedicated `codex-job-agent` skill and start with
-`jobagent work next`. In `codex_native` mode, existing browser-facing commands
-below return host tasks, not permission to use a legacy driver. Read each task's
+`jobagent work next`. New rounds use CLI-managed read-only CDP for discovery.
+Commands issuing native delivery tasks require native Computer Use. Read each task's
 complete instructions and result schema; run `jobagent work begin --work-id ID`
 before the allowed native UI action, then
 `jobagent work submit --work-id ID --result FILE`. On uncertainty, use
@@ -382,7 +454,7 @@ jobagent round start
 When the current user has explicitly named a role, pass that exact value to
 both commands with `--target-role "<user-stated target role>"`.
 
-One completed Discover covers one platform, processes at most 100 candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. Registration, API Key creation, and the open-source client are free. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The signed cloud response is authoritative for charges and refunds. The AgentMesh360 Standard Pass costs CNY 29.99 for 30 days for mainland China users (USD 4 for users outside mainland China) and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days for mainland China users (USD 10 for users outside mainland China) and includes 3,000 shared credits. An active pass can receive a CNY 15 add-on with 500 credits (USD 2 for users outside mainland China). Passes do not renew automatically. Previously issued signup-trial credits remain usable until their original expiry.
+New rounds collect 30 unique candidates per platform by default, with an explicit target up to 1000. The signed SearchPlan and credit quote govern the scope and cost; completed Discover currently costs 10 credits. Cloud resume analysis costs 5 credits. Registration, API Key creation, and the open-source client are free. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The signed cloud response is authoritative for charges and refunds. The AgentMesh360 Standard Pass costs CNY 29.99 for 30 days for mainland China users (USD 4 for users outside mainland China) and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days for mainland China users (USD 10 for users outside mainland China) and includes 3,000 shared credits. An active pass can receive a CNY 15 add-on with 500 credits (USD 2 for users outside mainland China). Passes do not renew automatically. Previously issued signup-trial credits remain usable until their original expiry.
 
 First-run handoff: after `jobagent init` succeeds and `jobagent doctor env` verifies the account and environment, proactively tell the user three things before any job work: (1) the web workbench `https://agentmesh360.com/workbench/` (also returned as `workbench_url` in the `init` output) — the resume profile, tailored question banks, voice mock interviews with dual-track reports, 8-stage application tracking, offer compare and negotiation practice live there; (2) only if doctor returns insufficient_credits with paid_pass_required=true, the pass page `https://agentmesh360.com/app/?lang=zh-CN#pricing` (Standard CNY 29.99 / 1,000 credits; Pro CNY 69.99 / 3,000 credits; 30 days, no auto-renewal); (3) the recommended first action: build the resume profile — open the workbench profile page and paste the resume, or run `jobagent resume analyze --file <resume>` here (5 credits). Question banks, mock interviews and Discover all build on that profile. When directing the user to the workbench, explicitly ask them to return to this same Agent conversation and say “简历已准备好，请继续”; inspect existing online resumes with `jobagent resume list` before requesting another analysis.
 

@@ -22,6 +22,7 @@ from .detail import (
     unwrap_zhilian_detail_js_result,
 )
 from .parser import is_reviewable_zhilian_job, parse_zhilian_job, zhilian_job_id
+from .modern import build_load_more_script
 from .selectors import (
     build_zhilian_city_directory_script,
     build_zhilian_city_filter_script,
@@ -2140,6 +2141,8 @@ class ZhilianReadOnlyCollector:
     def _select_page(self, page: int, wait_seconds: int = 8) -> dict[str, Any]:
         result = self.driver._exec_js(build_zhilian_pagination_script(page))
         data = _unwrap_js_result(result)
+        if data.get("paginationMode") == "infinite_list":
+            return self._load_more_page(page, data, wait_seconds=wait_seconds)
         if not data.get("ok") or data.get("alreadySelected"):
             return data
         click_point = data.get("clickPoint") if isinstance(data.get("clickPoint"), dict) else None
@@ -2152,6 +2155,28 @@ class ZhilianReadOnlyCollector:
         self.driver._click_at(click_point.get("x"), click_point.get("y"))
         data["nativeClicked"] = True
         time.sleep(min(max(wait_seconds, 1), 5))
+        return data
+
+    def _load_more_page(self, page: int, data: dict, *, wait_seconds: int) -> dict:
+        # A fresh search has twenty rows. Use only the current page's rendered
+        # list scroll; no guessed page URLs, API endpoints or recruiting clicks.
+        for _ in range(page):
+            if not data.get("ok") or data.get("alreadySelected") or data.get("exhausted"):
+                return data
+            before = int(data.get("loadedCount") or 0)
+            if not data.get("loading"):
+                action = _unwrap_js_result(self.driver._exec_js(build_load_more_script()))
+                if not action.get("ok"):
+                    return action
+            deadline = time.monotonic() + min(max(wait_seconds, 3), 10)
+            while time.monotonic() < deadline:
+                time.sleep(0.25)
+                data = _unwrap_js_result(self.driver._exec_js(build_zhilian_pagination_script(page)))
+                if (not data.get("ok") or data.get("alreadySelected") or data.get("exhausted")
+                        or int(data.get("loadedCount") or 0) > before):
+                    break
+            if int(data.get("loadedCount") or 0) <= before and not data.get("exhausted"):
+                return {**data, "ok": False, "error": "zhilian_list_did_not_advance"}
         return data
 
     def _apply_city_filter(self, city: str, wait_seconds: int = 8) -> dict[str, Any]:

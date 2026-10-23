@@ -46,7 +46,7 @@ Resume profile
   -> completed round
 ```
 
-One completed Discover covers one platform, processes up to 100 deduplicated candidate jobs and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
+One completed Discover covers one platform, collects 30 unique candidates by default (an explicit request can raise the target to 1000), matches the entire collected pool, and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
 
 Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creation are free in the [AgentMesh360 account center](https://agentmesh360.com/app/). The open-source client is free; AgentMesh360 cloud capabilities use credits. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The Standard Pass costs CNY 29.99 for 30 days for mainland China users (USD 4 for users outside mainland China) and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days for mainland China users (USD 10 for users outside mainland China) and includes 3,000 shared credits. Users with an active pass can add 500 credits for CNY 15 (USD 2 for users outside mainland China), at most twice per pass period. Passes do not renew automatically, and unused credits expire with the active pass period. Previously issued signup-trial credits remain usable until their original expiry.
 
@@ -54,34 +54,34 @@ Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creat
 
 The installer checks HTTPS connectivity using the installed Python and bundled public roots. If a certificate or network check remains blocked, the Agent follows `jobagent doctor tls` while preserving your existing task. Certificate verification and custom trust settings remain enforced.
 
-### Codex native Computer Use
+### Built-in browser execution
 
-The default Codex workflow uses native Computer Use in the user's existing
-Chrome session. Job Agent supplies one account-bound task at a time and keeps
-cloud decisions, final-list confirmation, progress and audit in the CLI. Read
-the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
+Job Agent collects jobs through its read-only CDP adapter, matches the full pool
+in the cloud, and performs user-confirmed delivery through its own
+Playwright-compatible runtime (Patchright). The runtime is installed with the CLI
+and connects to the existing dedicated Chrome profile. No Codex Computer Use or
+optional desktop plugin is required. The default collection is 30 jobs;
+recommendation count depends on the user's profile and complete job evidence.
+
+Read the [Codex skill](skills/codex-job-agent/SKILL.md), then start or resume with:
 
 ```bash
 jobagent workflow next
 ```
 
-Read each returned task and result schema. When the current response offers
-`jobagent work begin --work-id ID`, run it before its browser action and report the observed result with
-`jobagent work submit --work-id ID --result FILE`. `jobagent work status` is the
-read-only recovery entry. Native mode does not use CDP, browser scripts or hidden
-site APIs. If this host lacks native Computer Use, pause rather than switching
-drivers. Browser permissions and real UI observations still belong to the host;
-the task protocol cannot intercept actions taken outside it.
+Run the returned `jobagent work run --work-id ID` command. It verifies the
+profile, account, exact approved job and resume choice, then records each action
+and its observed receipt. `jobagent work status` is the read-only recovery entry.
+An uncertain send or submission is reconciled without repeating the click.
+Wait for every CLI command to exit and forward its progress events.
 
-Hosts that expose only a native app reference can use the app-scoped window
-branch. The agent verifies the selected window, profile and account before each
-action; it does not invent a window ID or use a changing page title as one.
-Unresolved window selection still pauses the task and preserves the round.
+Older in-flight rounds keep their existing executor and receipts. An explicit
+migration uses `jobagent browser use-playwright --confirm`; an outstanding
+external action must first be reconciled. No round, approval, login profile or
+history is cleared. Legacy native tasks retain their original result contract.
+Technical errors do not imply logout and never justify resetting Keychain.
 
-Wait for each CLI process to exit before parsing its complete response or
-starting the next command. Technical page/identity failures have a separate
-preserved-work recovery branch; they must not be presented as a need to log in
-again or close Chrome windows. Recovery never reauthorizes an uncertain send.
+The following recovery guidance applies to legacy native tasks.
 For eligible read-only collection failures, `jobagent work recover` verifies the
 same Chrome profile and platform account before resuming the preserved request,
 after one explicit recovery confirmation. It preserves completed pages and
@@ -106,11 +106,9 @@ overwritten. Extra user files are preserved. Current instructions are also
 available from the installed package with
 `python -m jobagent.infra.codex_skill contract`; choose that installation's Python.
 
-The platform commands below remain compatible entry points. In native mode,
-browser-facing commands return host work rather than starting the legacy browser
-driver; the native task instructions take precedence over driver-specific
-diagnostic descriptions below. Finish or reconcile an active work item before
-upgrading its protocol. See the [canonical workflow](docs/agent-onboarding.md).
+The platform commands below remain compatible entry points. Follow the returned
+executor and exact continuation; do not substitute a different browser driver.
+Finish or reconcile an active action before changing its execution protocol. See the [canonical workflow](docs/agent-onboarding.md).
 State preservation and recovery are defined in the [upgrade contract](docs/client-upgrade-contract.md).
 
 ### Official client installer
@@ -316,6 +314,11 @@ Boss uses a personalized greeting. `greet preview` shows the signed decision and
 
 ### 猎聘
 
+For a technically diagnosed incomplete extraction, the fixed client's explicit
+`discover --repair-collection` recovery keeps the original request, candidates,
+signed scope and billing identity. Ask the user before this bounded reparse;
+ordinary retries never reset completed pages or an interrupted repair.
+
 On Liepin `liepin_verification_required`, keep the existing browser tab and stop for the returned user prompt. Only after the user completes verification, run the exact `next_suggested` Discover command. Completed query pages and collected candidates resume from the preserved account-bound checkpoint; do not restart the round, request another login or repeat completed searches. Explicit no-results or verified final-page evidence retires only that query. An older request without a checkpoint remains preserved; never invent missing progress.
 
 ```bash
@@ -391,7 +394,7 @@ Boss and 猎聘 require a non-empty signed personalized greeting of at most 100 
 - `jobagent round start` is the only command that creates a new round. A completed round stays completed until that explicit command runs.
 - Never pre-login future platforms. Enter only the current platform, finish its `login -> discover -> review -> delivery preview -> delivery confirmation -> send -> audit` chain, and complete its audit before logging in to the next platform.
 - Completing one platform is not completing the round. The Agent must follow `workflow.next_suggested` until `workflow.workflow_complete=true`.
-- One send covers the complete reviewed selected list, up to 100 jobs. The default send limit is 100.
+- The confirmed list may contain up to 1000 jobs. Each native delivery batch covers at most 100; remaining jobs require the existing continue/pause/finish choice. No job outside the confirmed list is permitted.
 - If the CLI reports login, CAPTCHA, verification or resume-selection intervention, the Agent must stop and ask the user to complete it.
 
 Example review override:
@@ -429,7 +432,7 @@ The canonical agent workflow is in [docs/agent-onboarding.md](docs/agent-onboard
 
 - [Claude Code](skills/claude-code/SKILL.md)
 - [OpenClaw / ClawHub](skills/openclaw-job-agent/SKILL.md)
-- [Codex native Computer Use](skills/codex-job-agent/SKILL.md)
+- [Codex workflow](skills/codex-job-agent/SKILL.md)
 
 ## Safety and Privacy
 

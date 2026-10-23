@@ -65,6 +65,8 @@ class BossDataDriver:
         try:
             result = api_fetch(url)
         except RuntimeError:
+            if getattr(self.driver, "bulk_readonly", False):
+                raise  # A bulk read must not silently turn into foreground navigation.
             # A dedicated Chrome may render Boss successfully while an
             # in-page fetch is temporarily unavailable. Reuse the visible
             # search flow instead of classifying that transport failure as a
@@ -90,6 +92,9 @@ class BossDataDriver:
         if code == 37 and any(
             marker in message_lower for marker in ("环境存在异常", "环境异常", "abnormal environment")
         ):
+            if getattr(self.driver, "bulk_readonly", False):
+                raise PlatformEnvironmentRejectedError("boss",
+                    "Boss rejected the read-only request; preserve the session and task", upstream_code=code)
             return self._fetch_visible_page(query, city_code, page, page_size)
         if code != 0:
             raise RuntimeError(

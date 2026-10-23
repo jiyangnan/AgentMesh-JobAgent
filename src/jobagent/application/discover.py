@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import ExitStack
 from typing import Any
 
 from jobagent import __version__
@@ -93,10 +94,11 @@ def _decision_result(
             candidate_count=len(candidates),
             resumed=resumed,
         ):
-            manifest = cloud_client.discovery_decide(
-                discover_id=discover_id,
-                jobs=decision_jobs,
-            )
+            if plan.get("discovery_contract_version") == 2:
+                from jobagent.application.bulk_decision import complete_decision
+                manifest = complete_decision(platform, plan, decision_jobs)
+            else:
+                manifest = cloud_client.discovery_decide(discover_id=discover_id, jobs=decision_jobs)
     except cloud_client.CloudError as exc:
         if (
             exc.code == "search_plan_expired"
@@ -179,6 +181,9 @@ def _decision_result(
         "discover_id": verified_manifest["discover_id"],
         "candidate_count": len(candidates),
         "deduplicated_count": verified_manifest["deduplicated_count"],
+        "candidate_limit": plan.get("candidate_limit", 100),
+        "coverage": verified_manifest.get("coverage"),
+        "reserve": len(verified_manifest.get("reserve", [])),
         "selected": len(verified_manifest.get("selected", [])),
         "review": len(verified_manifest.get("review", [])),
         "rejected": len(verified_manifest.get("rejected", [])),
@@ -331,6 +336,9 @@ def _resume_pending_decision(
     *,
     profile: dict[str, Any],
     round_intent: dict[str, Any] | None,
+    repair_collection: bool = False,
+    wait_seconds: int = 6,
+    page_delay: float = 2.0,
 ) -> dict[str, Any] | None:
     pending = load_pending_decision(platform)
     if pending is None:
@@ -339,6 +347,7 @@ def _resume_pending_decision(
         str(pending.get("request_id") or pending["plan"].get("request_id") or "")
         or None
     )
+    expired = False
     try:
         plan = verify_search_plan(
             pending["plan"],
@@ -349,9 +358,16 @@ def _resume_pending_decision(
         )
     except SearchPlanExpiredError as exc:
         plan = exc.signed_plan
+        expired = True
     candidates = pending["jobs"]
-    try:
-        return _decision_result(
+    from jobagent.application.collection_repair import pending_repair, repair_pending_collection
+    if repair_collection or pending_repair(pending):
+        if expired:
+            plan = _renew_expired_plan(platform, expired_plan=plan, profile=profile,
+                round_intent=round_intent, request_id=request_id)
+        candidates = repair_pending_collection(platform, pending, plan,
+            wait_seconds=wait_seconds, page_delay=page_delay)
+    return _decision_result(
             platform,
             plan=plan,
             candidates=candidates,
@@ -360,16 +376,6 @@ def _resume_pending_decision(
             round_intent=round_intent,
             request_id=request_id,
         )
-    except cloud_client.CloudError as exc:
-        if exc.code not in {"discover_failed_start_new"}:
-            raise
-        clear_pending_decision(platform, discover_id=str(plan["discover_id"]))
-        emit_stage(
-            "pending_decision_replaced",
-            platform=platform,
-            reason=exc.code,
-        )
-        return None
 
 
 def _start_context(
@@ -392,6 +398,8 @@ def _start_context(
         "profile_digest": digest_payload(profile),
         "intent_digest": intent_digest,
         "account_ref": current_account_ref(),
+        "delivery_executor": (active_round.get("delivery_executor")
+                              if active_round.get("collection_executor") == "cdp_readonly" else None),
     }
 
 
@@ -426,6 +434,7 @@ def _preserved_request_id(context: dict[str, Any]) -> str:
         account_ref=(
             str(context["account_ref"]) if context.get("account_ref") else None
         ),
+        delivery_executor=context.get("delivery_executor"),
     )
     return request_id
 
@@ -435,12 +444,28 @@ def run_discover(
     *,
     wait_seconds: int = 6,
     page_delay: float = 2.0,
+    accept_partial: bool = False,
+    repair_collection: bool = False,
 ) -> dict[str, Any]:
+    if repair_collection:
+        from jobagent.infra.discovery_state import load_pending_decision
+        saved = load_collection_checkpoint(platform)
+        pending = load_pending_decision(platform)
+        frozen_zhilian = platform == "zhilian" and pending is not None
+        if accept_partial or (not frozen_zhilian and (platform != "liepin" or saved is None
+                or saved["plan"].get("discovery_contract_version") != 2
+                or pending is not None)):
+            raise CollectionError("collection_repair_not_allowed",
+                "Repair requires the original unfinalized Liepin collection",
+                details={"request_preserved": True, "no_charge": True, "retryable": False})
     from jobagent.application.resume_freshness import gate_search
     gate = gate_search(platform)
     if gate:
         return gate
     active_round = rounds.ensure_current_round()
+    from jobagent.application.hybrid_discovery import enabled, collection_reader
+    bulk = enabled(active_round)
+    options = active_round.get("discovery_options") or {"candidate_limit": 100, "recommendation_limit": None}
     round_intent = active_round.get("intent")
     round_binding = active_round.get("resume_binding") or {}
     binding_material = None
@@ -499,6 +524,9 @@ def run_discover(
         platform,
         profile=profile,
         round_intent=round_intent,
+        repair_collection=repair_collection,
+        wait_seconds=wait_seconds,
+        page_delay=page_delay,
     )
     if resumed is not None:
         return resumed
@@ -509,7 +537,12 @@ def run_discover(
         round_intent=round_intent,
     )
     request_id = _preserved_request_id(context)
-    collection = load_collection_checkpoint(platform) if platform == "liepin" else None
+    collection = load_collection_checkpoint(platform) if bulk or platform == "liepin" else None
+    # A new request records its executor before any network call. Old pending
+    # requests have no such field and must retain their original signed plan.
+    pending_request = load_pending_start(platform) or {}
+    delivery_options = ({"delivery_executor": pending_request["delivery_executor"]}
+                        if bulk and pending_request.get("delivery_executor") else {})
     emit_stage("search_plan_requested", platform=platform)
     try:
         with progress_heartbeat("search_plan_waiting", platform=platform):
@@ -529,6 +562,7 @@ def run_discover(
                 else None,
                 round_id=str(active_round.get("round_id")),
                 **({"criteria_revision": active_round["round_criteria"]["criteria_revision"]} if active_round.get("round_criteria") else {}),
+                **({"discovery_contract_version": 2, **options, **delivery_options} if bulk else {}),
             )
     except cloud_client.CloudError as exc:
         from jobagent.application.round_resume_binding import (
@@ -625,14 +659,47 @@ def run_discover(
         query_count=len(verified_plan.get("queries") or []),
     )
     emit_stage("browser_collection_started", platform=platform)
+    if bulk:
+        from jobagent.infra.account_state import current_account_ref
+        if verified_plan.get("account_ref") != current_account_ref():
+            raise ProtocolError("bulk search plan account mismatch")
+        if verified_plan.get("round_id") != active_round["round_id"]:
+            raise ProtocolError("bulk search plan round mismatch")
+    if bulk and platform == "51job" and collection:
+        from jobagent.application.collection_repair import needs_job51_staged_repair, repair_staged_job51
+        if needs_job51_staged_repair(collection):
+            candidates = repair_staged_job51(collection, plan, wait_seconds=wait_seconds, page_delay=page_delay)
+            save_pending_decision(platform, plan=plan, jobs=candidates, request_id=request_id)
+            clear_pending_start(platform, request_id=request_id)
+            return _decision_result(platform, plan=plan, candidates=candidates, resumed=True,
+                profile=profile, round_intent=round_intent, request_id=request_id)
+    if accept_partial:
+        if not bulk or not collection or not collection["progress"].get("candidates"):
+            raise ValueError("No verified partial collection is available")
+        candidates = collection["progress"]["candidates"]
+        save_pending_decision(platform, plan=plan, jobs=candidates, request_id=request_id)
+        clear_pending_start(platform, request_id=request_id)
+        result = _decision_result(platform, plan=plan, candidates=candidates, resumed=True,
+            profile=profile, round_intent=round_intent, request_id=request_id)
+        return {**result, "partial_coverage": True, "collection_stop_reason": collection["progress"].get("stop_reason") or "user_accepted_partial"}
     login_verification = rounds.recent_platform_login_verification(platform)
     collection_kwargs = {}
-    if platform == "liepin":
+    if bulk or platform == "liepin":
+        def checkpoint(progress):
+            save_collection_checkpoint(platform, request_id=request_id, plan=plan, progress=progress)
+            if bulk:
+                from jobagent.application.bulk_decision import upload_candidates
+                try:
+                    upload_candidates(plan, _decision_candidates(progress["candidates"]))
+                except cloud_client.CloudError as exc:
+                    exc.details.update(request_preserved=True, collection_progress_preserved=True,
+                        request_id=request_id, no_charge=True, billing_status="not_charged",
+                        next_suggested=f"jobagent {platform} discover")
+                    raise
         collection_kwargs = {
             "resume_progress": collection["progress"] if collection else None,
-            "checkpoint_callback": lambda progress: save_collection_checkpoint(
-                platform, request_id=request_id, plan=plan, progress=progress
-            ),
+            "checkpoint_callback": checkpoint,
+            **({"repair_collection": True} if repair_collection else {}),
         }
         if collection:
             emit_stage("browser_collection_resumed", platform=platform,
@@ -641,9 +708,11 @@ def run_discover(
     try:
         with progress_heartbeat("browser_collection_in_progress", platform=platform):
             with active_command(f"jobagent {platform} discover"):
-                with PlatformSessionLock(
+                with ExitStack() as stack:
+                    reader = stack.enter_context(collection_reader(platform)) if bulk else None
+                    stack.enter_context(PlatformSessionLock(
                     platform=platform, command=f"jobagent {platform} discover"
-                ):
+                    ))
                     candidates = collect_from_search_plan(
                         verified_plan,
                         wait_seconds=wait_seconds,
@@ -651,6 +720,7 @@ def run_discover(
                         login_verification=login_verification,
                         progress_callback=emit_stage,
                         **collection_kwargs,
+                        **({"driver": reader} if reader is not None else {}),
                     )
     except CollectionError as exc:
         details = dict(exc.details or {})
@@ -671,7 +741,7 @@ def run_discover(
             details.get("retryable", _collection_error_retryable(exc.code))
         )
         details["retryable"] = retryable
-        if platform == "liepin":
+        if bulk or platform == "liepin":
             saved_collection = load_collection_checkpoint(platform)
             details["collection_progress_preserved"] = saved_collection is not None
             if saved_collection:

@@ -76,6 +76,25 @@ def test_browser_diagnose_is_read_only_and_reports_existing_authenticated_tab(mo
     assert result["page"]["slow_resource_count"] == 2
 
 
+def test_visible_verification_blocks_readiness_even_when_login_is_present(monkeypatch):
+    class ChallengeClient(_FakeClient):
+        def evaluate(self, script, timeout=5):
+            result = super().evaluate(script, timeout)
+            page = json.loads(result['result']['value'])
+            page['verificationUi'] = True
+            result['result']['value'] = json.dumps(page)
+            return result
+    monkeypatch.setattr('jobagent.infra.browser_diagnostics.find_chrome', lambda: '/chrome')
+    monkeypatch.setattr('jobagent.infra.browser_diagnostics.list_targets', lambda _: [{
+        'id': 'boss-test', 'type': 'page', 'url': 'https://www.zhipin.com/web/geek/job',
+        'webSocketDebuggerUrl': 'ws://127.0.0.1/devtools/page/boss-test'}])
+    monkeypatch.setattr('jobagent.infra.browser_diagnostics.CDPClient', ChallengeClient)
+    result = diagnose_browser('boss')
+    assert result['verification_required'] is True
+    assert result['login']['state'] == 'authenticated'
+    assert result['ready_for_platform_work'] is False and result['navigation_performed'] is False
+
+
 def test_browser_diagnose_reports_conflicting_login_evidence_without_claiming_logout(
     monkeypatch,
 ):

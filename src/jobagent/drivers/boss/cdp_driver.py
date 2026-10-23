@@ -965,7 +965,7 @@ class CDPBossDriver(BossActionDriver):
                     url: location.href || '',
                     title: document.title || '',
                     readyState: document.readyState || '',
-                    jobLinkCount: document.querySelectorAll('a[href*="/job/"]').length,
+                    jobLinkCount: document.querySelectorAll('a[href*="/job/"], a[href*="/a/"]').length,
                     noResults: /非常抱歉[\s\S]{0,40}(暂时没有|暂无).*职位/.test(body),
                     loginRequired: /登录|注册/.test((document.title || '') + '\n' + body.slice(0, 160))
                   });

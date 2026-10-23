@@ -2535,7 +2535,7 @@ def test_review_requires_confirmation_to_promote_and_never_promotes_rejected(
     )
     with pytest.raises(ValueError, match="confirm-promote"):
         review_decision("liepin", input_path=str(source), promoted_ids=["r"])
-    with pytest.raises(ValueError, match="Only review jobs"):
+    with pytest.raises(ValueError, match="Only review.*jobs"):
         review_decision(
             "liepin", input_path=str(source), promoted_ids=["x"], confirm_promote=True
         )

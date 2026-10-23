@@ -201,6 +201,27 @@ def test_doctor_key_handoff_for_absent_or_rejected_key(monkeypatch, doctor_conte
     assert '回到当前这段 Agent 对话' in result['user_prompt']
 
 
+def test_doctor_revoked_key_requests_replacement_without_claiming_state(monkeypatch, doctor_context):
+    from jobagent.infra.cloud_client import CloudError
+
+    def revoked():
+        raise CloudError('core auth failed', status=403, code='revoked')
+
+    monkeypatch.setattr('jobagent.infra.cloud_client.me', revoked)
+    monkeypatch.setattr('jobagent.infra.account_state.ensure_account_state',
+                        lambda *a, **kw: pytest.fail('revoked key cannot claim state'))
+    result = cli._doctor_env()
+    assert result['api_key_error'] == 'revoked'
+    assert result['api_key_configured'] is True
+    assert result['api_key_valid'] is False
+    assert result['requires_user_action'] is True
+    assert result['onboarding']['stage'] == 'api_key_required'
+    assert result['api_key_action'] == 'jobagent init --key <your_api_key>'
+    assert result['next_suggested'] == 'jobagent init --key <your_api_key>'
+    assert '无需重新申请' not in result.get('message', '')
+    assert credentials.load_api_key() == 'test-secret'
+
+
 @pytest.mark.parametrize('health_down', [True, False])
 def test_doctor_outage_preserves_key_and_never_sends_user_to_register(monkeypatch, doctor_context, health_down):
     from jobagent.infra.cloud_client import CloudError

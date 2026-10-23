@@ -51,6 +51,29 @@ def _read_only(argv):
                          ["round", "status"], ["work", "status"], ["credits", "status"], ["credits", "quote"])
 
 
+def _empty_collection_preflight(operation, args, result):
+    """Recover only an observed empty, unstarted bulk search; never replay it."""
+    if args.command != "work" or args.work_command != "status" or result.get("ok") is not True:
+        return False
+    argv = operation["argv"]
+    if len(argv) != 3 or argv[1] not in rounds.DEFAULT_PLATFORM_ORDER or argv[2] != "discover":
+        return False
+    active = state.load_json(state.current_round_path()) or {}
+    workflow = result.get("workflow") or {}
+    if (active.get("status") != "active" or active.get("collection_executor") != "cdp_readonly"
+            or active.get("native_session") is not None
+            or workflow.get("round_id") != active.get("round_id")
+            or workflow.get("current_platform") != argv[1]
+            or (active.get("platforms", {}).get(argv[1]) or {}).get("status") != "login_verified"
+            or result.get("work_counts") != {"ready": 0, "intent_recorded": 0, "reconcile_only": 0, "closed": 0}):
+        return False
+    from jobagent.infra.discovery_state import load_pending_decision, load_pending_start
+
+    # A start is saved before the cloud request. Any retained request or
+    # decision keeps its original uncertainty and billing recovery path.
+    return not (load_pending_start(argv[1]) or load_pending_decision(argv[1]))
+
+
 def _record_result(value, args, result):
     value["revision"] += 1
     value["last_result"] = result
@@ -63,13 +86,14 @@ def _record_result(value, args, result):
         elif operation["status"] == "claimed" and (
             (_read_only(operation["argv"]) and operation["argv"][1] == args.command)
             or (operation["argv"][1] in {"work", "browser", "boss", "liepin", "zhilian", "51job"}
-                and args.command == "work" and args.work_command in {"status", "next", "submit", "continue"}
+                and args.command == "work" and args.work_command in {"status", "next", "submit", "continue", "run"}
                 and (result.get("work", {}).get("work_id") or any(result.get("work_counts", {}).values())
-                     or (args.work_command in {"submit", "continue"} and result.get("ok") is not False)))
+                     or (args.work_command in {"submit", "continue", "run"} and result.get("ok") is not False)))
+            or _empty_collection_preflight(operation, args, result)
         ):
-            # A recovered BrowserWork presentation can close this local dispatch
-            # uncertainty. It does not declare the external action successful;
-            # the browser ledger still owns nonce/reconcile-only restrictions.
+            # A recovered BrowserWork or empty collection preflight can close
+            # local dispatch uncertainty. Neither declares an external action
+            # successful; the browser ledger retains all send restrictions.
             operation.update(status="recovered", recovery_result=_safe_result(result))
 
 

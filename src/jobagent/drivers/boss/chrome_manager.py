@@ -162,11 +162,9 @@ class ChromeInstanceManager:
         if connected and ws_url:
             return ws_url
 
-        # If port is open but we couldn't get a WS URL (old instance without
-        # --remote-allow-origins), kill it before restarting.
+        # Never terminate an unknown process or reset a user's live profile.
         if _is_port_open(self.port):
-            self._kill_port_process()
-            time.sleep(1.0)
+            raise RuntimeError(f"cdp_port_unavailable: port {self.port} is occupied or has no readable Chrome page; preserve Chrome and run browser diagnose")
 
         # Find Chrome binary
         chrome_path = find_chrome()
@@ -185,7 +183,7 @@ class ChromeInstanceManager:
         args = [
             f"--remote-debugging-port={self.port}",
             f"--user-data-dir={self.user_data_dir}",
-            "--remote-allow-origins=*",  # Allow CDP connections from any origin
+            "--remote-debugging-address=127.0.0.1",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
@@ -227,24 +225,6 @@ class ChromeInstanceManager:
             raise RuntimeError("无法获取 Chrome CDP 连接")
 
         return ws_url
-
-    def _kill_port_process(self) -> None:
-        """Kill whatever process is holding our CDP port."""
-        try:
-            # macOS/Linux: lsof
-            result = subprocess.run(
-                ["lsof", "-ti", f":{self.port}"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                for pid in result.stdout.strip().splitlines():
-                    try:
-                        subprocess.run(["kill", "-9", pid], capture_output=True)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
 
     def stop(self) -> None:
         """Terminate the Chrome process."""

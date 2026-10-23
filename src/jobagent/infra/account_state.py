@@ -29,6 +29,10 @@ _ACCOUNT_OWNED_PATHS = (
     "round_criteria_input.json",
     "rounds",
     "discoveries",
+    "bulk-discovery",
+    "delivery-receipts",
+    "playwright_receipts",
+    "playwright_history",
     "archive",
     "audit_log.json",
     "liepin_audit_log.json",
@@ -38,6 +42,7 @@ _ACCOUNT_OWNED_PATHS = (
 _SESSION_MARKERS = (
     "browser_session.json",
     "platform_tabs.json",
+    "playwright_tabs.json",
     "last_doctor_report.json",
     "last_probe_send.json",
 )
