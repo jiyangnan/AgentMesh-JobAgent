@@ -66,7 +66,7 @@ jobs:
           JOBAGENT_RUN_BROWSER_TESTS: "1"
         run: |
           python -c 'from jobagent.drivers.boss.chrome_manager import find_chrome; assert find_chrome(), "Chrome is required for the browser gate"'
-          python -m pytest -q tests/test_playwright_runtime.py tests/test_boss_playwright_delivery.py tests/test_liepin_playwright_delivery.py tests/test_zhilian_playwright_delivery.py tests/test_job51_playwright_delivery.py
+          python -m pytest -q -x tests/test_playwright_runtime.py tests/test_boss_playwright_delivery.py tests/test_liepin_playwright_delivery.py tests/test_zhilian_playwright_delivery.py tests/test_job51_playwright_delivery.py
       - name: Validate Codex Skill metadata and source/package equivalence
         run: python scripts/ci/native_package_gate.py
       - name: Build and verify an isolated wheel installation

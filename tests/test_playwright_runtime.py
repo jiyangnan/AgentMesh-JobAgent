@@ -35,7 +35,7 @@ def chrome(tmp_path):
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     profile = tmp_path / "isolated-profile"
-    args = [executable, "--headless=new", "--no-first-run", "--no-default-browser-check",
+    args = [executable, "--headless=new", "--no-first-run", "--no-default-browser-check", "--enable-logging=stderr",
             "--disable-background-networking", "--disable-sync", "--disable-extensions",
             "--password-store=basic", f"--remote-debugging-port={port}", f"--user-data-dir={profile}"]
     # This flag is confined to fresh temporary test profiles. Never add it
@@ -45,10 +45,14 @@ def chrome(tmp_path):
     if sys.platform == "linux" and Path("/.dockerenv").exists():
         args.append("--no-sandbox")  # Disposable, offline fixture container only.
     args.append("about:blank")
-    process = subprocess.Popen(args,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log = tmp_path / "chrome-startup.log"
+    with log.open("wb") as output:
+        process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT)
     try:
-        assert _wait_for_cdp_port(port)
+        assert _wait_for_cdp_port(port), (
+            f"Isolated Chrome did not open CDP: executable={executable!r}, exit={process.poll()}; "
+            + log.read_text(encoding="utf-8", errors="replace")[-8000:]
+        )
         yield {"id": "isolated", "profile_directory": str(profile.resolve()), "port": port}
     finally:
         process.terminate()
