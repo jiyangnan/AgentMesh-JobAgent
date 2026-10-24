@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.23] - 2026-10-25
+
+### Fixed
+
+- Check the original cloud-bound resume or confirmed workbench preparation before requiring a local profile. Diagnostics and upgrades never start a paid analysis to rebuild a missing local file.
+- Avoid requesting analysis prices without real input material. Preserve active work independently of new-operation quotes, while retaining account, credit, signed-price and delivery-confirmation checks.
+- Keep original rounds, resume revisions, approved lists and delivery receipts through upgrade and interrupted-work recovery. Manual analysis quotes now accept the exact material digest and validate its scope.
+
 ## [0.6.22] - 2026-10-23
 
 ### Changed
