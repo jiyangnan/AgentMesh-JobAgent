@@ -58,6 +58,23 @@ and input schemas. Protocol 2 uses the top-level `action`. The legacy
 `workflow-contract` alias and `agent_action` field remain available for older
 integrations. Use the current protocol returned by the installed CLI.
 
+`doctor env`, `credits status` and `upgrade-check` inspect the original bound
+resume first; otherwise they check workbench preparation before a classic local
+profile. `workflow.profile_exists=false` describes a local file, not missing
+cloud material. Read `resume_readiness` and `workflow.resume_ready`; never request
+another analysis just to recreate that file. Staged choices, original revisions,
+requests, approvals and delivery history remain authoritative.
+
+Diagnostics never request an analysis quote without its real material. A
+`cloud_access.usable=null` with `quote_requires_material` means preparation is
+needed; follow the returned resume-status handoff. `existing_work_preserved`
+means continue the original task's own gates, without a new price check or a
+new permission to spend. Actual analysis and Discover still require their
+signed quotes and execution checks. A typed material, account or service error
+remains blocked; it is neither insufficient credit nor permission to reanalyze.
+Manual analysis quotes require `--material-digest` for the exact full analysis
+input and its corresponding `--scope-digest`; do not invent example inputs.
+
 For a diagnosed native-window failure before any action on the current job,
 `window_recovery` may offer explicitly confirmed `work recover` for the initial
 read-only delivery inspection. It archives that inspection, independently
@@ -641,7 +658,13 @@ If authentication fails, show the exact error. Do not silently change workflows.
 
 ## 3. Analyze Resume
 
-Ask for a PDF, DOCX, TXT or Markdown resume. A target role is an optional hint only when the user already stated it. At least one target city is required; when none was supplied or saved, the CLI stops before the paid cloud call and asks for it.
+First run `jobagent resume status` to inspect existing workbench preparation.
+An existing or staged round keeps its original resume binding. A missing local
+profile alone is not a reason to analyze again. Only when the user requests a
+new analysis or confirms that new material is needed, ask for a PDF, DOCX, TXT
+or Markdown resume. A target role is an optional hint only when the user already
+stated it. At least one target city is required; when none was supplied or saved,
+the CLI stops before the paid cloud call and asks for it.
 
 ```bash
 jobagent resume analyze --file <resume-path> \

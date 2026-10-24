@@ -48,6 +48,11 @@ Resume profile
 
 One completed Discover covers one platform, collects 30 unique candidates by default (an explicit request can raise the target to 1000), matches the entire collected pool, and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
 
+Account diagnostics and upgrade checks recognize confirmed workbench resumes even
+when this computer has no local profile. They preserve the current round and
+resume binding, and do not run analysis or charge credits. Follow the returned
+resume-preparation or task continuation instead of recreating a local profile.
+
 Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creation are free in the [AgentMesh360 account center](https://agentmesh360.com/app/). The open-source client is free; AgentMesh360 cloud capabilities use credits. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The Standard Pass costs CNY 29.99 for 30 days for mainland China users (USD 4 for users outside mainland China) and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days for mainland China users (USD 10 for users outside mainland China) and includes 3,000 shared credits. Users with an active pass can add 500 credits for CNY 15 (USD 2 for users outside mainland China), at most twice per pass period. Passes do not renew automatically, and unused credits expire with the active pass period. Previously issued signup-trial credits remain usable until their original expiry.
 
 ## Install

@@ -378,7 +378,7 @@ def test_upgrade_check_reports_legacy_key_and_profile_together(tmp_path, monkeyp
         encoding="utf-8",
     )
     monkeypatch.setattr(upgrade_readiness, "load_api_key", lambda: "jba_live_old")
-    monkeypatch.setattr(upgrade_readiness, "profile_path", lambda: profile)
+    monkeypatch.setattr("jobagent.infra.state.profile_path", lambda: profile)
 
     result = upgrade_readiness.run_upgrade_check()
 
@@ -449,6 +449,7 @@ def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypa
         },
     )
 
+    (tmp_path / "profile.json").write_text(json.dumps({"schema_version": 1, "basic": {}}))
     result = cli._doctor_env()
 
     assert result["ok"] is True
@@ -459,11 +460,11 @@ def test_doctor_env_treats_signup_trial_as_immediately_usable(tmp_path, monkeypa
         "credit": 50,
         "source": "signup_trial",
         "expires_at": "2026-07-30T00:00:00Z",
-        "required_credits": 5,
+        "required_credits": 10,
         "paid_pass_required": False,
     }
     assert result["api_key_action"] is None
-    assert result["next_suggested"] == "jobagent resume status"
+    assert result["next_suggested"] == "jobagent round start"
 
 
 def test_doctor_env_reports_healthy_environment_when_credits_are_insufficient(
@@ -503,6 +504,7 @@ def test_doctor_env_reports_healthy_environment_when_credits_are_insufficient(
         },
     )
 
+    (tmp_path / "profile.json").write_text(json.dumps({"schema_version": 1, "basic": {}}))
     result = cli._doctor_env()
 
     assert result["ok"] is True

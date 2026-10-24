@@ -91,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     quote.add_argument("--action", choices=["discover", "analysis"], required=True)
     quote.add_argument("--request-id", required=True)
     quote.add_argument("--scope-digest", required=True)
+    quote.add_argument("--material-digest", help="Exact resume-analysis input digest; required for analysis quotes")
     sub.add_parser("onboarding", help="Show the next setup step without network access or state changes")
 
     init = sub.add_parser("init", help="Configure an AgentMesh API Key")
@@ -297,10 +298,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool) -> dict[str, Any]:
+def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool,
+                  price_deferred: str | None = None) -> dict[str, Any]:
     account = account_response.get("account") or {}
     credit = account.get("credit")
     unlimited = bool(account.get("unlimited") or credit == "unlimited")
+    if price_deferred:
+        return {"usable": None, "reason": price_deferred, "credit": credit,
+                "source": account.get("source"), "expires_at": account.get("expires_at"),
+                "required_credits": None, "paid_pass_required": False}
     numeric_credit: int | None = None
     if not unlimited:
         try:
@@ -310,7 +316,7 @@ def _cloud_access(account_response: dict[str, Any], *, profile_exists: bool) -> 
     required_action = "discover" if profile_exists else "analysis"
     prices = account_response.get("workflow_prices")
     required_credits = (prices.get(required_action) if isinstance(prices, dict) else (10 if profile_exists else 5))
-    if required_credits is None:
+    if type(required_credits) is not int or required_credits < 0:
         return {"usable": False, "reason": "credit_price_unavailable", "credit": credit,
                 "source": account.get("source"), "expires_at": account.get("expires_at"),
                 "required_credits": None, "paid_pass_required": None}
@@ -365,7 +371,8 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         )
 
         payload["account"] = account
-        payload["cloud_access"] = _cloud_access(account, profile_exists=False)
+        payload["cloud_access"] = _cloud_access(account, profile_exists=False,
+                                               price_deferred="quote_requires_material")
         try:
             payload["local_state"] = ensure_account_state(
                 account,
@@ -590,6 +597,7 @@ def _doctor_env() -> dict[str, Any]:
         "ready": False,
     }
     profile_exists = False
+    material = {"ok": False, "error": "account_unverified"}
     if account_response is not None:
         from jobagent.infra.account_state import AccountStateError, ensure_account_state
 
@@ -606,33 +614,10 @@ def _doctor_env() -> dict[str, Any]:
             }
     if local_state.get("ready"):
         from jobagent.infra.state import profile_path
+        from jobagent.infra.resume_readiness import check_resume
 
         profile_exists = profile_path().exists()
-    credit_quotes = {}
-    capabilities = ((account_response or {}).get("server") or {}).get("capabilities") or {}
-    if account_response and capabilities.get("workflow_protocol_version", 0) >= 2:
-        from jobagent.infra.protocol import digest_payload
-        account_response["workflow_prices"] = {}
-        for action in ("analysis", "discover"):
-            try:
-                quote = cloud_client.credits_quote(action, "setup_price_" + action, digest_payload({"scope": "setup", "action": action}))
-                credit_quotes[action] = quote["quote"]
-                account_response["workflow_prices"][action] = quote["quote"]["credits_required"]
-            except cloud_client.CloudError as exc:
-                credit_quotes[action] = {"error": exc.code or "credit_quote_unavailable", "charged": False}
-    access = (
-        _cloud_access(account_response, profile_exists=profile_exists)
-        if account_response is not None
-        else {
-            "usable": False,
-            "reason": key_error or ("account_verification_pending" if key_present else "api_key_required"),
-            "credit": None,
-            "source": "none",
-            "expires_at": None,
-            "required_credits": 5,
-            "paid_pass_required": None,
-        }
-    )
+        material = check_resume(account_response)
     from jobagent.infra.rounds import round_status
 
     workflow = round_status() if local_state.get("ready") else None
@@ -644,12 +629,41 @@ def _doctor_env() -> dict[str, Any]:
         if account_ref:
             pending_native_work = any(work["state"] != "closed" for work in list_work(
                 {"account_ref": account_ref, "round_id": workflow["round_id"]}))
+    # Existing work has its own signed material and charging boundary. A
+    # prospective analysis/Discover quote cannot block its free reconciliation.
+    preserved = pending_native_work or (workflow or {}).get("status") == "active"
+    deferred = "existing_work_preserved" if preserved else (
+        "quote_requires_material" if not material.get("ok") else None)
+    credit_quotes = {}
+    capabilities = ((account_response or {}).get("server") or {}).get("capabilities") or {}
+    if account_response and local_state.get("ready") and not deferred and capabilities.get("workflow_protocol_version", 0) >= 2:
+        from jobagent.infra.protocol import digest_payload
+        account_response["workflow_prices"] = {}
+        try:
+            quote = cloud_client.credits_quote("discover", "setup_price_discover",
+                digest_payload({"scope": "setup", "action": "discover"}))
+            credit_quotes["discover"] = quote["quote"]
+            account_response["workflow_prices"]["discover"] = quote["quote"]["credits_required"]
+        except cloud_client.CloudError as exc:
+            credit_quotes["discover"] = {"error": exc.code or "credit_quote_unavailable",
+                "http_status": exc.status, "retryable": bool(exc.retryable), "charged": False}
+    access = (
+        _cloud_access(account_response, profile_exists=bool(material.get("ok")), price_deferred=deferred)
+        if account_response is not None
+        else {"usable": False, "reason": key_error or ("account_verification_pending" if key_present else "api_key_required"),
+              "credit": None, "source": "none", "expires_at": None,
+              "required_credits": None, "paid_pass_required": None}
+    )
+    if access.get("reason") == "credit_price_unavailable":
+        access["cause"] = credit_quotes.get("discover", {}).get("error", "credit_quote_invalid")
     blocked_by: list[str] = []
     if not environment_healthy:
         blocked_by.append("environment")
     if not local_state.get("ready"):
         blocked_by.append(str(local_state.get("error") or local_state.get("status")))
-    if not access.get("usable"):
+    if local_state.get("ready") and not material.get("ok"):
+        blocked_by.append(material["error"])
+    if access.get("usable") is False:
         blocked_by.append(str(access.get("reason") or "cloud_access"))
     if not key_present or key_rejected:
         next_suggested = "jobagent init --key <your_api_key>"
@@ -657,13 +671,17 @@ def _doctor_env() -> dict[str, Any]:
         next_suggested = "jobagent doctor env"
     elif not local_state.get("ready"):
         next_suggested = str(local_state.get("next_suggested") or "jobagent account status")
-    elif access.get("paid_pass_required"):
-        next_suggested = "https://agentmesh360.com/app/?lang=zh-CN#pricing"
-    elif not access.get("usable"):
-        next_suggested = "jobagent doctor env"
+    elif not material.get("ok"):
+        next_suggested = material.get("action", "jobagent resume status")
     elif pending_native_work:
         next_suggested = "jobagent work next"
-    elif not profile_exists:
+    elif preserved:
+        next_suggested = str((workflow or {}).get("next_suggested") or "jobagent round status")
+    elif access.get("paid_pass_required"):
+        next_suggested = "https://agentmesh360.com/app/?lang=zh-CN#pricing"
+    elif access.get("usable") is False:
+        next_suggested = "jobagent doctor env"
+    elif material.get("source") == "resume_center":
         next_suggested = "jobagent resume status"
     else:
         next_suggested = str((workflow or {}).get("next_suggested") or "jobagent round start")
@@ -688,11 +706,15 @@ def _doctor_env() -> dict[str, Any]:
         "local_state": local_state,
         "cloud_access": access,
         "credit_quotes": credit_quotes,
+        "resume_readiness": material,
+        "diagnostic_contract_version": 2,
         "round": workflow,
         "workflow": {
             "ready": not blocked_by,
             "blocked_by": blocked_by,
             "profile_exists": profile_exists,
+            "resume_ready": bool(material.get("ok")),
+            "resume_source": material.get("source"),
             "next_suggested": next_suggested,
         },
         "next_suggested": next_suggested,
@@ -714,6 +736,15 @@ def _doctor_env() -> dict[str, Any]:
             "API Key 配置已保留，当前暂未完成账户验证。请按返回的诊断恢复后继续检查，"
             "无需重新申请 Key。"
         )
+    elif environment_healthy and local_state.get("ready") and not material.get("ok"):
+        payload["onboarding"] = {"stage": "resume_check_required", "workbench_url": WORKBENCH_URL}
+        payload["requires_user_action"] = False
+        payload["message"] = "账户已连接。请先检查原任务使用的简历或工作台准备状态；诊断不会重新分析、选择简历或扣费。"
+        for field in ("requires_user_action", "user_prompt", "retryable", "request_preserved"):
+            if field in material:
+                payload[field] = material[field]
+        if material.get("error") not in {"profile_missing", "profile_incompatible", "resume_preparation_required"}:
+            payload.update(error=material["error"], requires_technical_recovery=True)
     elif environment_healthy and local_state.get("ready") and access.get("paid_pass_required"):
         payload["onboarding"] = {"stage": "credits_required", "workbench_url": WORKBENCH_URL}
         payload["requires_user_action"] = True
@@ -723,18 +754,19 @@ def _doctor_env() -> dict[str, Any]:
             "完成后回到当前 Agent 对话回复“额度已准备好，请继续”；"
             "Agent 会重新运行 jobagent doctor env 检查到账情况，再继续设置。"
         )
-    elif environment_healthy and local_state.get("ready") and not access.get("usable"):
+    elif environment_healthy and local_state.get("ready") and access.get("usable") is False:
         payload["onboarding"] = {"stage": "credit_status_pending"}
+        payload.update(error=access.get("cause") or access["reason"], requires_technical_recovery=True)
         payload["message"] = (
             "账户已连接，但暂时无法确认可用额度。当前结果不代表额度不足；"
             "恢复后运行 jobagent doctor env 继续检查。"
         )
-    elif environment_healthy and local_state.get("ready") and access.get("usable") and pending_native_work:
+    elif environment_healthy and local_state.get("ready") and preserved:
         payload["onboarding"] = {"stage": "preserved_work_pending"}
         payload["requires_user_action"] = False
         payload["request_preserved"] = True
         payload["message"] = "连接和账户检查通过，继续读取原任务的当前许可或恢复要求；观察次数及投递权限保持原状。"
-    elif environment_healthy and local_state.get("ready") and access.get("usable") and not profile_exists:
+    elif environment_healthy and local_state.get("ready") and material.get("source") == "resume_center":
         payload["onboarding"] = {"stage": "resume_check_required", "workbench_url": WORKBENCH_URL}
         payload["requires_user_action"] = False
         payload["message"] = "账户和环境检查通过。接下来通过 CLI 检查工作台已有简历，再给出需要你完成的步骤。"
@@ -1767,7 +1799,22 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
         if args.credits_command == "status":
             return _doctor_env()
         from jobagent.infra.cloud_client import credits_quote
-        return credits_quote(action=args.action, request_id=args.request_id, scope_digest=args.scope_digest)
+        from jobagent.infra.protocol import digest_payload
+        import re
+        material = args.material_digest
+        if args.action == "analysis":
+            if not material or not re.fullmatch(r"sha256:[0-9a-f]{64}", material):
+                return {"ok": False, "error": "analysis_quote_material_required", "charged": False,
+                        "requires_technical_recovery": True,
+                        "message": "分析报价需要完整分析输入的 material-digest；不会使用示例材料或启动分析。"}
+            if args.scope_digest != digest_payload({"material_digest": material}):
+                return {"ok": False, "error": "analysis_quote_scope_mismatch", "charged": False,
+                        "requires_technical_recovery": True}
+        elif material is not None:
+            return {"ok": False, "error": "unexpected_material_digest", "charged": False,
+                    "requires_technical_recovery": True}
+        return credits_quote(action=args.action, request_id=args.request_id, scope_digest=args.scope_digest,
+                             **({"material_digest": material} if material is not None else {}))
     if args.command == "round" and args.round_command == "update":
         from jobagent.application.round_criteria import update
         return update(args.input, args.expected_revision)

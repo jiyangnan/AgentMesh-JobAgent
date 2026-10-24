@@ -241,7 +241,8 @@ def test_doctor_outage_preserves_key_and_never_sends_user_to_register(monkeypatc
 def test_doctor_checks_online_resume_before_asking_for_another_analysis(doctor_context):
     result = cli._doctor_env()
     assert result['environment_healthy'] is True
-    assert result['cloud_access']['usable'] is True
+    assert result['cloud_access']['usable'] is None
+    assert result['cloud_access']['reason'] == 'quote_requires_material'
     assert result['onboarding']['stage'] == 'resume_check_required'
     assert result['requires_user_action'] is False
     assert result['next_suggested'] == 'jobagent resume status'
@@ -256,6 +257,8 @@ def test_doctor_resumes_preserved_work_before_local_profile_setup(monkeypatch, d
         return [{'state': 'reconcile_only', 'observation_attempts': 3}]
     monkeypatch.setattr(browser_work, 'list_work', works)
     assert not (doctor_context / 'profile.json').exists()
+    monkeypatch.setattr('jobagent.infra.resume_readiness.check_resume', lambda _: {
+        'ok': True, 'source': 'round_resume_binding'})
     result = cli._doctor_env()
     assert result['onboarding']['stage'] == 'preserved_work_pending'
     assert result['next_suggested'] == 'jobagent work next'
@@ -265,6 +268,7 @@ def test_doctor_resumes_preserved_work_before_local_profile_setup(monkeypatch, d
 
 def test_doctor_payment_handoff_only_for_insufficient_credits(monkeypatch, doctor_context):
     monkeypatch.setattr('jobagent.infra.cloud_client.me', lambda: {'account': {'credit': 0}})
+    (doctor_context / "profile.json").write_text(json.dumps({"schema_version": 1, "basic": {}}))
     result = cli._doctor_env()
     assert result['environment_healthy'] is True
     assert result['workflow']['ready'] is False
@@ -275,6 +279,7 @@ def test_doctor_payment_handoff_only_for_insufficient_credits(monkeypatch, docto
 
 def test_doctor_unknown_credit_balance_never_recommends_purchase(monkeypatch, doctor_context):
     monkeypatch.setattr('jobagent.infra.cloud_client.me', lambda: {'account': {}})
+    (doctor_context / "profile.json").write_text(json.dumps({"schema_version": 1, "basic": {}}))
     result = cli._doctor_env()
     assert result['cloud_access']['reason'] == 'credit_status_unavailable'
     assert result['cloud_access']['paid_pass_required'] is None
@@ -294,7 +299,7 @@ def test_doctor_rejected_key_uses_status_even_without_error_code(monkeypatch, do
 
 
 def test_existing_profile_does_not_restart_onboarding(doctor_context):
-    (doctor_context / 'profile.json').write_text('{}')
+    (doctor_context / 'profile.json').write_text(json.dumps({'schema_version': 1, 'basic': {}}))
     result = cli._doctor_env()
     assert 'onboarding' not in result
     assert not result.get('requires_user_action')

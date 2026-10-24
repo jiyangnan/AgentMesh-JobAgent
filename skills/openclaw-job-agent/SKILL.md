@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on Boss直聘, 猎聘, 智联招聘 and 51Job.
-version: 0.6.22
+version: 0.6.23
 metadata:
   openclaw:
     emoji: "💼"
@@ -74,6 +74,23 @@ Read `jobagent workflow contract` once for the installed protocol, command catal
 and input schemas. Protocol 2 uses the top-level `action`. The legacy
 `workflow-contract` alias and `agent_action` field remain available for older
 integrations. Use the current protocol returned by the installed CLI.
+
+`doctor env`, `credits status` and `upgrade-check` inspect the original bound
+resume first; otherwise they check workbench preparation before a classic local
+profile. `workflow.profile_exists=false` describes a local file, not missing
+cloud material. Read `resume_readiness` and `workflow.resume_ready`; never request
+another analysis just to recreate that file. Staged choices, original revisions,
+requests, approvals and delivery history remain authoritative.
+
+Diagnostics never request an analysis quote without its real material. A
+`cloud_access.usable=null` with `quote_requires_material` means preparation is
+needed; follow the returned resume-status handoff. `existing_work_preserved`
+means continue the original task's own gates, without a new price check or a
+new permission to spend. Actual analysis and Discover still require their
+signed quotes and execution checks. A typed material, account or service error
+remains blocked; it is neither insufficient credit nor permission to reanalyze.
+Manual analysis quotes require `--material-digest` for the exact full analysis
+input and its corresponding `--scope-digest`; do not invent example inputs.
 
 For a diagnosed native-window failure before any action on the current job,
 `window_recovery` may offer explicitly confirmed `work recover` for the initial
