@@ -9,11 +9,58 @@ from jobagent.application.native_liepin_identity import eligible, validate
 from jobagent.platforms.liepin.playwright_history import read_history
 
 
+def control_matches(job_id, control_id) -> bool:
+    """Liepin's chat control carries an internal job id, not the URL id.
+
+    The URL slug keeps a numeric job id whose suffix is the internal id used by
+    the chat control (for example URL 1986207107 -> control 86207107). Only a
+    numeric suffix of comparable length is accepted.
+    """
+    job_id, control_id = str(job_id or ""), str(control_id or "")
+    if not (job_id.isdigit() and control_id.isdigit()):
+        return False
+    if control_id == job_id:
+        return True
+    return (len(control_id) >= 6 and len(job_id) - len(control_id) <= 3
+            and job_id.endswith(control_id))
+
+
 class LiepinDelivery:
     def __init__(self, runtime):
         self.runtime = runtime
         self.page = None
         self.identity = None
+
+    def _chat_control(self, job_id):
+        controls = self.page.locator('[data-tlg-elem-id="c_pc_job_detail_chat_btn"]')
+        if controls.count() != 1:
+            raise BrowserWorkError("liepin_job_control_unverified", "The job-bound communication control is unavailable.")
+        if not control_matches(job_id, controls.first.get_attribute("data-jobid")):
+            raise BrowserWorkError("liepin_job_control_unverified", "The job-bound communication control is unavailable.")
+        return controls.first
+
+    def _open_chat(self, job_id):
+        control = self._chat_control(job_id)
+        for attempt in range(2):
+            try:
+                # A slow page or transient overlay can defeat the default 12s
+                # action timeout. Opening a conversation is idempotent and sends
+                # no message, so one bounded retry is safe.
+                control.click(timeout=30000)
+                return
+            except Exception:
+                if attempt:
+                    raise
+
+    def _company_name(self):
+        legacy = self.page.locator("main > content > .company-container .company-name")
+        if legacy.count() == 1 and legacy.first.is_visible():
+            return legacy.first.inner_text().strip()
+        # The current detail layout keeps the employer in the aside company card.
+        card = self.page.locator("main > aside .company-info-container .company-card .content .name")
+        if card.count() == 1 and card.first.is_visible():
+            return card.first.inner_text().strip()
+        return ""
 
     def _text(self, selector):
         locator = self.page.locator(selector)
@@ -22,6 +69,14 @@ class LiepinDelivery:
         return locator.inner_text().strip()
 
     def prepare(self, work):
+        try:
+            self._prepare(work)
+        except BrowserWorkError:
+            if work.get("state") == "ready":
+                raise
+            # Reconciliation cannot reissue the action here; execute settles it.
+
+    def _prepare(self, work):
         if work["action"] not in {"inspect_session", "inspect_delivery", "inspect_resume_selection", "open_communication", "prepare_resume", "submit_resume", "send_greeting"}:
             raise BrowserWorkError("liepin_action_not_validated", "This adapter action still needs DOM validation; no external action intent was issued.")
         self.page = self.runtime.job_page(work)
@@ -40,14 +95,12 @@ class LiepinDelivery:
                     "title": self._text(".job-apply-container .job-title")}
         if not self.runtime.same_route(self.page.url, job["url"]) or observed["title"] != job["title"]:
             raise BrowserWorkError("liepin_job_changed", "The current detail differs from the approved job.")
-        controls = self.page.locator(f'[data-tlg-elem-id="c_pc_job_detail_chat_btn"][data-jobid="{job["id"]}"]')
-        if controls.count() != 1:
-            raise BrowserWorkError("liepin_job_control_unverified", "The job-bound communication control is unavailable.")
+        self._chat_control(job["id"])
         if eligible(work):
             # This scope excludes all recommendations and other jobs' companies.
-            disclosed = self.page.locator("main > content > .company-container .company-name")
-            if disclosed.count():
-                observed["company"] = disclosed.inner_text().strip()
+            disclosed = self._company_name()
+            if disclosed:
+                observed["company"] = disclosed
             else:
                 observed.update(company=None, company_visibility="not_disclosed",
                     recruiter_name=self._text("main > content > .recruiter-container .name-box .name"),
@@ -55,7 +108,10 @@ class LiepinDelivery:
                     detail_salary=self._text(".job-apply-container .salary"),
                     detail_area=self._text(".job-apply-container .job-properties span:first-child"))
         else:
-            observed["company"] = self._text("main > content > .company-container .company-name")
+            company = self._company_name()
+            if not company:
+                raise BrowserWorkError("liepin_identity_ambiguous", "One visible company identity is required.")
+            observed["company"] = company
         # Initial detail validation is read-only. Later anonymous jobs also
         # require the independently observed conversation identity below.
         if work["action"] == "inspect_delivery" and work["task"].get("inspection_phase") != "after_communication":
@@ -306,6 +362,26 @@ class LiepinDelivery:
             self.page.wait_for_timeout(250)
 
     def execute(self, work, *, may_act):
+        try:
+            return self._execute(work, may_act=may_act)
+        except Exception as exc:
+            if may_act:
+                raise
+            # The action was attempted earlier and reconciliation cannot verify
+            # it. Settle as terminal unresolved: never resend, never report a
+            # delivery, and never leave the platform blocked forever.
+            job = work["task"].get("job") or {}
+            identity = self.identity or {}
+            error = (exc.payload.get("error") if isinstance(exc, BrowserWorkError) else type(exc).__name__)
+            return {"outcome": "unresolved", "evidence": {
+                **identity,
+                "job_id": str(work["binding"].get("job_id") or identity.get("job_id") or ""),
+                "job_url": job.get("url") or identity.get("job_url", ""),
+                "title": job.get("title") or identity.get("title", ""),
+                "receipt_checked": True, "submission_attempted": False,
+                "reconciliation_error": error or "unknown"}}
+
+    def _execute(self, work, *, may_act):
         action = work["action"]
         if action == "inspect_session":
             resume = self._online_resume(work)
@@ -328,10 +404,28 @@ class LiepinDelivery:
                 "resume_selection_verified": True, "submission_attempted": False}}
         if action == "open_communication":
             if may_act and self.page.locator("textarea.im-ui-textarea:visible").count() == 0:
-                control = self.page.locator(f'[data-tlg-elem-id="c_pc_job_detail_chat_btn"][data-jobid="{work["binding"]["job_id"]}"]')
-                control.click()
-                self.page.locator("textarea.im-ui-textarea:visible").wait_for(state="visible")
+                self._open_chat(work["binding"]["job_id"])
+                self.page.locator("textarea.im-ui-textarea:visible").wait_for(state="visible", timeout=30000)
+            if not may_act and self.page.locator("textarea.im-ui-textarea:visible").count() == 0:
+                # The earlier click did not leave a verifiable conversation on
+                # this page. Settle without another click instead of wedging
+                # reconciliation forever; nothing is reported as delivered.
+                return {"outcome": "unresolved", "evidence": {**self.identity,
+                    "communication_state": "unknown", "conversation_job_verified": False,
+                    "submission_attempted": False, "receipt_checked": True,
+                    "reason": "conversation_unverified_after_action",
+                    "reconciliation_error": "conversation_unverified_after_action"}}
             conversation = self._conversation(work)
+            anchor = work["task"].get("anonymous_recruiter_identity")
+            if anchor and not may_act and self.identity.get("company") in (None, "") and (
+                    self.identity.get("recruiter_name") != anchor.get("recruiter_name")
+                    or self.identity.get("recruiter_company") != anchor.get("recruiter_company")):
+                # The attempted action cannot be tied back to the declared
+                # recruiter anchor. Settle without another click.
+                return {"outcome": "unresolved", "evidence": {**self.identity, **conversation,
+                    "submission_attempted": False, "receipt_checked": True,
+                    "reason": "anonymous_recruiter_identity_changed",
+                    "reconciliation_error": "anonymous_recruiter_identity_changed"}}
             return {"outcome": "success", "evidence": {**self.identity, **conversation,
                 "default_greeting_observed": bool(conversation.get("observed_outgoing"))}}
         if action == "prepare_resume":

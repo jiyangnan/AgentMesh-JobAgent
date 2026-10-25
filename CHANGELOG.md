@@ -2,6 +2,16 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.25] - 2026-10-26
+
+### Fixed
+
+- Bind Liepin's chat control by its internal job id, which is a suffix of the approved URL id, instead of requiring exact equality. The previous check refused every current Liepin job before any communication.
+- Read the employer from the current detail layout's aside company card when the legacy company container is absent.
+- Give the Liepin chat control a longer, bounded click timeout and one navigation-only retry, then wait longer for the conversation to open. Opening a conversation sends no message and is safe to retry.
+- Settle a Liepin delivery work whose attempted communication cannot be verified as unresolved instead of leaving the platform reconciliation-only forever. Nothing is resent and nothing is reported as delivered.
+- Allow that unresolved reconciliation receipt past the Liepin recruiter identity gate while still requiring the exact approved job route, id and title.
+
 ## [0.6.24] - 2026-10-25
 
 ### Fixed

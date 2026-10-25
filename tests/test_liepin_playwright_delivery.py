@@ -4,7 +4,17 @@ import pytest
 from tests.test_playwright_runtime import chrome
 from jobagent.drivers.playwright_runtime import PlaywrightRuntime
 from jobagent.infra.browser_work import BrowserWorkError
-from jobagent.platforms.liepin.playwright_delivery import LiepinDelivery
+from jobagent.platforms.liepin.playwright_delivery import LiepinDelivery, control_matches
+
+
+def test_chat_control_accepts_the_platform_internal_job_id():
+    assert control_matches("1986207107", "86207107")
+    assert control_matches("1986207107", "1986207107")
+    assert not control_matches("1986207107", "1986207100")
+    assert not control_matches("1986207107", "07")
+    assert not control_matches("1986207107", "")
+    assert not control_matches("", "86207107")
+    assert not control_matches("abc123456", "123456")
 
 
 def fixture_adapter(runtime, monkeypatch, *, route="123", status="未读", pending=False):
@@ -44,6 +54,19 @@ def test_other_job_conversation_never_becomes_delivery_evidence(chrome, monkeypa
         adapter, work = fixture_adapter(runtime, monkeypatch, route="456")
         with pytest.raises(BrowserWorkError, match="exact approved job"):
             adapter._conversation(work)
+
+
+def test_reconcile_without_a_visible_conversation_settles_unresolved(chrome, monkeypatch):
+    with PlaywrightRuntime(chrome) as runtime:
+        adapter, work = fixture_adapter(runtime, monkeypatch)
+        adapter.page.evaluate("document.querySelector('textarea').remove()")
+        work["action"] = "open_communication"
+        adapter.identity = {"job_id": "123", "job_url": "https://www.liepin.com/a/123.shtml", "title": "数据产品经理"}
+        result = adapter.execute(work, may_act=False)
+        assert result["outcome"] == "unresolved"
+        assert result["evidence"]["submission_attempted"] is False
+        assert result["evidence"]["receipt_checked"] is True
+        assert result["evidence"]["reason"] == "conversation_unverified_after_action"
 
 
 def test_resume_chooser_uses_visible_nested_cancel_before_route_check(chrome, monkeypatch):
