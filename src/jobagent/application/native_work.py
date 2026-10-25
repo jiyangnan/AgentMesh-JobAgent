@@ -803,7 +803,11 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
             platform == "boss" and e.get("title") == job["title"] + "（猎头职位）"):
         _error("native_job_identity_mismatch", "The visible title must match the approved job.")
     from jobagent.application.native_liepin_identity import validate as validate_liepin_identity
-    validate_liepin_identity(work, e)
+    if not (result["outcome"] == "unresolved" and e.get("reconciliation_error")):
+        # An unresolved reconciliation receipt states that the attempted action
+        # could not be verified; the exact job route/id/title are still checked
+        # above. Requiring conversation identity here would block settlement.
+        validate_liepin_identity(work, e)
     if result["outcome"] in {"uncertain", "unresolved", "unavailable"}:
         if e.get("receipt_checked") is not True:
             _error("native_receipt_check_required", "Check official receipt/history before an unresolved or unavailable outcome.")
