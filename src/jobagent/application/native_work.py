@@ -799,7 +799,8 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
         _error("native_job_binding_mismatch", "The observed job must exactly match the approved task.")
     from jobagent.application.native_discovery import validate_job_url
     validate_job_url(platform, e["job_url"], str(job["id"]))
-    if e.get("title") != job["title"]:
+    if e.get("title") != job["title"] and not (
+            platform == "boss" and e.get("title") == job["title"] + "（猎头职位）"):
         _error("native_job_identity_mismatch", "The visible title must match the approved job.")
     from jobagent.application.native_liepin_identity import validate as validate_liepin_identity
     validate_liepin_identity(work, e)

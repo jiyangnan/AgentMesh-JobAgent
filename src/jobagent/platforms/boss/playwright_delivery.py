@@ -1,6 +1,7 @@
 """Verified Boss detail/conversation controls and durable single-send receipts."""
 from __future__ import annotations
 
+import re
 import time
 from urllib.parse import parse_qs, urljoin, urlsplit
 
@@ -10,6 +11,7 @@ CHAT_URL = "https://www.zhipin.com/web/geek/chat"
 ACCOUNT = ".nav-figure .label-text"
 ROOT = ".chat-conversation"
 RECEIPT_WAIT_SECONDS = 12
+SEND_ENABLE_WAIT_SECONDS = 3
 
 
 class BossDelivery:
@@ -25,6 +27,26 @@ class BossDelivery:
         if node.count() != 1 or not node.is_visible():
             raise BrowserWorkError("boss_identity_ambiguous", "One visible identity element is required.")
         return node.inner_text().strip()
+
+    def _send_control_enabled(self, button):
+        if button.count() != 1:
+            return False
+        return button.is_enabled() and "disabled" not in (button.get_attribute("class") or "")
+
+    @staticmethod
+    def _anonymized(company):
+        return str(company).startswith("某")
+
+    def _company(self):
+        link = self.page.locator('.sider-company .company-info a[ka="job-detail-company_custompage"]')
+        if link.count() == 1 and link.is_visible():
+            return link.inner_text().strip()
+        # An anonymized employer has no company page link; the banner still
+        # states the client company that the approved job is bound to.
+        brand = self.page.locator(".job-banner .brand-name")
+        if brand.count() == 1 and brand.is_visible():
+            return re.sub(r"^客户公司[：:]\s*", "", brand.inner_text().strip()).strip()
+        raise BrowserWorkError("boss_identity_ambiguous", "One visible company identity is required.")
 
     def _account(self):
         self.runtime.guard.check()
@@ -54,7 +76,7 @@ class BossDelivery:
         job = work["task"]["job"]
         self.page.locator(".job-banner h1").wait_for(state="visible")
         title = self._text(".job-banner h1")
-        company = self._text('.sider-company .company-info a[ka="job-detail-company_custompage"]')
+        company = self._company()
         if (not self.runtime.same_route(self.page.url, job["url"])
                 or title != job["title"] or company != job["company"]):
             raise BrowserWorkError("boss_job_changed", "The approved detail route, title and company must all match.")
@@ -64,7 +86,7 @@ class BossDelivery:
         if status in {"已关闭", "已下线", "职位已关闭", "职位已下线", "停止招聘", "招聘已结束"}:
             self.unavailable = status
             return
-        if status != "招聘中":
+        if status not in {"招聘中", "最新"}:
             raise BrowserWorkError("boss_availability_unknown", "An unknown job status cannot authorize communication.")
         control = self.page.locator(".job-banner .btn-startchat:visible")
         if control.count() != 1:
@@ -119,6 +141,8 @@ class BossDelivery:
             if current == str(job["id"]):
                 return
         items = self.page.locator('.chat-user li[role="listitem"]')
+        approved_company = str(job["company"])
+        anonymized = self._anonymized(approved_company)
         def matches():
             rows = items.evaluate_all("""nodes => nodes.map(n => {
                 const c=n.__vue__?.$props?.source;
@@ -127,7 +151,8 @@ class BossDelivery:
             })""", isolated_context=False)
             return [i for i, r in enumerate(rows) if r["id"] == str(job["id"])
                     and r["name"] and r["name"] in r["visible"]
-                    and r["company"] == job["company"] and r["company"] in r["visible"]]
+                    and r["company"] and r["company"] in r["visible"]
+                    and (anonymized or r["company"] == approved_company)]
         indices = matches()
         if not indices:
             name = (work["task"].get("boss_recruiter_identity") or self.identity).get("recruiter_name")
@@ -161,16 +186,28 @@ class BossDelivery:
         }""", isolated_context=False)
         job = work["task"]["job"]
         name = self._text(ROOT + " .base-info .name-text")
-        company = self._text(ROOT + " .base-info > span:not(.base-title)")
+        company_node = self.page.locator(ROOT + " .base-info > span:not(.base-title)")
+        company = company_node.first.inner_text().strip() if company_node.count() == 1 else ""
         title = self._text(ROOT + " .position-name")
         anchor = work["task"].get("boss_recruiter_identity") or self.identity
+        # Boss replaces the employer name with a "某…公司" label on anonymized
+        # postings; the conversation then shows the actual brand. The exact job
+        # ID, title and recruiter still bind the conversation. Headhunter
+        # conversations omit the company line and suffix the job title.
+        approved_company = str(job["company"])
+        approved_title = str(job["title"])
+        anonymized = self._anonymized(approved_company)
+        titles_ok = title in {approved_title, approved_title + "（猎头职位）"}
+        company_matches = company or str((observed or {}).get("company") or "")
         if (not observed or observed.get("id") != str(job["id"]) or observed.get("title") != title
-                or title != job["title"] or observed.get("company") != company or company != job["company"]
+                or not titles_ok
+                or (company and observed.get("company") != company)
+                or (not anonymized and str(observed.get("company") or "") != approved_company)
                 or observed.get("recruiter_name") != name or not observed.get("recruiter_id")
                 or any(anchor.get(k) and anchor[k] != observed.get(k) for k in ("recruiter_name", "recruiter_id"))):
             raise BrowserWorkError("boss_conversation_identity_unknown", "The displayed job, company and recruiter must agree with the exact bound conversation.")
         self.identity.update(self.runtime.evidence(work), job_id=str(observed["id"]), job_url=job["url"],
-                             title=title, company=company, recruiter_name=name, recruiter_id=observed["recruiter_id"])
+                             title=title, company=company_matches, recruiter_name=name, recruiter_id=observed["recruiter_id"])
         messages = root.locator(".im-list .message-item.item-myself").evaluate_all("""nodes => nodes.map(n => ({
             id:n.getAttribute('data-mid') || '',
             text:(n.querySelector('.text-content')?.innerText || '').trim(),
@@ -209,9 +246,22 @@ class BossDelivery:
             fresh = self._conversation(work)  # Recheck after typing.
             if fresh["message_state"] != "not_sent":
                 raise BrowserWorkError("boss_message_changed_before_send", "The message history changed during preparation; preserve the draft without sending.")
+            # Boss toggles the send control's disabled class asynchronously after
+            # the editor receives text; checking it immediately rejects a valid
+            # draft. Wait for the real control state before giving up.
             button = self.page.locator(ROOT + ' button[type="send"].btn-send:visible')
-            if button.count() != 1 or not button.is_enabled() or "disabled" in (button.get_attribute("class") or ""):
-                raise BrowserWorkError("boss_send_unavailable", "No enabled send control is available.")
+            deadline = time.monotonic() + SEND_ENABLE_WAIT_SECONDS
+            while not self._send_control_enabled(button):
+                if time.monotonic() >= deadline:
+                    if self._text("#chat-input") == greeting:
+                        try:
+                            editor.fill("")  # Remove only the draft this attempt wrote.
+                        except Exception:
+                            pass
+                    raise BrowserWorkError("boss_send_unavailable", "No enabled send control is available.")
+                self.page.wait_for_timeout(100)
+            if self._text("#chat-input") != greeting:
+                raise BrowserWorkError("boss_greeting_changed", "The editor differs from the exact approved text.")
             state.save_json(path, {"binding": work["binding"], "nonce": work["nonce"], "greeting": greeting,
                 "recruiter_id": self.identity["recruiter_id"], "account_label": self.identity["account_label"],
                 "prior_ids": [m["id"] for m in observed["messages"]], "observed_at": rounds.utc_now()})
@@ -220,6 +270,14 @@ class BossDelivery:
         if (checkpoint.get("binding") != work["binding"] or checkpoint.get("nonce") != work["nonce"]
                 or checkpoint.get("greeting") != greeting or checkpoint.get("recruiter_id") != self.identity["recruiter_id"]
                 or checkpoint.get("account_label") != self.identity["account_label"]):
+            if observed["message_state"] == "not_sent":
+                # No durable checkpoint means this client never clicked send for
+                # this work, and the verified conversation still shows no exact
+                # outgoing greeting. Settle the work instead of leaving it in
+                # reconcile_only with no receipt path; it is never resent.
+                return {"outcome": "unresolved", "evidence": {**self.identity, **observed,
+                    "outgoing_text": "", "submission_attempted": False,
+                    "reason": "send_not_attempted", "receipt_checked": True}}
             raise BrowserWorkError("boss_send_checkpoint_missing", "The attempted message has no matching durable checkpoint; never resend.")
         deadline = time.monotonic() + (RECEIPT_WAIT_SECONDS if may_act else 0)
         while True:
