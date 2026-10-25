@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.24] - 2026-10-25
+
+### Fixed
+
+- Wait for Boss's send control to become usable after the approved greeting is typed. The previous immediate check treated the still-disabled button as unavailable, dropped the draft and left the conversation without the personalized message.
+- Settle a Boss greeting whose pre-send checkpoint is missing while the verified conversation still shows no exact outgoing message as unresolved, instead of leaving the platform reconciliation-only forever. Nothing is resent and nothing is reported as delivered.
+- Recognize the 最新 recency badge and anonymized or headhunter Boss postings. These conversations bind by exact job, recruiter and approved company rather than exact visible company strings, and the approved title may appear with the platform's （猎头职位） suffix.
+
 ## [0.6.23] - 2026-10-25
 
 ### Fixed
