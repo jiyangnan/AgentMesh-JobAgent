@@ -57,6 +57,18 @@ class LiepinDelivery:
                 if attempt:
                     raise
 
+    def _account_label(self):
+        return (self.identity or {}).get("account_label") or self.runtime.session.get("accounts", {}).get("liepin", "")
+
+    def _history_or_none(self, work):
+        binding = work.get("binding") or {}
+        if not all(binding.get(k) for k in ("account_ref", "round_id")):
+            return None
+        try:
+            return read_history(self.runtime, work, self._account_label(), refresh=True)
+        except Exception:
+            return None
+
     def _company_name(self):
         legacy = self.page.locator("main > content > .company-container .company-name")
         if legacy.count() == 1 and legacy.first.is_visible():
@@ -305,11 +317,11 @@ class LiepinDelivery:
             dialog, current = self._resume_dialog(work, may_open=False)
             if current != self.prepared_choice:
                 raise BrowserWorkError("liepin_resume_selection_changed", "The selection changed before submission; no final click was made.")
+            history = self._history_or_none(work)
             checkpoint = {"binding": work["binding"], "nonce": work["nonce"], "choice": current,
                           "selected": work["task"]["attachment_reference"], "observed_at": rounds.utc_now(),
                           "prior_resume_cards": self._conversation(work)["resume_cards"],
-                          "prior_history_total": read_history(
-                              self.runtime, work, self.identity["account_label"], refresh=True)["total"]}
+                          "prior_history_total": history["total"] if history else None}
             state.save_json(path, checkpoint)
             # Persist intent and actual checked choice before this single click.
             dialog.get_by_role("button", name="立即投递", exact=True).click()
@@ -334,10 +346,7 @@ class LiepinDelivery:
                     "attachment_reference": checkpoint["selected"], "attachment_selection_verified": True}}
             # Headhunter conversations do not post a resume card. The official
             # application record is the authoritative receipt for this action.
-            try:
-                history = read_history(self.runtime, work, self.identity["account_label"], refresh=True)
-            except BrowserWorkError:
-                history = None
+            history = self._history_or_none(work)
             if history is not None and work["binding"]["job_id"] in history["entries"]:
                 return {"outcome": "success", "evidence": {**self.identity, **conversation,
                     "resume_state": "sent", "resume_reference": checkpoint["choice"]["resume_reference"],
