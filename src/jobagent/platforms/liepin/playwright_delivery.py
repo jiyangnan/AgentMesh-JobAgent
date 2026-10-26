@@ -77,9 +77,12 @@ class LiepinDelivery:
         try:
             self._prepare(work)
         except BrowserWorkError:
-            if work.get("state") == "ready":
+            read_only = (work.get("action") in {"inspect_delivery", "inspect_resume_selection"}
+                         and not work.get("side_effect"))
+            if work.get("state") == "ready" and not read_only:
                 raise
-            # Reconciliation cannot reissue the action here; execute settles it.
+            # A read-only inspection may settle through execute, and a
+            # reconciliation cannot reissue the action here.
 
     def _prepare(self, work):
         if work["action"] not in {"inspect_session", "inspect_delivery", "inspect_resume_selection", "open_communication", "prepare_resume", "submit_resume", "send_greeting"}:
@@ -304,7 +307,9 @@ class LiepinDelivery:
                 raise BrowserWorkError("liepin_resume_selection_changed", "The selection changed before submission; no final click was made.")
             checkpoint = {"binding": work["binding"], "nonce": work["nonce"], "choice": current,
                           "selected": work["task"]["attachment_reference"], "observed_at": rounds.utc_now(),
-                          "prior_resume_cards": self._conversation(work)["resume_cards"]}
+                          "prior_resume_cards": self._conversation(work)["resume_cards"],
+                          "prior_history_total": read_history(
+                              self.runtime, work, self.identity["account_label"], refresh=True)["total"]}
             state.save_json(path, checkpoint)
             # Persist intent and actual checked choice before this single click.
             dialog.get_by_role("button", name="立即投递", exact=True).click()
@@ -314,7 +319,7 @@ class LiepinDelivery:
                 or checkpoint.get("selected") != work["task"].get("attachment_reference")
                 or checkpoint.get("choice", {}).get("resume_reference") != work["task"]["resume_reference"]):
             raise BrowserWorkError("liepin_submission_checkpoint_missing", "Preserve the attempted submission; its checked pre-submit choice is unavailable.")
-        deadline = time.monotonic() + (12 if may_act else 0)
+        deadline = time.monotonic() + (30 if may_act else 0)
         while True:
             conversation = self._conversation(work)
             prior = checkpoint["prior_resume_cards"]
@@ -325,6 +330,19 @@ class LiepinDelivery:
                 return {"outcome": "success", "evidence": {**self.identity, **conversation,
                     "resume_state": "sent", "resume_reference": checkpoint["choice"]["resume_reference"],
                     "receipt_kind": "resume_card", "receipt_checked": True,
+                    "submission_mode": checkpoint["choice"]["submission_mode"],
+                    "attachment_reference": checkpoint["selected"], "attachment_selection_verified": True}}
+            # Headhunter conversations do not post a resume card. The official
+            # application record is the authoritative receipt for this action.
+            try:
+                history = read_history(self.runtime, work, self.identity["account_label"], refresh=True)
+            except BrowserWorkError:
+                history = None
+            if history is not None and work["binding"]["job_id"] in history["entries"]:
+                return {"outcome": "success", "evidence": {**self.identity, **conversation,
+                    "resume_state": "sent", "resume_reference": checkpoint["choice"]["resume_reference"],
+                    "receipt_kind": "application_history", "receipt_checked": True,
+                    "history_checked": True, "history_total": history["total"],
                     "submission_mode": checkpoint["choice"]["submission_mode"],
                     "attachment_reference": checkpoint["selected"], "attachment_selection_verified": True}}
             if time.monotonic() >= deadline:
@@ -370,7 +388,9 @@ class LiepinDelivery:
         try:
             return self._execute(work, may_act=may_act)
         except Exception as exc:
-            if may_act:
+            read_only_settle = (not work.get("side_effect")
+                                and work.get("action") in {"inspect_delivery", "inspect_resume_selection"})
+            if may_act and not read_only_settle:
                 raise
             # The action was attempted earlier and reconciliation cannot verify
             # it. Settle as terminal unresolved: never resend, never report a
@@ -378,11 +398,19 @@ class LiepinDelivery:
             job = work["task"].get("job") or {}
             identity = self.identity or {}
             error = (exc.payload.get("error") if isinstance(exc, BrowserWorkError) else type(exc).__name__)
+            try:
+                runtime_evidence = self.runtime.evidence(work)
+            except Exception:
+                runtime_evidence = {}
             return {"outcome": "unresolved", "evidence": {
+                **runtime_evidence,
                 **identity,
+                "account_label": identity.get("account_label") or self.runtime.session.get("accounts", {}).get("liepin", ""),
+                "login_state": "authenticated",
                 "job_id": str(work["binding"].get("job_id") or identity.get("job_id") or ""),
                 "job_url": job.get("url") or identity.get("job_url", ""),
                 "title": job.get("title") or identity.get("title", ""),
+                "observation": "Read-only reconciliation could not verify the approved job identity.",
                 "receipt_checked": True, "submission_attempted": False,
                 "reconciliation_error": error or "unknown"}}
 

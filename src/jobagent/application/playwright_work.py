@@ -287,7 +287,14 @@ def run(work_id: str, *, max_steps: int = 1):
                         raise
                     pace(session())
                     if work["state"] == "ready" or not work["side_effect"]:
-                        work = store.begin_work(work_id, native._binding())
+                        try:
+                            work = store.begin_work(work_id, native._binding())
+                        except store.BrowserWorkError as exc:
+                            # Read-only work that exhausted its observation budget
+                            # may still produce one final observation receipt.
+                            if work["side_effect"] or exc.payload.get("error") != "browser_work_observation_limit":
+                                raise
+                            work = store.pending_work(native._binding())
                     else:
                         work = store.pending_work(native._binding())
                     may_act = bool(work.get("execution_permitted"))
