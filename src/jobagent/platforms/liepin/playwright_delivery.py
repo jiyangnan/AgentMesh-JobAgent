@@ -43,9 +43,14 @@ class LiepinDelivery:
         control = self._chat_control(job_id)
         for attempt in range(2):
             try:
-                # A slow page or transient overlay can defeat the default 12s
-                # action timeout. Opening a conversation is idempotent and sends
-                # no message, so one bounded retry is safe.
+                # The account dropdown in the header covers the apply box once
+                # the pointer has visited that area, and hovering the chat
+                # button keeps it open. Dismiss it and move away first.
+                self.page.keyboard.press("Escape")
+                self.page.mouse.move(4, 4)
+                self.page.wait_for_timeout(150)
+                control.evaluate("el => el.scrollIntoView({block: 'center', inline: 'center'})")
+                self.page.wait_for_timeout(150)
                 control.click(timeout=30000)
                 return
             except Exception:
