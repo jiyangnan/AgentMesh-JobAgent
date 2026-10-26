@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.26] - 2026-10-26
+
+### Fixed
+
+- Dismiss the open Liepin account dropdown and move the pointer away before clicking the chat control. The dropdown covers the apply box while the pointer visits the header, so the click was refused as covered even with a long timeout. The control is also centered in the viewport first.
+
 ## [0.6.25] - 2026-10-26
 
 ### Fixed
