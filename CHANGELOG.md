@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.27] - 2026-10-27
+
+### Fixed
+
+- Verify a Liepin resume submission against the official application record when the conversation does not post a resume card. Headhunter conversations accept the application as the authoritative receipt, so the submission is no longer reported as unconfirmed.
+- Let a read-only delivery inspection settle safely when the approved identity cannot be verified, instead of leaving the work unavailable forever or exhausting its observation budget.
+- Allow one final read-only observation receipt after a work exhausts its observation attempts, so exhausted inspections close instead of blocking the platform.
+
 ## [0.6.26] - 2026-10-26
 
 ### Fixed
