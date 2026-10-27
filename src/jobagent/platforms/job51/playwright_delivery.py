@@ -124,6 +124,17 @@ class Job51Delivery:
         self.preflight=None
 
     def prepare(self,work):
+        try:
+            return self._prepare(work)
+        except BrowserWorkError:
+            read_only=(work.get('action') in {'inspect_delivery','inspect_resume_selection'}
+                       and not work.get('side_effect'))
+            if work.get('state')=='ready' and not read_only:
+                raise
+            # A read-only inspection may settle through execute, and a
+            # reconciliation cannot reissue the action here.
+
+    def _prepare(self,work):
         if work['action'] not in {'inspect_session','inspect_delivery','inspect_resume_selection','submit_resume'}:
             raise BrowserWorkError('job51_action_not_validated','This action is not supported by the packaged 51Job executor.')
         target=work
@@ -184,6 +195,32 @@ class Job51Delivery:
                 'resume_selection_verified':True,'submission_attempted':False}
 
     def execute(self,work,*,may_act):
+        try:
+            return self._execute(work,may_act=may_act)
+        except Exception as exc:
+            read_only_settle=(not work.get('side_effect')
+                              and work.get('action') in {'inspect_delivery','inspect_resume_selection'})
+            if may_act and not read_only_settle:
+                raise
+            # The action was attempted earlier and reconciliation cannot verify
+            # it. Settle as terminal unresolved: never resend, never report a
+            # delivery, and never leave the platform blocked forever.
+            job=work['task'].get('job') or {}
+            identity=self.identity or {}
+            error=(exc.payload.get('error') if isinstance(exc,BrowserWorkError) else type(exc).__name__)
+            try: runtime_evidence=self.runtime.evidence(work)
+            except Exception: runtime_evidence={}
+            return {'outcome':'unresolved','evidence':{**runtime_evidence,**identity,
+                'account_label':identity.get('account_label') or self.runtime.session.get('accounts',{}).get('51job',''),
+                'login_state':'authenticated',
+                'job_id':str(work['binding'].get('job_id') or identity.get('job_id') or ''),
+                'job_url':job.get('url') or identity.get('job_url',''),
+                'title':job.get('title') or identity.get('title',''),
+                'observation':'Read-only reconciliation could not verify the approved job application.',
+                'receipt_checked':True,'submission_attempted':False,
+                'reconciliation_error':error or 'unknown'}}
+
+    def _execute(self,work,*,may_act):
         if work['action']=='inspect_session':return {'outcome':'success','evidence':self.identity}
         if work['action'] in {'inspect_delivery','inspect_resume_selection'}:
             return {'outcome':'success','evidence':self._inspect(work)}

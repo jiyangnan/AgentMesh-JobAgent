@@ -29,6 +29,8 @@ function job51BoundRows(nodes) {
     const id=String(visible.jobId||''), row=byId.get(id);
     const title=clean(node.querySelector('.jname')?.getAttribute('title') || node.querySelector('.jname')?.textContent);
     const company=clean(node.querySelector('.cname')?.getAttribute('title') || node.querySelector('.cname')?.textContent);
+    const areaText=clean(node.querySelector('.area')?.textContent);
+    const rowArea=clean(row?.jobAreaString);
     let url; try { url=new URL(row?.jobHref); } catch (_) {}
     // Campus-recruiting cards are a different product on the official campus
     // host; they are out of scope for this social-recruiting search.
@@ -37,7 +39,7 @@ function job51BoundRows(nodes) {
         || title!==clean(row.jobName) || title!==clean(visible.jobTitle)
         || company!==clean(row.fullCompanyName)
         || clean(node.querySelector('.sal')?.textContent)!==clean(row.provideSalaryString)
-        || clean(node.querySelector('.area')?.textContent)!==clean(row.jobAreaString)
+        || (areaText!==rowArea && !(areaText==='远程办公' && !rowArea))
         || !url || url.protocol!=='https:' || url.hostname!=='jobs.51job.com'
         || url.port || url.username || url.password
         || !new RegExp('^/(?:[^/]+/)?'+id+'\\.html$').test(url.pathname)) {
