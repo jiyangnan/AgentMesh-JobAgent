@@ -85,7 +85,10 @@ def test_lost_or_wrong_receipt_is_not_retried(chrome,monkeypatch,tmp_path,fault)
         facts,work=fixture(runtime,monkeypatch,tmp_path)
         adapter=Job51Delivery(runtime);adapter.prepare(work);facts[fault]=True
         with pytest.raises(BrowserWorkError,match='no second click'):adapter.execute(work,may_act=True)
-        with pytest.raises(BrowserWorkError,match='no second click'):adapter.execute(work,may_act=False)
+        settled=adapter.execute(work,may_act=False)
+        assert settled['outcome']=='unresolved'
+        assert settled['evidence']['submission_attempted'] is False
+        assert settled['evidence']['receipt_checked'] is True
         assert facts['submits']==1
 
 
@@ -105,7 +108,9 @@ def test_missing_checkpoint_cannot_create_or_claim_delivery(chrome,monkeypatch,t
     with PlaywrightRuntime(chrome) as runtime:
         facts,work=fixture(runtime,monkeypatch,tmp_path)
         adapter=Job51Delivery(runtime);adapter.prepare(work)
-        with pytest.raises(BrowserWorkError,match='original preflight'):adapter.execute(work,may_act=False)
+        settled=adapter.execute(work,may_act=False)
+        assert settled['outcome']=='unresolved'
+        assert settled['evidence']['reconciliation_error']=='job51_checkpoint_missing'
         assert facts['submits']==0
 
 
