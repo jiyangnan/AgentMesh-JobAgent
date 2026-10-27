@@ -22,6 +22,7 @@ function job51BoundRows(nodes) {
     byId.set(id,row);
   }
   const result=new Map(); let invalid=0;
+  const excluded=new Set();
   for (const node of nodes) {
     let visible={};
     try { visible=JSON.parse(node.querySelector('[sensorsdata]')?.getAttribute('sensorsdata')||'{}'); } catch (_) {}
@@ -29,6 +30,9 @@ function job51BoundRows(nodes) {
     const title=clean(node.querySelector('.jname')?.getAttribute('title') || node.querySelector('.jname')?.textContent);
     const company=clean(node.querySelector('.cname')?.getAttribute('title') || node.querySelector('.cname')?.textContent);
     let url; try { url=new URL(row?.jobHref); } catch (_) {}
+    // Campus-recruiting cards are a different product on the official campus
+    // host; they are out of scope for this social-recruiting search.
+    if (url && url.hostname==='campus.51job.com') { excluded.add(id); continue; }
     if (!row || duplicates.has(id) || !/^\d+$/.test(id) || !title || !company
         || title!==clean(row.jobName) || title!==clean(visible.jobTitle)
         || company!==clean(row.fullCompanyName)
@@ -51,7 +55,7 @@ function job51BoundRows(nodes) {
       companySize:row.companySizeString, industryName:row.coIndustryText,
       cardSource:'bound_search_card', fullDescriptionSource:jd?'jobDescribe':null});
   }
-  return {rows:result,invalid};
+  return {rows:result,invalid,excluded};
 }
 """
 

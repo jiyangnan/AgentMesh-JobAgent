@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.28] - 2026-10-27
+
+### Fixed
+
+- Exclude campus-recruiting cards on the official campus.51job.com host from the social-recruiting collection instead of counting them as invalid coverage. One campus card used to fail the whole 51Job page and block discovery.
+
 ## [0.6.27] - 2026-10-27
 
 ### Fixed
