@@ -2,6 +2,13 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.29] - 2026-10-27
+
+### Fixed
+
+- Accept a remote-work card whose visible area is 远程办公 while the structured area field is empty, so one remote job no longer fails the whole 51Job page.
+- Let a 51Job delivery inspection settle safely when the approved identity cannot be verified, instead of leaving the work ready and blocking the remaining authorized jobs.
+
 ## [0.6.28] - 2026-10-27
 
 ### Fixed
