@@ -56,6 +56,7 @@ def build_job51_snapshot_script(limit: int = 20) -> str:
         const sensorsNode = card.querySelector('[sensorsdata]');
         const sensors = parseSensors(sensorsNode);
         const jobId = clean(sensors.jobId || card.getAttribute('data-job-id') || '');
+        if (bound?.excluded?.has(jobId)) continue;
         const rawText = clean(card.innerText || card.textContent);
         if (!jobId && !rawText) continue;
         const key = jobId || rawText.slice(0, 120);
