@@ -90,6 +90,16 @@ BrowserWork nonce/binding 及投递授权保持原有校验。
 
 ## 安装后的设置交接
 
+macOS／Linux 官方安装器使用 Python 的真实基础解释器创建虚拟环境，不把
+临时 PATH 入口写成长期运行依赖。重装时先验证 `.venv` 可启动、解释器与配置
+指向持久目录且 pip 可用；健康环境保留，损坏或依赖临时目录的环境只重建
+安装目录内生成的 `.venv`。旧环境保存在 `<安装目录>.runtime-backups/`，
+新环境创建或启动验证失败时恢复旧环境。实际基础 Python 位于临时目录时
+停止安装并提示先安装持久 Python，不把这类环境标记为成功。
+
+该修复 preserve `~/.jobagent`、凭据、账号、画像、简历绑定、轮次、任务账本、
+回执和浏览器 profile；不修改业务 schema，也不通过清空资料修复启动故障。
+
 官方安装器每次成功安装、重装或更新后，都输出 `onboarding_handoff`。
 `jobagent onboarding` 仅只读检查本机凭据是否可读取，不联网、不获取业务锁、
 不触发自动升级、迁移、Skill 写入、浏览器工作或计费，也不写入 onboarding 完成标记。

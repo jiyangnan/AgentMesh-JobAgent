@@ -59,3 +59,12 @@ def test_windows_installer_stops_on_native_package_failures_before_marking_succe
     assert text.index(commands[2]) < text.index('Ok "Codex native skill installed"')
     assert "%USERPROFILE%\\Downloads" not in text
     assert "your-resume.pdf" not in text
+
+
+def test_posix_installer_checks_runtime_before_installing_packages():
+    text = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+    check = 'python3 "$INSTALL_DIR/src/jobagent/infra/installer_runtime.py" --install-dir "$INSTALL_DIR"'
+    install = '"$INSTALL_DIR/.venv/bin/python" -m pip install -e "$INSTALL_DIR" --quiet'
+
+    assert text.index(check) < text.index(install) < text.index('ok "CLI installed"')
+    assert (ROOT / 'src/jobagent/infra/installer_runtime.py').is_file()

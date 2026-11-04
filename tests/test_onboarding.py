@@ -339,13 +339,18 @@ def isolated_env(tmp_path):
 @pytest.mark.parametrize('existing,key_present', [(False, False), (True, False), (True, True)])
 def test_real_bash_installer_ends_with_actionable_handoff_without_business_mutation(tmp_path, existing, key_present):
     # Stub only git and dependency installation. Run the actual installer,
-    # actual packaged Skill installer and actual onboarding module offline.
+    # actual Python environment creation, Skill installer and onboarding offline.
     env = isolated_env(tmp_path)
     install = tmp_path / 'client'
     binaries = tmp_path / 'tools'
     binaries.mkdir()
     if existing:
         (install / '.git').mkdir(parents=True)
+        (install / '.venv/bin').mkdir(parents=True)
+        (install / '.venv/bin/python').symlink_to(tmp_path / 'removed-python')
+    runtime = install / 'src/jobagent/infra/installer_runtime.py'
+    runtime.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / 'src/jobagent/infra/installer_runtime.py', runtime)
     state = Path(env['HOME']) / '.jobagent'
     state.mkdir()
     (state / 'sentinel').write_text('preserve existing state')
@@ -355,19 +360,11 @@ def test_real_bash_installer_ends_with_actionable_handoff_without_business_mutat
     git = binaries / 'git'
     git.write_text('#!/bin/sh\nif [ "$1" = clone ]; then mkdir -p "$3/.git"; fi\n')
     git.chmod(0o755)
-    fake_python = binaries / 'python3'
-    fake_python.write_text('#!' + sys.executable + '\n' + '''import os, pathlib, sys
-if sys.argv[1:3] == ['-m', 'venv']:
-    bindir = pathlib.Path(sys.argv[3]) / 'bin'
-    bindir.mkdir(parents=True)
-    (bindir / 'python').symlink_to(sys.executable)
-    pip = bindir / 'pip'
-    pip.write_text('#!/bin/sh\\nexit 0\\n')
-    pip.chmod(0o755)
-else:
-    print('3.11')
-''')
-    fake_python.chmod(0o755)
+    (binaries / 'python3').symlink_to(Path(sys._base_executable).resolve())
+    # Only package downloads are stubbed. Isolated runtime health checks ignore
+    # PYTHONPATH, so they still verify the real pip in the real new environment.
+    (tmp_path / 'python-hooks/pip.py').write_text(
+        "import sys\nassert sys.argv[1] == 'install'\n")
     env.update(PATH=str(binaries) + os.pathsep + env['PATH'],
                JOBAGENT_INSTALL_DIR=str(install), JOBAGENT_BIN_DIR=str(tmp_path / 'bin'))
     result = subprocess.run(['bash', str(ROOT / 'scripts/install.sh')], env=env, text=True,
@@ -380,6 +377,11 @@ else:
     assert handoff['next_suggested'] == ('jobagent doctor env' if key_present else onboarding.INIT_COMMAND)
     assert 'secret-never-print' not in result.stdout + result.stderr
     assert snapshot(state) == before
+    assert ('"repaired": true' in result.stdout) is existing
+    shutil.rmtree(binaries)
+    probe = subprocess.run([str(install / '.venv/bin/python'), '-I', '-c', 'import pip'],
+                           text=True, capture_output=True, timeout=15)
+    assert probe.returncode == 0, probe.stderr
     if not key_present:
         assert '回到当前这段 Agent 对话' in result.stdout.split(marker)[0]
 
