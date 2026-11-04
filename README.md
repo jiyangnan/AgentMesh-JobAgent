@@ -57,6 +57,12 @@ Job Agent uses an AgentMesh360 universal API Key. Registration and API Key creat
 
 ## Install
 
+On macOS/Linux, the installer resolves Python to its persistent installation
+and checks that an existing virtual environment can start. It repairs broken
+or temporary interpreter dependencies while preserving credentials, profiles,
+rounds and browser data. The previous environment is retained beside the
+installation in `<install-dir>.runtime-backups/`.
+
 The installer checks HTTPS connectivity using the installed Python and bundled public roots. If a certificate or network check remains blocked, the Agent follows `jobagent doctor tls` while preserving your existing task. Certificate verification and custom trust settings remain enforced.
 
 ### Built-in browser execution

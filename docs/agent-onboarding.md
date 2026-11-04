@@ -591,6 +591,12 @@ When `/v1/me` is temporarily unreachable, `round status` and a user-confirmed `r
 
 If `jobagent --version` is unavailable, install the official client.
 
+On macOS/Linux, the official installer checks the existing Python environment
+and repairs a broken or temporary interpreter dependency while preserving
+account data and the browser profile. It requires a persistent Python 3.11+
+installation; a temporary Python entry may be used only when it resolves to
+that persistent interpreter. Follow the final setup handoff after repair.
+
 macOS or Linux:
 
 ```bash

@@ -69,16 +69,16 @@ git -C "$INSTALL_DIR" config tar.umask 002
 ok "Repo at $INSTALL_DIR"
 
 # 3. Venv
-if [ ! -d "$INSTALL_DIR/.venv" ]; then
-    info "Creating venv"
-    python3 -m venv "$INSTALL_DIR/.venv"
-fi
+# Run the stdlib-only helper before package installation. It resolves the real
+# base interpreter, checks existing environments and preserves failed repairs.
+info "Checking Python environment"
+python3 "$INSTALL_DIR/src/jobagent/infra/installer_runtime.py" --install-dir "$INSTALL_DIR"
 ok "venv at $INSTALL_DIR/.venv"
 
 # 4. Install package
 info "Installing dependencies (this may take a minute)"
-"$INSTALL_DIR/.venv/bin/pip" install --upgrade pip --quiet
-"$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR" --quiet
+"$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip --quiet
+"$INSTALL_DIR/.venv/bin/python" -m pip install -e "$INSTALL_DIR" --quiet
 ok "CLI installed"
 
 cat > "$INSTALL_DIR/.jobagent-install.json" <<EOF
