@@ -63,7 +63,8 @@ def chrome(tmp_path):
     with log.open("wb") as output:
         process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, env=browser_env)
     try:
-        assert _wait_for_cdp_port(port), (
+        # Hosted Windows runners can take more than 10 seconds on first launch.
+        assert _wait_for_cdp_port(port, max_wait=30.0 if sys.platform == "win32" else 10.0), (
             f"Isolated Chrome did not open CDP: executable={executable!r}, exit={process.poll()}; "
             + log.read_text(encoding="utf-8", errors="replace")[-8000:]
         )
