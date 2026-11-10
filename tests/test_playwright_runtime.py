@@ -70,7 +70,14 @@ def chrome(tmp_path):
         )
         yield {"id": "isolated", "profile_directory": str(profile.resolve()), "port": port}
     finally:
-        process.terminate()
+        if sys.platform == "win32" and process.poll() is None:
+            # Chrome may leave child processes holding the fixture's CDP port.
+            # Kill only this disposable process tree, never shared Chrome.
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=15, check=False)
+        else:
+            process.terminate()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:

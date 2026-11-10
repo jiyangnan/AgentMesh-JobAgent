@@ -187,3 +187,40 @@ def test_explicit_online_selection_records_consent_and_never_submits(chrome,monk
         assert saved[0]['playwright_platform_resume_preferences']['zhilian']['status']=='selection_pending'
         assert saved[-1]['playwright_platform_resume_preferences']['zhilian']['status']=='confirmed'
         assert inventory(runtime,{},account_label='测试账号')[1]['selected']=='我的在线简历'
+
+
+def test_live_search_link_formats_require_official_unambiguous_intent(chrome):
+    from jobagent.platforms.zhilian.selectors import (
+        build_zhilian_keyword_search_script,
+        build_zhilian_search_control_activation_script,
+        build_zhilian_search_transition_script,
+    )
+    scripts = [build_zhilian_keyword_search_script('产品经理', allow_unknown_session=True),
+               build_zhilian_search_control_activation_script('产品经理', method='native_pointer'),
+               build_zhilian_search_transition_script('产品经理', '深圳')]
+    cases = [
+        ('https://www.zhaopin.com/jobs/?jl=765&kw=产品经理', True),
+        ('https://www.zhaopin.com/sou/jl765/kwABCD/', True),
+        ('https://www.zhaopin.com/jobs/?jl=765&kw=其他岗位', False),
+        ('https://www.zhaopin.com/jobs/?jl=765&jl=530&kw=产品经理', False),
+        ('https://www.zhaopin.com/jobs/?jl=765&kw=产品经理&kw=其他岗位', False),
+        ('https://www.zhaopin.com/jobs/?kw=产品经理', False),
+        ('https://www.zhaopin.com/jobs/?jl=765&kw=', False),
+        ('https://example.test/jobs/?jl=765&kw=产品经理', False),
+        ('https://www.zhaopin.com@evil.test/jobs/?jl=765&kw=产品经理', False),
+        ('https://www.zhaopin.com/jobs/extra/?jl=765&kw=产品经理', False),
+    ]
+    with PlaywrightRuntime(chrome) as runtime:
+        runtime.context.route('**/*', lambda route: route.abort())
+        runtime.context.route('https://www.zhaopin.com/shenzhen/', lambda route: route.fulfill(content_type='text/html', body='''<meta charset="utf-8">
+          <div class="search-wrapper"><input class="search-wrapper__input" value="产品经理">
+          <a class="search-wrapper__button" target="_blank" style="display:inline-block">搜索</a></div>'''))
+        page = runtime.context.pages[0]
+        page.goto('https://www.zhaopin.com/shenzhen/')
+        for url, ready in cases:
+            assert page.locator('a').count() == 1, (url, page.url, page.content())
+            page.locator('a').evaluate('(el, href) => el.href = href', url)
+            for script in scripts:
+                result = json.loads(page.evaluate(script))
+                assert result['searchDestinationReady'] is ready, (url, result)
+            assert page.url == 'https://www.zhaopin.com/shenzhen/'
