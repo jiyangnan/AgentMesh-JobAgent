@@ -121,6 +121,10 @@ def _material(binding: dict[str, Any] | None = None, profile: dict[str, Any] | N
 @pytest.fixture(autouse=True)
 def _isolated_state(monkeypatch, tmp_path):
     import jobagent.infra.state as state_mod
+    # Isolate the existing resume-binding state machine; first-use geography
+    # is exercised with real signatures and cloud routes in targeting tests.
+    from jobagent.application import targeting
+    monkeypatch.setattr(targeting, "ensure", lambda **kwargs: None)
 
     monkeypatch.setattr(state_mod, "STATE_DIR", tmp_path, raising=False)
     monkeypatch.setattr(state_mod, "PROFILE_DIR", tmp_path, raising=False)

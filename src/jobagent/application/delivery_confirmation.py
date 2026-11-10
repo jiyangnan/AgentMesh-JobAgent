@@ -148,7 +148,7 @@ def _load_context(
         raise ValueError("The delivery confirmation context is missing.")
     platform = str(context.get("platform") or "")
     review_path = str(context.get("review_path") or "")
-    if platform not in {"boss", "liepin", "zhilian", "51job"} or not review_path:
+    if platform not in {"boss", "liepin", "zhilian", "51job", "linkedin"} or not review_path:
         raise ValueError("The delivery confirmation context is incomplete.")
     review = load_envelope(platform, review_path, reviewed=True)
     from jobagent.application.round_criteria import assert_current

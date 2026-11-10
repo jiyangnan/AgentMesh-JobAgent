@@ -13,12 +13,12 @@ the actual resume receipt and personalized message separately. A preserved
 pre-action ordering failure follows the CLI's offered `work continue` contract;
 an uncertain send remains read-only and is never clicked again.
 
-It supports four independent recruiting-platform workflows:
+After connecting your account, choose the **target work location** before resume preparation or platform login:
 
-1. Boss直聘
-2. 猎聘
-3. 智联招聘
-4. 前程无忧 / 51Job
+- Mainland China: Boss直聘, 猎聘, 智联招聘, 前程无忧 / 51Job.
+- Outside mainland China: LinkedIn native **Easy Apply**, when enabled by the connected service. Employer-site applications are excluded.
+
+Nationality, residence, account billing region and interface language do not select the recruiting platform. Countries, states, cities and metropolitan areas are supported; ambiguous locations or unsupported search distances require your choice.
 
 Each platform is isolated from the others. A page change on one platform does not disable the remaining workflows.
 
@@ -38,12 +38,12 @@ resumes for your explicit choice before the final submission. A platform's
 default attachment is never selected on your behalf; pausing preserves progress.
 
 ```text
-Resume profile
-  -> Boss Discover / signed review / delivery preview / user confirmation / delivery / audit
-  -> Liepin Discover / signed review / delivery preview / user confirmation / delivery / audit
-  -> Zhilian Discover / signed review / delivery preview / user confirmation / delivery / audit
-  -> 51Job Discover / signed review / delivery preview / user confirmation / delivery / audit
-  -> completed round
+Connect account -> confirm target work locations -> prepare/select resume
+  -> mainland targets: Boss -> Liepin -> Zhilian -> 51Job
+  -> outside-mainland targets: LinkedIn Easy Apply
+Each selected platform: login -> discover/match -> prepare application
+  -> complete preview -> user confirmation -> submit -> verify receipt
+  -> Workbench application tracking, resume, interview and offer tools
 ```
 
 One completed Discover covers one platform, collects 30 unique candidates by default (an explicit request can raise the target to 1000), matches the entire collected pool, and costs a fixed 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response remains authoritative for charges and refunds; pre-decision browser failures are not charged, cloud-decision failures are refunded, and retrying the same task does not charge twice.
@@ -154,7 +154,6 @@ The official installer creates a managed installation. Starting with `0.3.0`, ma
 ```bash
 jobagent init --key <your_api_key>
 jobagent doctor env
-jobagent resume analyze --file ~/Downloads/resume.pdf --target-cities <city1> [city2 ...]
 jobagent round start
 ```
 
@@ -172,7 +171,6 @@ the user already chose one. When the user explicitly states a target role, pass
 that exact intent directly:
 
 ```bash
-jobagent resume analyze --file ~/Downloads/resume.pdf --target-role "<user-stated target role>" --target-cities <city1> [city2 ...]
 jobagent round start --target-role "<user-stated target role>"
 ```
 
@@ -234,7 +232,9 @@ listing with confirmation state and the preparation receipt:
 jobagent resume list
 ```
 
-At least one target city is required. A fresh `resume analyze` asks for cities
+Mainland searches require at least one target city. Outside-mainland searches
+use the structured target locations confirmed at round start, including countries,
+states, cities or metropolitan areas. The legacy `resume analyze` command asks for cities
 before the cloud call when none were supplied or saved, preventing a second
 paid analysis just to repair an empty city. An older city-less profile receives
 a structured city-input interaction from `round start`; answer it with repeated

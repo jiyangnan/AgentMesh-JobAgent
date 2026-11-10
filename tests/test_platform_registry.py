@@ -19,12 +19,13 @@ def test_platform_registry_starts_with_boss_available():
     assert platforms[0].delivery_contract.message_max_chars == 100
 
 
-def test_linkedin_is_dropped_in_registry():
+def test_linkedin_registry_requires_server_admission():
     linkedin = next(platform for platform in list_platforms() if platform.key == "linkedin")
 
-    assert linkedin.status == "dropped"
-    assert linkedin.capabilities == []
-    assert "complete vertical chains" in linkedin.notes
+    assert linkedin.status == "available"
+    assert "apply_send" in linkedin.capabilities
+    assert linkedin.delivery_contract.action == "easy_apply_submit"
+    assert "linkedin_easy_apply_version=1" in linkedin.notes
 
 
 def test_liepin_registry_exposes_vertical_chain():
@@ -142,14 +143,14 @@ def test_disabled_platform_health_stops_before_runtime_checks(monkeypatch):
     assert [check.name for check in health.checks] == ["enabled"]
 
 
-def test_unimplemented_platform_health_is_explicit():
+def test_linkedin_health_checks_local_runtime(monkeypatch):
+    monkeypatch.setattr("jobagent.drivers.boss.chrome_manager.find_chrome", lambda: "/fixture/chrome")
     health = check_platform_health("linkedin")
 
     assert health.platform == "linkedin"
-    assert health.status == "dropped"
-    assert health.ok is False
-    assert health.checks[-1].name == "implemented"
-    assert health.checks[-1].ok is False
+    assert health.status == "available"
+    assert health.ok is True
+    assert health.checks[-1].name == "chrome_available"
 
 
 def test_liepin_health_reports_read_only_collect_available(monkeypatch):

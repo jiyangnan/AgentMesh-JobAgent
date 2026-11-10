@@ -124,9 +124,15 @@ _PLATFORMS: tuple[PlatformInfo, ...] = (
     PlatformInfo(
         key="linkedin",
         display_name="LinkedIn",
-        status="dropped",
-        capabilities=[],
-        notes="Dropped by product decision: Job Agent only invests in platforms that can be built as complete vertical chains.",
+        status="available",
+        capabilities=["login", "discover", "apply_review", "apply_send", "audit"],
+        delivery_contract=DeliveryContract(
+            action="easy_apply_submit", resume_source="confirmed_platform_resume",
+            personalized_message="optional_cover_letter", message_max_chars=None,
+            success_evidence=["persistent_applied_state", "exact_job_in_application_history"],
+            unsupported_behaviors=["external_employer_application", "resume_upload"],
+        ),
+        notes="Outside-mainland Easy Apply using the packaged browser. Requires server capability linkedin_easy_apply_version=1; external applications are excluded.",
     ),
 )
 

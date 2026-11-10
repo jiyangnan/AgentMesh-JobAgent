@@ -27,6 +27,7 @@ class CollectionError(RuntimeError):
 class CollectedPage:
     jobs: list[Job]
     exhausted: bool = False
+    evidence: dict[str, Any] | None = None
 
 
 _BOSS_CITY_CODES = {
@@ -69,6 +70,12 @@ def _fallback_id(job: Job) -> str:
 
 def _job_id(platform: str, job: Job) -> str:
     raw = job.raw_data if isinstance(job.raw_data, dict) else {}
+    if platform == "linkedin":
+        from jobagent.platforms.linkedin.collect import detail_id
+        identifier = detail_id(job.url)
+        if not identifier or identifier != raw.get("id"):
+            raise CollectionError("linkedin_detail_identity_mismatch", "Candidate identity must match its current detail URL")
+        return identifier
     if platform == "boss":
         from jobagent.platforms.boss.parser import boss_job_id
 
@@ -109,6 +116,8 @@ def job_to_candidate(platform: str, job: Job) -> dict[str, Any]:
         "security_id": raw.get("securityId") or raw.get("security_id"),
         "jd": raw.get("jobDesc") or raw.get("description"),
     }
+    if platform == "linkedin":
+        candidate["linkedin"] = deepcopy(raw.get("linkedin"))
     return {key: value for key, value in candidate.items() if value is not None}
 
 
@@ -152,7 +161,14 @@ def _collect_web_platform(
     wait_seconds: int,
     login_verification: dict[str, Any] | None = None,
     progress_callback: Callable[..., None] | None = None,
+    excluded_ids: set[str] | None = None,
+    location_resolution: dict[str, Any] | None = None,
+    radius_resolution: dict[str, Any] | None = None,
 ) -> CollectedPage:
+    if platform == "linkedin":
+        return driver.collect_page(query, page, limit, excluded_ids=excluded_ids,
+                                   **({"radius_resolution": radius_resolution} if radius_resolution is not None else {}),
+                                   **({"location_resolution": location_resolution} if location_resolution is not None else {}))
     if platform == "liepin":
         from jobagent.platforms.liepin.collect import LiepinReadOnlyCollector
 
@@ -277,10 +293,33 @@ def collect_from_search_plan(
         # target. The signed snapshot stays fixed across checkpoint resumes.
         seen.update(plan.get("excluded_delivered_ids", []))
     page_fingerprints = deepcopy((resume_progress or {}).get("page_fingerprints", {}))
+    query_observations = deepcopy((resume_progress or {}).get("query_observations", {}))
+    location_resolutions = deepcopy((resume_progress or {}).get("location_resolutions", {}))
+    location_answers = deepcopy((resume_progress or {}).get("location_answers", {}))
+    if platform == "linkedin" and not all(isinstance(value, dict) for value in (query_observations, location_resolutions, location_answers)):
+        raise CollectionError("collection_checkpoint_invalid", "Saved LinkedIn query observations are invalid")
+    if platform == "linkedin":
+        from jobagent.infra.protocol import digest_payload
+        target_keys = {digest_payload(q["location"]) for q in queries}
+        if any(key not in target_keys or not isinstance(value, dict) or value.get("target_digest") != key
+               for key, value in location_resolutions.items()):
+            raise CollectionError("collection_checkpoint_invalid", "Saved native locations belong to another scope")
+        if (resume_progress or {}).get("location_prompt") or (resume_progress or {}).get("radius_prompt"):
+            raise CollectionError("linkedin_location_confirmation_required", "Answer the preserved location card before searching")
     active_fingerprints = repair["page_fingerprints"] if repair is not None else page_fingerprints
     prior_seconds = float((resume_progress or {}).get("elapsed_seconds", 0))
     started = time.monotonic()
     stop_reason = ""
+    if platform == "linkedin" and driver is None:
+        from jobagent.platforms.linkedin.collect import LinkedInCollectionReader
+        reader = LinkedInCollectionReader()
+        try:
+            return collect_from_search_plan(plan, wait_seconds=wait_seconds, page_delay=page_delay, driver=reader,
+                login_verification=login_verification, progress_callback=progress_callback,
+                resume_progress=resume_progress, checkpoint_callback=checkpoint_callback,
+                repair_collection=repair_collection)
+        finally:
+            reader.disconnect()
     driver = driver or create_driver(platform=platform)
 
     def checkpoint() -> None:
@@ -295,6 +334,10 @@ def collect_from_search_plan(
                     "elapsed_seconds": round(prior_seconds + time.monotonic() - started, 3),
                     "stop_reason": stop_reason} if bulk else {}),
                 **({"repair": deepcopy(repair)} if repair is not None else {}),
+                **({"query_observations": deepcopy(query_observations)} if platform == "linkedin" else {}),
+                **({"location_resolutions": deepcopy(location_resolutions), "location_answers": deepcopy(location_answers)}
+                   if platform == "linkedin" else {}),
+                **({"radius_answers": deepcopy((resume_progress or {}).get("radius_answers", {}))} if platform == "linkedin" else {}),
             })
 
     def complete_page(query_index: int, page: int) -> None:
@@ -357,6 +400,8 @@ def collect_from_search_plan(
                             driver,
                             wait_seconds,
                             login_verification,
+                            **({"excluded_ids": seen, "location_resolution": location_resolutions.get(digest_payload(query["location"])), "radius_resolution": plan.get("radius_resolutions", {}).get(query.get("target_key"))}
+                               if platform == "linkedin" else {}),
                         )
                     else:
                         collected_page = _collect_web_platform(
@@ -368,10 +413,14 @@ def collect_from_search_plan(
                             wait_seconds,
                             login_verification,
                             progress_callback,
+                            **({"excluded_ids": seen, "location_resolution": location_resolutions.get(digest_payload(query["location"])), "radius_resolution": plan.get("radius_resolutions", {}).get(query.get("target_key"))}
+                               if platform == "linkedin" else {}),
                         )
                     if isinstance(collected_page, CollectedPage):
                         jobs = collected_page.jobs
                         query_exhausted = collected_page.exhausted
+                        if platform == "linkedin" and collected_page.evidence is not None:
+                            query_observations[f"{query_index}:{page}"] = deepcopy(collected_page.evidence)
                     else:
                         # Keep test adapters and older internal callers source
                         # compatible while public clients roll forward.
@@ -417,6 +466,12 @@ def collect_from_search_plan(
                 checkpoint()
                 if page_delay > 0:
                     time.sleep(page_delay)
+    except CollectionError as exc:
+        if platform == "linkedin":
+            if exc.code in {"linkedin_location_selection_required", "linkedin_radius_selection_required"}:
+                exc.details.update(query_index=query_index, page=page)
+            checkpoint()
+        raise
     except UserActionRequiredError as exc:
         raise CollectionError(
             exc.code,

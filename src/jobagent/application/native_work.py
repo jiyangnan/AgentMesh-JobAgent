@@ -22,14 +22,15 @@ COMMAND_EXECUTION = {
     "lost_response": "Only if the original process/result cannot be recovered, use work status and read-only reconciliation. Never reissue a side-effect permission or click again.",
 }
 MIN_ACTION_INTERVAL_SECONDS = 2.0
-PLATFORMS = ("boss", "liepin", "zhilian", "51job")
+PLATFORMS = ("boss", "liepin", "zhilian", "51job", "linkedin")
 ENTRY_URLS = {
     "boss": "https://www.zhipin.com/",
     "liepin": "https://www.liepin.com/",
     "zhilian": "https://www.zhaopin.com/",
     "51job": "https://www.51job.com/",
+    "linkedin": "https://www.linkedin.com/jobs/",
 }
-HOSTS = {"boss": "zhipin.com", "liepin": "liepin.com", "zhilian": "zhaopin.com", "51job": "51job.com"}
+HOSTS = {"boss": "zhipin.com", "liepin": "liepin.com", "zhilian": "zhaopin.com", "51job": "51job.com", "linkedin":"linkedin.com"}
 RULES = [
     "Use the host's native Computer Use app UI only; no CDP, browser JavaScript, hidden API, or external browser driver.",
     native_window.HOST_TOOL_SCOPE,
@@ -802,6 +803,9 @@ def _validate_delivery(work: dict[str, Any], result: dict[str, Any], e: dict[str
     if e.get("title") != job["title"] and not (
             platform == "boss" and e.get("title") == job["title"] + "（猎头职位）"):
         _error("native_job_identity_mismatch", "The visible title must match the approved job.")
+    if platform == "linkedin":
+        from jobagent.application.linkedin_delivery import validate_result
+        return validate_result(work, result, e)
     from jobagent.application.native_liepin_identity import validate as validate_liepin_identity
     if not (result["outcome"] == "unresolved" and e.get("reconciliation_error")):
         # An unresolved reconciliation receipt states that the attempted action
@@ -953,6 +957,9 @@ def submit(work_id: str, result_path: str, *, _capability=None) -> dict[str, Any
     elif work["action"] == "repair_detail":
         from jobagent.application.native_repair import validate_detail
         validate_detail(work, result)
+    elif work["action"] == "prepare_application":
+        from jobagent.application.linkedin_application import validate_result
+        validate_result(work, result)
     elif "delivery_source" in work["task"]:
         _validate_delivery(work, result, e)
     else:
@@ -1035,6 +1042,11 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
         response = accept_detail(work, result)
         active = rounds.ensure_current_round()
         processed = active.setdefault("native_processed_work", [])
+    elif action == "prepare_application":
+        from jobagent.application.linkedin_application import accept_result
+        accept_result(work, result)
+        active = rounds.ensure_current_round()
+        processed = active.setdefault("native_processed_work", [])
     processed.append(work["work_id"])
     rounds.save_round(active)
     if response:
@@ -1046,6 +1058,10 @@ def _continue(work: dict[str, Any]) -> dict[str, Any]:
 
 def next_work() -> dict[str, Any]:
     active = state.load_json(state.current_round_path()) or {}
+    if active.get("linkedin_recovery"):
+        from jobagent.application.linkedin_recovery import resume
+        resume()
+        active = rounds.ensure_current_round()
     if active.get("playwright_migration_pending"):
         from jobagent.application import playwright_work
         return playwright_work.migrate(confirmed=True)
@@ -1103,6 +1119,11 @@ def next_work() -> dict[str, Any]:
     if active["platforms"][platform].get("native_delivery") and workflow["platforms"][platform]["status"] != "sent":
         return _delivery_next(platform)
     status = workflow["platforms"][platform]["status"]
+    if status == "sent":
+        # Preparation may retain its resume options for explicit recovery.
+        # Once delivery is terminal, continuing must audit the existing list;
+        # replaying preparation here would overwrite its signed authorization.
+        return {"ok": True, "workflow": workflow, "next_suggested": workflow["next_suggested"]}
     if (active.get("collection_executor") == "cdp_readonly"
             and not active.get("native_review")
             and status in {"pending", "active", "blocked", "login_verified"}):
@@ -1117,12 +1138,12 @@ def next_work() -> dict[str, Any]:
         if active.get("native_review", {}).get("platform") == platform:
             from jobagent.application.native_repair import prepare_review
             response = prepare_review(**active["native_review"])
-            return present(response["work"]) if response.get("work") else response
+            return present(response["work"]) if response.get("work") and response.get("executor") != "playwright" else response
         return request_discovery(platform)
     if active.get("native_review", {}).get("platform") == platform:
         from jobagent.application.native_repair import prepare_review
         response = prepare_review(**active["native_review"])
-        return present(response["work"]) if response.get("work") else response
+        return present(response["work"]) if response.get("work") and response.get("executor") != "playwright" else response
     # Review and final confirmation remain the existing product interaction.
     return {"ok": True, "workflow": workflow, "next_suggested": workflow["next_suggested"]}
 
@@ -1167,6 +1188,8 @@ def start_delivery(platform: str, *, input_path: str | None, preview_id: str | N
 
 def _legacy_history(platform: str, url: str, job_id: str) -> bool:
     """Any past action requires receipt reconciliation before a new side effect."""
+    if platform == "linkedin":
+        return False  # No legacy LinkedIn executor; the shared work ledger is authoritative.
     name = {"boss": "audit_log.json", "liepin": "liepin_audit_log.json", "zhilian": "zhilian_audit_log.json", "51job": "job51_audit_log.json"}[platform]
     path = state.STATE_DIR / name
     if not path.exists():
@@ -1202,6 +1225,9 @@ def _legacy_history(platform: str, url: str, job_id: str) -> bool:
 
 
 def _delivery_next(platform: str) -> dict[str, Any]:
+    if platform == "linkedin":
+        from jobagent.application.linkedin_delivery import next_delivery
+        return next_delivery()
     binding = _binding(platform)
     pending = store.pending_work(binding)
     if pending:

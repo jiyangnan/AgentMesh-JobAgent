@@ -149,7 +149,7 @@ After the installation/account handoff, use this loop:
    - `ask`: display the product's complete card and all delivery-preview rows,
      including unknown filtering evidence and coverage notices. Wait for an
      actual answer, then use the exact interaction ID. An answer JSON file may
-     contain only `choice`, `resume_id`, `attachment_id`, `target_roles`, `target_cities` and/or
+     contain only `choice`, `resume_id`, `attachment_id`, `target_roles`, `target_cities`, `target_locations` and/or
      `exclude_indices`, as allowed by this card. Defaults are recommendations.
      If cards are unavailable in the current surface, relay the exact fallback.
    - `handoff`: explain the returned URL, user task, how to return to this same
@@ -163,7 +163,7 @@ After the installation/account handoff, use this loop:
    - `wait`: wait for the returned interval and query that same operation.
    - `blocked`: relay the typed cause and exact recovery. Unknown results remain
      unresolved; never guess success, rewrite state or create a replacement task.
-   - `done`: report its scope. Only `scope=round` means the four-platform round
+   - `done`: report its scope. Only `scope=round` means the confirmed platform queue
      is complete; a setup or command result is not the end of a requested round.
 
 After a delivery batch, report the verified counts and display the complete
@@ -259,13 +259,42 @@ offers the missing step; it does not itself permit a browser action. Preserve an
 replay an identical receipt after a lost response. Never reset the old nonce or
 observation count, cancel delivery, or start a replacement round to unblock it.
 
+New job-search setup records target work geography after account verification,
+before directional resume preparation or platform login. If the user already
+named a country, state/province, city or metro area, include that explicit target
+in `criteria.targeting.locations`; do not ask a duplicate region question.
+Each location has a readable `label`, explicit `market` (`mainland_china` or
+`outside_mainland_china`) and `kind`; use the installed contract for optional
+country/territory code and range fields. Missing targets return a `target_region`
+card, followed by `target_locations` only if still needed. Preserve the exact
+interaction ID, actual answer and continuation. Structured `target_locations`
+answers are arrays of these location objects, not invented browser identifiers.
+
+Target work location is independent of nationality, residence, account/billing
+region and interface language. Country/state/city targets do not require a
+three-level form. Use `--language en|zh-CN|ja|ko` on workflow submission or round
+setup for an explicit language preference; English is the default. Mainland
+targets use the existing four-platform queue; outside-mainland targets map to
+LinkedIn. The signed target plan describes routing only and grants no search,
+payment or delivery permission. LinkedIn requires the connected service to
+advertise `linkedin_easy_apply_version=1`. If unavailable, preserve the target
+and task; do not fall back to mainland platforms or host browsing. LinkedIn
+uses native Easy Apply only: the CLI prepares observed form pages, requests
+missing facts and an existing resume, then presents the complete application
+for confirmation. Never infer work authorization, consent or personal statements.
+For location or radius cards, present the actual choices and use the returned
+response command (or an answer file); never round a distance silently. A changed
+form or attachment requires preparation and a fresh full preview. An uncertain
+submission resumes receipt reconciliation without another submit click. Existing active rounds and pre-upgrade setup cards retain their
+original continuation; do not insert a new region card into an unresolved send.
+
 The input shape for a new request is `{"request_id":"...","criteria":{...}}`.
-Criteria can contain explicitly stated `target_roles`, `target_cities`, `salary`
+Criteria can contain explicitly stated `target_roles`, `target_cities`, `targeting`, `salary`
 and `company`. Read the installed contract for supported fields; never add
 arbitrary commands or success receipts. Only `round start` creates a round.
 Installation alone authorizes setup checks, not a paid analysis or new round.
 
-All hosts follow Boss -> Liepin -> Zhilian -> 51Job as complete vertical chains:
+Mainland rounds follow Boss -> Liepin -> Zhilian -> 51Job as complete vertical chains:
 login -> resume-sync confirmation -> credit check -> discover -> signed review ->
 complete preview -> separate platform confirmation -> send -> audit.
 
@@ -339,8 +368,8 @@ original recovery continuation instead of starting a separate setup flow.
 A setup turn ends with a clear user handoff (including the return instruction),
 a concrete recovery blocker, or verified readiness plus the next user choice.
 An install alone does not authorize a new round, paid analysis or delivery.
-Preserve existing rounds and confirmations. All later platform actions retain
-Boss -> Liepin -> Zhilian -> 51Job order and final-list confirmation.
+Preserve existing rounds and confirmations. All later platform actions follow the signed target queue and final-list confirmation.
+Mainland targets retain Boss -> Liepin -> Zhilian -> 51Job; other targets use LinkedIn.
 
 ## Start or resume
 
@@ -359,7 +388,7 @@ reports `local_snapshot`, say the data is this machine's last CLI snapshot and
 may be outdated; if `resume_center_unavailable`, tell the user the online
 resume center is not enabled. Do not guess from local files instead.
 
-The platform order is Boss -> Liepin -> Zhilian -> 51Job. Complete the current
+Follow the signed target queue. For mainland jobs the order is Boss -> Liepin -> Zhilian -> 51Job; outside mainland China use LinkedIn. Complete the current
 platform's login, discovery, signed review, full preview, confirmation, delivery
 and audit before entering the next platform. Do not batch-login platforms.
 Only use target cities and roles confirmed by this user, not examples or the

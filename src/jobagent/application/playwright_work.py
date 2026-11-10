@@ -272,6 +272,11 @@ def run(work_id: str, *, max_steps: int = 1):
             else:
                 if work["state"] == "ready" and work["task"].get("delivery_source"):
                     native._review_for(work)
+                if work["action"] == "prepare_application":
+                    from jobagent.application.linkedin_application import (
+                        assert_current_work,
+                    )
+                    assert_current_work(work)
                 # Browser connection, profile and preconditions are read-only. If
                 # they fail, do not consume a never-issued external action intent.
                 if runtime is None:
@@ -281,6 +286,12 @@ def run(work_id: str, *, max_steps: int = 1):
                     try:
                         adapter.prepare(work)
                     except store.BrowserWorkError as exc:
+                        if work["binding"]["platform"] == "linkedin":
+                            from jobagent.application.linkedin_recovery import recover_change
+                            recovered = recover_change(work, exc.payload.get("error"))
+                            if recovered is not None:
+                                response = recovered
+                                break
                         exc.payload.update(work_id=work_id, action=work["action"],
                             requires_technical_recovery=True, automatic_retry_allowed=False,
                             next_suggested="jobagent work status")

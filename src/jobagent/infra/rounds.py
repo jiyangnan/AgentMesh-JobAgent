@@ -61,8 +61,8 @@ def _round_file(round_id: str):
     return directory / f"{round_id}.json"
 
 
-def _default_platform_state() -> dict[str, dict[str, Any]]:
-    return {platform: {"status": "pending"} for platform in DEFAULT_PLATFORM_ORDER}
+def _default_platform_state(order=None) -> dict[str, dict[str, Any]]:
+    return {platform: {"status": "pending"} for platform in (DEFAULT_PLATFORM_ORDER if order is None else order)}
 
 
 def ensure_current_round() -> dict[str, Any]:
@@ -91,18 +91,28 @@ def _create_round(
     *,
     interaction_receipt: dict[str, Any] | None = None,
     resume_binding: dict[str, Any] | None = None,
+    target_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the persisted round state for the explicit start command."""
 
     round_id = new_round_id()
     now = utc_now()
+    platform_order = list(DEFAULT_PLATFORM_ORDER)
+    if (intent or {}).get("targeting") is not None:
+        if target_plan is None:
+            raise ValueError("A verified target plan is required for this new round")
+        from jobagent.application.targeting import verify_plan
+        target_plan = verify_plan(target_plan, intent["targeting"])
+        if target_plan["routing"]["ready"] is not True:
+            raise ValueError("Target geography is incomplete")
+        platform_order = target_plan["routing"]["platform_order"]
     state: dict[str, Any] = {
         "schema_version": ROUND_SCHEMA_VERSION,
         "round_id": round_id,
         "status": "active",
         "created_at": now,
         "updated_at": now,
-        "platform_order": list(DEFAULT_PLATFORM_ORDER),
+        "platform_order": platform_order,
         "browser_executor": DEFAULT_BROWSER_EXECUTOR,
         "collection_executor": "cdp_readonly",
         "delivery_executor": DEFAULT_BROWSER_EXECUTOR,
@@ -115,8 +125,10 @@ def _create_round(
             "source": "internal_compatibility",
             "confirmed_at": now,
         },
-        "platforms": _default_platform_state(),
+        "platforms": _default_platform_state(platform_order),
     }
+    if target_plan is not None:
+        state["target_plan"] = target_plan
     if resume_binding and resume_binding.get("id"):
         state["resume_binding"] = resume_binding
     if interaction_receipt is not None:
@@ -142,6 +154,8 @@ def attach_round_resume_binding(
         return None
     current["resume_binding"] = binding
     if intent is not None:
+        if (current.get("intent") or {}).get("targeting") is not None:
+            intent = {**intent, "targeting": current["intent"]["targeting"]}
         current["intent"] = intent
     current["updated_at"] = utc_now()
     save_round(current)
@@ -164,6 +178,7 @@ def start_new_round(
     *,
     interaction_receipt: dict[str, Any] | None = None,
     resume_binding: dict[str, Any] | None = None,
+    target_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Start a round explicitly, or return the already-active round."""
     current = load_json(current_round_path())
@@ -182,7 +197,7 @@ def start_new_round(
             )
         return active
     return _create_round(
-        intent, interaction_receipt=interaction_receipt, resume_binding=resume_binding
+        intent, interaction_receipt=interaction_receipt, resume_binding=resume_binding, target_plan=target_plan
     )
 
 
@@ -276,7 +291,9 @@ def _same_intent(current: Any, requested: dict[str, Any]) -> bool:
     ]
     current_cities = (current or {}).get("target_cities")
     requested_cities = requested.get("target_cities")
-    return current_roles == requested_roles and (not current_cities or not requested_cities or current_cities == requested_cities)
+    return (current_roles == requested_roles
+            and (not current_cities or not requested_cities or current_cities == requested_cities)
+            and (current or {}).get("targeting") == requested.get("targeting"))
 
 
 _PROFILE_REFRESH_SAFE_STATUSES = {"pending", "login_verified", "active", "blocked"}

@@ -2,6 +2,7 @@
 from jobagent.infra import state, cloud_client, protocol, rounds
 from jobagent.infra.account_state import current_account_ref
 from jobagent.infra.delivery_preview import DeliveryPreviewError, preview_required_payload
+from jobagent.infra.linkedin_application import transport_candidates
 
 
 def enabled():
@@ -16,21 +17,21 @@ def _verify(payload, kind, review):
     if (proof.get("protocol_version") != 2 or proof.get("account_ref") != current_account_ref()
             or proof.get("round_id") != active["round_id"] or proof.get("discover_id") != review["discover_id"]
             or proof.get("client_preview_id") != review["delivery_preview"]["preview_id"]
-            or proof.get("candidate_digest") != protocol.digest_payload(review["send_candidates"])
+            or proof.get("candidate_digest") != protocol.digest_payload(transport_candidates(review))
             or proof.get("criteria_revision") != (active.get("round_criteria") or {}).get("criteria_revision", 0)):
         raise ValueError("Workflow delivery receipt context mismatch")
     return payload
 
 
 def register(review):
-    if not enabled():
+    if not enabled() and review.get("platform") != "linkedin":
         return
     active = rounds.ensure_current_round()
     response = cloud_client.workflow_delivery_preview({"round_id": active["round_id"],
         "discover_id": review["discover_id"], "manifest_id": review["manifest"]["manifest_id"],
         "client_preview_id": review["delivery_preview"]["preview_id"],
         "criteria_revision": (active.get("round_criteria") or {}).get("criteria_revision", 0),
-        "candidates": review["send_candidates"],
+        "candidates": transport_candidates(review),
         "promoted_ids": [item["job_id"] for item in review.get("user_overrides", [])],
         "confirm_promote": bool(review.get("user_overrides")),
         "excluded_ids": [str(item.get("id") or item.get("job_id")) for item in review.get("user_delivery_exclusions", [])]})
@@ -38,7 +39,7 @@ def register(review):
 
 
 def answer(review, choice):
-    if not enabled() and not review.get("server_preview"):
+    if not enabled() and not review.get("server_preview") and review.get("platform") != "linkedin":
         return None
     if not review.get("server_preview"):
         raise DeliveryPreviewError(preview_required_payload(review["platform"], review.get("source_path")))
@@ -49,7 +50,7 @@ def answer(review, choice):
 
 
 def assert_authorized(review):
-    if not enabled() and not review.get("server_preview"):
+    if not enabled() and not review.get("server_preview") and review.get("platform") != "linkedin":
         return
     preview = review.get("server_preview") or {}
     authorization = (review.get("delivery_authorization") or {}).get("server_authorization")

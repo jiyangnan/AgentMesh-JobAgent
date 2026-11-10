@@ -67,6 +67,16 @@ class CommandParser(argparse.ArgumentParser):
         raise SystemExit(2)
 
 
+def _add_target_flags(parser):
+    parser.add_argument("--target-region", choices=["mainland_china", "outside_mainland_china", "mixed"],
+                        help="Explicit target job region; never nationality or residence")
+    parser.add_argument("--target-location", action="append", default=[],
+                        help="Confirmed country, state, city or metro; repeat for multiple targets")
+    parser.add_argument("--targeting-file", help="Structured target geography JSON for mixed regions or detailed scopes")
+    parser.add_argument("--language", choices=["en", "zh-CN", "ja", "ko"],
+                        help="User-selected interaction language; independent of job location")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = CommandParser(prog="jobagent", description="AgentMesh 360 Job Agent")
     parser.add_argument("--version", action="version", version=f"jobagent {__version__}")
@@ -79,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         workflow_sub.add_parser(name)
     workflow_submit = workflow_sub.add_parser("submit")
     workflow_submit.add_argument("--input", required=True, help="User intent JSON; never a command or receipt")
+    workflow_submit.add_argument("--language", choices=["en", "zh-CN", "ja", "ko"])
     workflow_advance = workflow_sub.add_parser("advance")
     workflow_advance.add_argument("--action-id", required=True)
     workflow_advance.add_argument("--expected-revision", type=int, required=True)
@@ -119,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--file", "-f", required=True)
     analyze.add_argument("--target-role")
     analyze.add_argument("--target-cities", nargs="*")
+    _add_target_flags(analyze)
     analyze.add_argument("--output", "-o")
     resume_sub.add_parser("list", help="List the online resumes kept in the workbench")
     resume_status = resume_sub.add_parser(
@@ -177,6 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_respond.add_argument("--interaction-id", required=True)
     interaction_respond.add_argument("--answer-file", help="JSON containing only the user's explicit answer fields")
     interaction_respond.add_argument("--attachment-id", help="Exact option ID from the platform resume attachment card")
+    interaction_respond.add_argument("--location-id", help="Exact native location option ID from the LinkedIn search card")
+    interaction_respond.add_argument("--radius-id", help="Exact native distance option ID from the LinkedIn search card")
     interaction_respond.add_argument(
         "--choice",
         choices=[
@@ -198,6 +212,9 @@ def build_parser() -> argparse.ArgumentParser:
             "finish_platform",
             "pause_delivery",
             "continue_platforms",
+            "mainland_china",
+            "outside_mainland_china",
+            "mixed",
         ],
     )
     interaction_respond.add_argument(
@@ -216,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume-id",
         help="Resume id chosen for the round resume-binding confirmation",
     )
+    interaction_respond.add_argument("--target-location", action="append", default=[],
+                                    help="Actual answer to the target-location card")
     interaction_respond.add_argument(
         "--exclude-index",
         action="append",
@@ -227,6 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     delivery_round = sub.add_parser("round", help="View or update the multi-platform round")
     round_sub = delivery_round.add_subparsers(dest="round_command", required=True)
     round_start = round_sub.add_parser("start")
+    _add_target_flags(round_start)
     round_start.add_argument(
         "--accept-suggested",
         action="store_true",
@@ -867,11 +887,30 @@ def _resume_analyze(args: argparse.Namespace) -> dict[str, Any]:
         save_json,
     )
 
+    from jobagent.application import targeting
+    explicit_targets = targeting.from_args(args)
+    setup_request = targeting.request()
+    from jobagent.infra.state import STATE_DIR
+    workflow_request = load_json(STATE_DIR / "workflow.json") or {}
+    if explicit_targets or "targeting" in setup_request or workflow_request.get("intent") is not None:
+        if args.target_cities:
+            from jobagent.application.round_request import remember
+            remember(cities=args.target_cities)
+        import shlex
+        resume_command = ["jobagent", "resume", "analyze", "--file", args.file]
+        if args.target_role:
+            resume_command.extend(["--target-role", args.target_role])
+        if args.output:
+            resume_command.extend(["--output", args.output])
+        guard = targeting.ensure(continuation=shlex.join(resume_command))
+        if guard:
+            return guard
+        targeting.analysis_continuation(consume=True)
     source = Path(args.file).expanduser()
     canonical_profile_path = profile_path()
     output = Path(args.output).expanduser() if args.output else canonical_profile_path
     existing_profile = load_json(canonical_profile_path) or {}
-    target_cities = list(args.target_cities or confirmed_target_cities(existing_profile))
+    target_cities = list(args.target_cities or targeting.request().get("target_cities") or confirmed_target_cities(existing_profile))
     if not target_cities:
         prompt = (
             "当前简历画像还没有目标城市。请告诉我本轮想看的城市，可以填写多个，"
@@ -947,8 +986,15 @@ def _staged_resume_binding() -> dict[str, Any] | None:
 
 
 def _consume_staged_resume_binding() -> None:
-    from jobagent.application.round_resume_binding import clear_pending_binding
+    from jobagent.application.round_resume_binding import clear_pending_binding, load_pending_binding
+    from jobagent.infra import state, rounds
 
+    staged = (load_pending_binding() or {}).get("round_request") or {}
+    active = state.load_json(state.current_round_path()) or {}
+    if (active.get("status") == "active" and staged.get("target_answers")
+            and staged.get("targeting") == (active.get("intent") or {}).get("targeting")):
+        active["target_answers"] = staged["target_answers"]
+        rounds.save_round(active)
     clear_pending_binding()
 
 
@@ -1004,6 +1050,28 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     interaction_id = str(args.interaction_id or "").strip()
+    if getattr(args, "radius_id", None) and (not interaction_id.startswith("linkedin-radius:") or getattr(args, "choice", None)):
+        return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current distance card."}
+    if getattr(args, "location_id", None) and (not interaction_id.startswith("linkedin-location:") or getattr(args, "choice", None)):
+        return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current location card."}
+    from jobagent.application import targeting
+    target_answer = targeting.respond(args)
+    if target_answer is not None:
+        return target_answer
+    from jobagent.application.linkedin_search import respond as respond_linkedin_location
+    location_answer = respond_linkedin_location(args)
+    if location_answer is not None:
+        return location_answer
+    from jobagent.application.linkedin_radius import respond as respond_linkedin_radius
+    radius_answer = respond_linkedin_radius(args)
+    if radius_answer is not None:
+        return radius_answer
+    from jobagent.application.linkedin_application import (
+        respond as respond_linkedin_facts,
+    )
+    facts_answer = respond_linkedin_facts(args)
+    if facts_answer is not None:
+        return facts_answer
     from jobagent.application.native_resume_choice import respond as respond_attachment
     if getattr(args, "attachment_id", None) and any(getattr(args, field, None) for field in
             ("choice", "resume_id", "target_role", "target_city", "exclude_index")):
@@ -1397,10 +1465,15 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "completed_at": utc_now(),
     }
+    target_guard = targeting.ensure()
+    if target_guard:
+        return target_guard
+    intent = targeting.attach_intent(intent)
     created = start_new_round(
         intent,
         interaction_receipt=receipt,
         resume_binding=_staged_resume_binding(),
+        target_plan=targeting.ready_plan(),
     )
     if not created.get("resume_binding") and _staged_resume_binding():
         # The round already existed; attach the staged binding to it — but
@@ -1916,12 +1989,18 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             current = load_json(current_round_path())
             profile = load_json(profile_path()) or {}
             from jobagent.application.round_request import remember, request, pending_setup
+            from jobagent.application import targeting
+            targeting.from_args(args)
             stored_request = request()
             requested_roles = args.target_role or ([] if args.accept_suggested else stored_request.get("target_roles", []))
             requested_cities = args.target_city or stored_request.get("target_cities", [])
             accept_suggested = args.accept_suggested or (not args.target_role and stored_request.get("accept_suggested", False))
             no_binding = args.no_resume_binding or stored_request.get("no_resume_binding", False)
             remember(roles=requested_roles, cities=requested_cities, accept_suggested=accept_suggested, no_binding=no_binding)
+            target_guard = targeting.ensure()
+            if target_guard:
+                return target_guard
+            requested_cities = request().get("target_cities") or requested_cities
             waiting = pending_setup()
             if waiting and not (args.target_role or args.target_city or args.accept_suggested or args.no_resume_binding or args.resume_binding):
                 return waiting
@@ -2120,7 +2199,8 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     "request_preserved": True,
                     "next_suggested": "jobagent round start --target-role <role> --target-city <city>",
                 }
-            created = start_new_round(intent, resume_binding=round_binding)
+            intent = targeting.attach_intent(intent)
+            created = start_new_round(intent, resume_binding=round_binding, target_plan=targeting.ready_plan())
             clear_pending_interaction()
             if round_binding:
                 if not created.get("resume_binding"):

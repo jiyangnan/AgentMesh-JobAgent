@@ -60,7 +60,7 @@ def check_platform_health(
     if platform_info.status == "disabled":
         return PlatformHealth(platform=key, status="disabled", ok=False, checks=checks)
 
-    if key in {"boss", "liepin", "zhilian", "51job"}:
+    if key in {"boss", "liepin", "zhilian", "51job", "linkedin"}:
         from jobagent.drivers.boss.chrome_manager import find_chrome
         from jobagent.platforms.discovery import collect_from_search_plan
 
