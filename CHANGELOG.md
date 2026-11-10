@@ -12,6 +12,7 @@ All notable public Job Agent client changes are documented here.
 
 ### Fixed
 
+- Accept Zhilian’s current official search links while retaining city and keyword checks.
 - Preserve approved application details and verified receipts across interruption and recovery without repeating a submission.
 - Recognize visible Yes/No choices when a form repeats the question in each control's accessible label, while preserving stops for genuinely ambiguous choices.
 - Preserve existing accounts, resumes, browser profiles and in-progress tasks during upgrade. External employer-site applications and new resume uploads remain outside this release.
