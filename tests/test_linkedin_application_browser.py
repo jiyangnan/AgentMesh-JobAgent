@@ -55,9 +55,9 @@ page();
 
 
 @pytest.fixture
-def flow(chrome, tmp_path, monkeypatch, signed_plan):
+def flow(chrome, tmp_path, monkeypatch, signed_plan, request):
     _, _, sign, profile, intent = signed_plan
-    account = "synthetic-owner"
+    account = getattr(request, "param", None) or "acct_linkedin_fixture"
     for name, value in {
         "APP_DIR": tmp_path,
         "STATE_DIR": tmp_path / "state",

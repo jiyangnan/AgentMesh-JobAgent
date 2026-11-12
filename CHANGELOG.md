@@ -2,6 +2,14 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.31] - 2026-11-12
+
+### Fixed
+
+- Restore LinkedIn login, discovery, application and audit commands, including platform selectors and resumable follow-up commands.
+- Include verified LinkedIn outcomes in optional activity reporting while preserving opt-out, offline queues and duplicate protection. Historical applications and unresolved outcomes do not count as new deliveries.
+- Keep PDF parsing on the supported 1.x dependency line for Intel Mac installation.
+
 ## [0.6.30] - 2026-11-12
 
 ### Added

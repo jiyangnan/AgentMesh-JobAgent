@@ -208,6 +208,24 @@ def test_committed_facts_are_deduplicated_per_account_and_platform(bound_analyti
     ]
 
 
+def test_linkedin_uses_same_private_deduplicated_spool(bound_analytics):
+    assert analytics.record_delivery_verified("linkedin", api_key=API_KEY) is True
+    assert analytics.record_delivery_verified("linkedin", api_key=API_KEY) is False
+    data = _spool()
+    assert data["facts"] == ["delivery_verified:linkedin"]
+    assert len(data["events"]) == 1
+    assert data["events"][0]["payload"] == {
+        "platform": "linkedin", "client_release": __version__}
+    assert API_KEY not in json.dumps(data)
+
+
+@pytest.mark.parametrize("flag", ["JOBAGENT_ANALYTICS_DISABLED", "JOBAGENT_ANALYTICS_KILL_SWITCH", "DO_NOT_TRACK"])
+def test_linkedin_respects_opt_out_without_writing(bound_analytics, monkeypatch, flag):
+    monkeypatch.setenv(flag, "1")
+    assert analytics.record_delivery_verified("linkedin", api_key=API_KEY) is False
+    assert not analytics._spool_path(ACCOUNT_REF).exists()
+
+
 def test_pending_fact_from_previous_client_release_remains_readable(bound_analytics):
     analytics.record_jobagent_initialized(api_key=API_KEY)
     spool = _spool()
