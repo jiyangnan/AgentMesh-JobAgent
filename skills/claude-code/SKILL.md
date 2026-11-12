@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on mainland platforms (Boss直聘, 猎聘, 智联招聘 and 51Job) or LinkedIn Easy Apply for jobs outside mainland China. Use for 找工作, 投简历, 简历分析, job matching and recruiter greetings.
-version: 0.6.30
+version: 0.6.31
 ---
 
 # Job Agent

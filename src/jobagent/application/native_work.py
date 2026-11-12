@@ -1441,6 +1441,10 @@ def _record_completed_native_delivery_fact(
                        for w in successful):
                 continue
             evidence = [w["result"].get("evidence", {}) for w in successful]
+            if platform == "linkedin" and any(e.get("prior_application") for e in evidence):
+                # A reconciled historical application is not a new submission,
+                # even when it closes a persisted submit intent successfully.
+                continue
             greeting = str(works[0]["task"]["job"].get("cloud_greeting") or "")
             greeting_sent = any(w["action"] == "send_greeting" for w in successful) or bool(
                 greeting and any(e.get("existing_outgoing_text") == greeting
@@ -1524,7 +1528,14 @@ def audit(platform: str, *, complete: bool = True) -> dict[str, Any]:
 
 def audit_round(platform: str | None = None) -> dict[str, Any]:
     from jobagent.application.delivery import audit_round as legacy_audit
-    legacy = legacy_audit(platform=platform)
+    if platform == "linkedin":
+        # LinkedIn has only native receipts; domestic legacy readers do not
+        # define a LinkedIn log or platform specification.
+        workflow = rounds.round_status()
+        legacy = {"ok": True, "scope": "round", "platforms": {}, "failure_count": 0,
+                  "workflow": workflow, "next_suggested": workflow.get("next_suggested")}
+    else:
+        legacy = legacy_audit(platform=platform)
     current = state.load_json(state.current_round_path()) or {}
     reports = {p: audit(p, complete=False) for p in PLATFORMS
               if (platform is None or p == platform) and current.get("platforms", {}).get(p, {}).get("native_delivery")}

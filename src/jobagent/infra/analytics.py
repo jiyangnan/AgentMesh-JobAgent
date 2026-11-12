@@ -23,7 +23,7 @@ MAX_SPOOL_EVENTS = 25
 
 _INITIALIZED_EVENT = "jobagent_initialized"
 _DELIVERY_EVENT = "delivery_verified"
-_PLATFORMS = frozenset({"boss", "liepin", "zhilian", "51job"})
+_PLATFORMS = frozenset({"boss", "liepin", "zhilian", "51job", "linkedin"})
 _DISABLE_ENV_VARS = (
     "JOBAGENT_ANALYTICS_DISABLED",
     "JOBAGENT_ANALYTICS_KILL_SWITCH",

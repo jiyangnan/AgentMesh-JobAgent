@@ -25,6 +25,7 @@ def work(action, *, side_effect=True, outcome="success", **evidence):
     ("liepin", [work("submit_resume", resume_state="sent"), work("send_greeting")]),
     ("zhilian", [work("submit_resume", resume_state="sent")]),
     ("51job", [work("submit_resume", resume_state="sent")]),
+    ("linkedin", [work("submit_resume", resume_state="sent", prior_application=False)]),
     ("liepin", [work("inspect_delivery", side_effect=False, resume_state="sent"), work("send_greeting")]),
 ])
 def test_only_complete_platform_delivery_records_fact(monkeypatch, platform, records):
@@ -43,6 +44,10 @@ def test_only_complete_platform_delivery_records_fact(monkeypatch, platform, rec
     ("liepin", [work("submit_resume", resume_state="sent")], True),
     ("zhilian", [work("submit_resume", outcome="unresolved")], True),
     ("51job", [work("inspect_delivery", side_effect=False, resume_state="sent")], True),
+    ("linkedin", [work("submit_resume", resume_state="sent")], False),
+    ("linkedin", [work("submit_resume", outcome="unresolved", resume_state="unknown")], True),
+    ("linkedin", [work("inspect_delivery", side_effect=False, resume_state="sent")], True),
+    ("linkedin", [work("submit_resume", resume_state="sent", prior_application=True)], True),
 ])
 def test_incomplete_default_history_and_unresolved_results_do_not_record(
     monkeypatch, platform, records, completed,
@@ -71,8 +76,9 @@ def test_optional_analytics_failure_cannot_fail_delivery(monkeypatch, missing_mo
     native._record_completed_native_delivery_fact("boss", {"job-test": [work("send_greeting")]}, completed=True)
 
 
-@pytest.fixture
-def persisted_batch(monkeypatch, tmp_path):
+@pytest.fixture(params=["zhilian", "linkedin"])
+def persisted_batch(monkeypatch, tmp_path, request):
+    platform = request.param
     home = tmp_path / "home"
     app = home / ".jobagent"
     monkeypatch.setenv("HOME", str(home))
@@ -89,12 +95,12 @@ def persisted_batch(monkeypatch, tmp_path):
     monkeypatch.setattr("jobagent.infra.credentials.load_api_key", lambda: key)
     monkeypatch.setattr(analytics, "schedule_flush", lambda **_kwargs: False)
     monkeypatch.setattr("jobagent.infra.cloud_client.analytics_events", lambda *_a, **_k: pytest.fail("no relay in test"))
-    active = {"round_id": "round-native-test", "platforms": {"zhilian": {"status": "sent"}}}
+    active = {"round_id": "round-native-test", "platforms": {platform: {"status": "sent"}}}
     state.save_json(state.current_round_path(), active)
     monkeypatch.setattr(native.rounds, "round_status", lambda: copy.deepcopy(active))
     monkeypatch.setattr(native.rounds, "complete_platform_after_audit", lambda _p: {
-        **copy.deepcopy(active), "platforms": {"zhilian": {"status": "completed"}}})
-    binding = {"account_ref": account, "round_id": active["round_id"], "platform": "zhilian", "job_id": "job-test"}
+        **copy.deepcopy(active), "platforms": {platform: {"status": "completed"}}})
+    binding = {"account_ref": account, "round_id": active["round_id"], "platform": platform, "job_id": "job-test"}
     item = store.ensure_work(action="submit_resume", side_effect=True, binding=binding,
         task={"job": {"cloud_greeting": ""}, "delivery_source": {"preview_id": "preview-test"}})
     item = store.begin_work(item["work_id"], binding)
@@ -104,30 +110,30 @@ def persisted_batch(monkeypatch, tmp_path):
             "receipt_id": "receipt-test", "nonce": item["nonce"], "binding": binding,
             "outcome": outcome, "evidence": {"resume_state": "sent" if outcome == "success" else "unknown"}})
 
-    return close, analytics._spool_path(account)
+    return close, analytics._spool_path(account), platform
 
 
 def test_audit_records_only_after_persisted_completion_and_is_idempotent(persisted_batch):
-    close, spool = persisted_batch
-    native.audit("zhilian")
+    close, spool, platform = persisted_batch
+    native.audit(platform)
     assert not spool.exists()  # Intent without a receipt is not a delivery.
     close()
-    observed = native.audit("zhilian", complete=False)
+    observed = native.audit(platform, complete=False)
     assert observed["summary"]["resume_submitted"] == 1
     assert not spool.exists()  # A read-only audit cannot create a completion fact.
-    first = native.audit("zhilian")
-    assert first["workflow"]["platforms"]["zhilian"]["status"] == "completed"
+    first = native.audit(platform)
+    assert first["workflow"]["platforms"][platform]["status"] == "completed"
     contents = spool.read_bytes()
     data = json.loads(contents)
-    assert data["facts"] == ["delivery_verified:zhilian"]
+    assert data["facts"] == [f"delivery_verified:{platform}"]
     assert len(data["events"]) == 1
-    native.audit("zhilian")
+    native.audit(platform)
     assert spool.read_bytes() == contents
 
 
 def test_terminal_unresolved_audit_does_not_record_delivery_fact(persisted_batch):
-    close, spool = persisted_batch
+    close, spool, platform = persisted_batch
     close("unresolved")
-    result = native.audit("zhilian")
+    result = native.audit(platform)
     assert result["summary"]["unresolved"] == 1
     assert not spool.exists()

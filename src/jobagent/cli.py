@@ -145,11 +145,11 @@ def build_parser() -> argparse.ArgumentParser:
     platforms_sub = platforms.add_subparsers(dest="platforms_command", required=True)
     platforms_sub.add_parser("status")
     health = platforms_sub.add_parser("health")
-    health.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
+    health.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job", "linkedin"])
     browser = sub.add_parser("browser", help="Inspect the dedicated browser without navigation")
     browser_sub = browser.add_subparsers(dest="browser_command", required=True)
     diagnose = browser_sub.add_parser("diagnose")
-    diagnose.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
+    diagnose.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job", "linkedin"])
     resume_collection = browser_sub.add_parser("resume-collection", help="Resume preserved Boss reads after the user confirms the page has recovered")
     resume_collection.add_argument("--platform", required=True, choices=["boss"])
     resume_collection.add_argument("--confirm", action="store_true", help="Requires the user's explicit confirmation after page recovery")
@@ -278,12 +278,12 @@ def build_parser() -> argparse.ArgumentParser:
     round_update.add_argument("--input", required=True, help="JSON request_id and criteria patch")
     round_update.add_argument("--expected-revision", type=int, required=True)
     round_audit = round_sub.add_parser("audit")
-    round_audit.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job"])
+    round_audit.add_argument("--platform", choices=["boss", "liepin", "zhilian", "51job", "linkedin"])
     round_audit.add_argument("--recent", "-n", type=int, default=20)
     round_audit.add_argument("--details", action="store_true")
     round_audit.add_argument("--failures-only", action="store_true")
     round_skip = round_sub.add_parser("skip")
-    round_skip.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job"])
+    round_skip.add_argument("--platform", required=True, choices=["boss", "liepin", "zhilian", "51job", "linkedin"])
     round_skip.add_argument("--confirm-skip", action="store_true")
 
     for platform, display in (
@@ -291,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("liepin", "猎聘"),
         ("zhilian", "智联招聘"),
         ("51job", "前程无忧 / 51Job"),
+        ("linkedin", "LinkedIn"),
     ):
         platform_parser = sub.add_parser(platform, help=display)
         platform_sub = platform_parser.add_subparsers(dest="platform_command", required=True)
@@ -1811,7 +1812,7 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
         return native_work.request_login(args.platform, diagnose=True)
     if args.command == "round" and args.round_command == "audit":
         active = state.load_json(state.current_round_path()) or {}
-        if any(item.get("native_delivery") for item in active.get("platforms", {}).values()):
+        if args.platform == "linkedin" or any(item.get("native_delivery") for item in active.get("platforms", {}).values()):
             return native_work.audit_round(args.platform)
     if args.command == "platforms" and args.platforms_command == "health":
         active = state.load_json(state.current_round_path()) or {}
@@ -1836,7 +1837,7 @@ def _native_dispatch(args: argparse.Namespace) -> dict[str, Any] | None:
         return native_work.request_discovery(platform)
     if action == "audit":
         active = state.load_json(state.current_round_path()) or {}
-        if active.get("platforms", {}).get(platform, {}).get("native_delivery"):
+        if platform == "linkedin" or active.get("platforms", {}).get(platform, {}).get("native_delivery"):
             return native_work.audit(platform)
         return None
     subcommand = getattr(args, "greet_command", None) or getattr(args, "apply_command", None)
@@ -1863,7 +1864,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return _dispatch_unlocked(args)
     # Serializes only CLI ledger/checkpoint/round transitions. It is deliberately
     # not held while Codex is operating the external native browser UI.
-    if args.command in {"boss", "liepin", "zhilian", "51job", "browser", "work", "round", "interaction", "resume", "init", "account", "workflow"} and not (args.command == "work" and args.work_command == "contract"):
+    if args.command in {"boss", "liepin", "zhilian", "51job", "linkedin", "browser", "work", "round", "interaction", "resume", "init", "account", "workflow"} and not (args.command == "work" and args.work_command == "contract"):
         with command_lock():
             return _dispatch_unlocked(args)
     return _dispatch_unlocked(args)
@@ -1906,7 +1907,7 @@ def _dispatch_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             if followup.get("event") == "delivery_batch_followup" and followup.get("platform") == args.platform:
                 return respond_native_followup(followup["interaction"]["interaction_id"], "finish_platform")
             return followup
-    if args.command in {"boss", "liepin", "zhilian", "51job"}:
+    if args.command in {"boss", "liepin", "zhilian", "51job", "linkedin"}:
         from jobagent.application.native_delivery_followup import pending as native_followup_pending
         followup = native_followup_pending()
         if followup:
@@ -2474,7 +2475,7 @@ def main() -> None:
                 **exc.details,
             }
             if (exc.retryable and exc.details.get("workflow_request_preserved")
-                    and args.command in {"workflow", "round", "interaction", "credits", "doctor", "boss", "liepin", "zhilian", "51job"}):
+                    and args.command in {"workflow", "round", "interaction", "credits", "doctor", "boss", "liepin", "zhilian", "51job", "linkedin"}):
                 # These parsers contain no credential flags. Replay the same
                 # idempotent/read-only request, never init or paid analysis.
                 import shlex
