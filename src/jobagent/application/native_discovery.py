@@ -79,6 +79,11 @@ def validate_job_url(platform: str, url: str, job_id: str) -> str:
     Returns the observed route with irrelevant tracking query/fragment removed.
     IDs may be opaque strings; a route must still contain that exact identifier.
     """
+    if platform == "linkedin":
+        from jobagent.platforms.linkedin.collect import detail_id
+        if detail_id(url) != job_id or not job_id:
+            _fail("native_candidate_route_mismatch", "Candidate must identify the exact LinkedIn job", platform=platform)
+        return f"https://www.linkedin.com/jobs/view/{job_id}/"
     if platform not in _ENTRY_URLS or not isinstance(job_id, str) or not re.fullmatch(candidate_id_pattern(platform), job_id):
         _fail("native_candidate_id_invalid", "Candidate needs an exact platform job ID", platform=platform)
     hosts = {

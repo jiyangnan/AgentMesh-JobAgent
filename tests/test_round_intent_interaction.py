@@ -36,6 +36,11 @@ def _profile() -> dict:
 
 @pytest.fixture
 def isolated_round_state(tmp_path, monkeypatch):
+    # These tests isolate role/city compatibility after the geography gate.
+    # The complete first-use gate and its signed plan have separate tests.
+    from jobagent.application import targeting
+    monkeypatch.setattr(targeting, "ensure", lambda **kwargs: None)
+    monkeypatch.setattr(state, "STATE_DIR", tmp_path)
     profile_path = tmp_path / "profile.json"
     current_path = tmp_path / "current-round.json"
     pending_path = tmp_path / "pending-interaction.json"

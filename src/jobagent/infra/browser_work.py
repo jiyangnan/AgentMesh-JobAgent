@@ -428,8 +428,10 @@ def has_open() -> bool:
         return conn is not None and conn.execute("SELECT 1 FROM works WHERE state != 'closed' LIMIT 1").fetchone() is not None
 
 
-def cancel_unexecuted(work_id, binding) -> dict:
+def cancel_unexecuted(work_id, binding, *, reason="explicit_user_cancellation") -> dict:
     """Cancel only work that can no longer cause a recruiting side effect."""
+    if reason not in {"explicit_user_cancellation", "application_changed"}:
+        raise _error("browser_work_cancellation_invalid", "Unknown cancellation reason")
     work_id, binding = _text(work_id, "work_id"), _binding(binding)
     with _transaction() as conn:
         work = _get(conn, work_id, binding)
@@ -437,7 +439,7 @@ def cancel_unexecuted(work_id, binding) -> dict:
             return work
         if work["side_effect"] and work["state"] != "ready":
             raise _error("browser_work_reconciliation_required", "An issued external action cannot be cancelled; inspect its receipt without clicking again.")
-        result = {"outcome": "cancelled", "reason": "explicit_user_cancellation"}
+        result = {"outcome": "cancelled", "reason": reason}
         conn.execute("UPDATE works SET state = 'closed', result_json = ?, updated_at = ? WHERE work_id = ?",
                      (_canonical(result), _now(), work_id))
         return _get(conn, work_id, binding)

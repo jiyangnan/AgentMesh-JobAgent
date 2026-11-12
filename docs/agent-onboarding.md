@@ -103,7 +103,7 @@ After the installation/account handoff, use this loop:
    - `ask`: display the product's complete card and all delivery-preview rows,
      including unknown filtering evidence and coverage notices. Wait for an
      actual answer, then use the exact interaction ID. An answer JSON file may
-     contain only `choice`, `resume_id`, `attachment_id`, `target_roles`, `target_cities` and/or
+     contain only `choice`, `resume_id`, `attachment_id`, `target_roles`, `target_cities`, `target_locations` and/or
      `exclude_indices`, as allowed by this card. Defaults are recommendations.
      If cards are unavailable in the current surface, relay the exact fallback.
    - `handoff`: explain the returned URL, user task, how to return to this same
@@ -117,7 +117,7 @@ After the installation/account handoff, use this loop:
    - `wait`: wait for the returned interval and query that same operation.
    - `blocked`: relay the typed cause and exact recovery. Unknown results remain
      unresolved; never guess success, rewrite state or create a replacement task.
-   - `done`: report its scope. Only `scope=round` means the four-platform round
+   - `done`: report its scope. Only `scope=round` means the confirmed platform queue
      is complete; a setup or command result is not the end of a requested round.
 
 After a delivery batch, report the verified counts and display the complete
@@ -213,13 +213,49 @@ offers the missing step; it does not itself permit a browser action. Preserve an
 replay an identical receipt after a lost response. Never reset the old nonce or
 observation count, cancel delivery, or start a replacement round to unblock it.
 
+New job-search setup records target work geography after account verification,
+before directional resume preparation or platform login. If the user already
+named a country, state/province, city or metro area, include that explicit target
+in `criteria.targeting.locations`; do not ask a duplicate region question.
+Each location has a readable `label`, explicit `market` (`mainland_china` or
+`outside_mainland_china`) and `kind`; use the installed contract for optional
+country/territory code and range fields. Missing targets return a `target_region`
+card, followed by `target_locations` only if still needed. Preserve the exact
+interaction ID, actual answer and continuation. Structured `target_locations`
+answers are arrays of these location objects, not invented browser identifiers.
+
+Target work location is independent of nationality, residence, account/billing
+region and interface language. Country/state/city targets do not require a
+three-level form. Before a new user's first feature, relay the `content_language`
+card and submit their actual choice (`en|zh|ja|ko|fr`) with its exact interaction ID.
+CLI and Workbench share this explicit account preference. Use returned
+`content_locale` for host explanations and generated content. A page switch or
+`--language` hint must never confirm or overwrite it. Later changes belong in
+Job Agent Settings. Existing sessions, paid requests and historical results keep
+their original language; do not regenerate or recharge when page language changes.
+Existing active rounds and pending pre-upgrade cards retain their continuation.
+Mainland
+targets use the existing four-platform queue; outside-mainland targets map to
+LinkedIn. The signed target plan describes routing only and grants no search,
+payment or delivery permission. LinkedIn requires the connected service to
+advertise `linkedin_easy_apply_version=1`. If unavailable, preserve the target
+and task; do not fall back to mainland platforms or host browsing. LinkedIn
+uses native Easy Apply only: the CLI prepares observed form pages, requests
+missing facts and an existing resume, then presents the complete application
+for confirmation. Never infer work authorization, consent or personal statements.
+For location or radius cards, present the actual choices and use the returned
+response command (or an answer file); never round a distance silently. A changed
+form or attachment requires preparation and a fresh full preview. An uncertain
+submission resumes receipt reconciliation without another submit click. Existing active rounds and pre-upgrade setup cards retain their
+original continuation; do not insert a new region card into an unresolved send.
+
 The input shape for a new request is `{"request_id":"...","criteria":{...}}`.
-Criteria can contain explicitly stated `target_roles`, `target_cities`, `salary`
+Criteria can contain explicitly stated `target_roles`, `target_cities`, `targeting`, `salary`
 and `company`. Read the installed contract for supported fields; never add
 arbitrary commands or success receipts. Only `round start` creates a round.
 Installation alone authorizes setup checks, not a paid analysis or new round.
 
-All hosts follow Boss -> Liepin -> Zhilian -> 51Job as complete vertical chains:
+Mainland rounds follow Boss -> Liepin -> Zhilian -> 51Job as complete vertical chains:
 login -> resume-sync confirmation -> credit check -> discover -> signed review ->
 complete preview -> separate platform confirmation -> send -> audit.
 
@@ -293,8 +329,8 @@ original recovery continuation instead of starting a separate setup flow.
 A setup turn ends with a clear user handoff (including the return instruction),
 a concrete recovery blocker, or verified readiness plus the next user choice.
 An install alone does not authorize a new round, paid analysis or delivery.
-Preserve existing rounds and confirmations. All later platform actions retain
-Boss -> Liepin -> Zhilian -> 51Job order and final-list confirmation.
+Preserve existing rounds and confirmations. All later platform actions follow the signed target queue and final-list confirmation.
+Mainland targets retain Boss -> Liepin -> Zhilian -> 51Job; other targets use LinkedIn.
 
 <a id="codex-native-execution-first"></a>
 
@@ -516,7 +552,7 @@ report target count, actual count and any incomplete coverage.
 
 1. Never invent, infer or fabricate an AgentMesh API Key.
 2. Starting a job-search round authorizes discovery and signed review, not final delivery. After each platform's complete delivery preview, stop and obtain the user's final list decision.
-3. Run recruiting platforms as complete vertical chains in this order: Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> delivery preview -> delivery confirmation -> send -> audit` chain and complete its audit before logging in to the next platform.
+3. Follow the signed target queue as complete vertical chains: mainland targets use Boss直聘 -> 猎聘 -> 智联招聘 -> 51Job; outside-mainland targets use LinkedIn. Never pre-login future platforms; complete the current platform's `login -> discover -> review -> delivery preview -> delivery confirmation -> send -> audit` chain and complete its audit before logging in to the next platform.
 4. When CLI output contains `requires_user_action=true`, stop immediately, relay `user_prompt` to the user and wait for their reply.
 5. Never treat `review` or `rejected` as automatically sendable. A `review` job needs an explicit user override; `rejected` remains excluded.
 6. Do not close the dedicated Job Agent Chrome window during a workflow.
@@ -546,7 +582,7 @@ At the start of a round, run:
 jobagent round start
 ```
 
-For a new round, the profile must contain at least one explicitly confirmed target city. If an older profile has none, `round start` first returns an AgentMesh360 `interaction_required` city-input request; relay its fallback text and continue with the exact interaction ID:
+For a new round, confirm target work geography first through the returned region/location card, or carry the user's explicit targets in the workflow input. Mainland rounds require confirmed cities. A preserved legacy setup can still return the original `interaction_required` city-input request; relay its fallback text and continue with the exact interaction ID:
 
 ```bash
 jobagent interaction respond --interaction-id "<id>" \
@@ -577,11 +613,11 @@ state a role, omit `--target-role` and use the CLI interaction. Profiles created
 before target-role policy v2 are intentionally treated as unverified and require
 one explicit role answer; they do not require another paid resume analysis.
 
-Do not collect logins as a separate setup phase. At round start, log in to Boss only. Do not open or request the Liepin login until Boss audit has advanced `workflow.current_platform` to `liepin`; apply the same rule to Zhilian and 51Job.
+Do not collect logins as a separate setup phase. At round start, log in only to `workflow.current_platform` from the signed target queue. Complete its audit before logging in to the next platform; LinkedIn targets never imply mainland platform logins.
 
 New rounds collect 30 unique candidates per platform by default, with an explicit target up to 1000. The signed SearchPlan and credit quote govern the scope and cost; completed Discover currently costs 10 credits. Cloud resume analysis costs 5 credits. The signed cloud response is authoritative for charges and refunds. Failures before paid matching do not charge; interruptions after matching starts preserve the request and its billing state. Retry the same task without a second charge and report a refund only when the cloud confirms it. Registration, API Key creation, and the open-source client are free. Eligible new accounts receive a 3-day welcome pass with 30 shared credits after account verification and the first successful sign-in — no card required, nothing renews automatically. The AgentMesh360 Standard Pass costs CNY 29.99 for 30 days for mainland China users (USD 4 for users outside mainland China) and includes 1,000 shared credits; the Pro Pass costs CNY 69.99 for 30 days for mainland China users (USD 10 for users outside mainland China) and includes 3,000 shared credits. An active pass can receive a CNY 15 add-on with 500 credits (USD 2 for users outside mainland China). Passes do not renew automatically. Previously issued signup-trial credits remain usable until their original expiry.
 
-First-run handoff: after `jobagent init` succeeds and `jobagent doctor env` verifies the account and environment, proactively tell the user three things before any job work: (1) the web workbench `https://agentmesh360.com/workbench/` (also returned as `workbench_url` in the `init` output) — the resume profile, tailored question banks, voice mock interviews with dual-track reports, 8-stage application tracking, offer compare and negotiation practice live there; (2) only if doctor returns insufficient_credits with paid_pass_required=true, the pass page `https://agentmesh360.com/app/?lang=zh-CN#pricing` (Standard CNY 29.99 / 1,000 credits; Pro CNY 69.99 / 3,000 credits; 30 days, no auto-renewal); (3) the recommended first action: build the resume profile — open the workbench profile page and paste the resume, or run `jobagent resume analyze --file <resume>` here (5 credits). Question banks, mock interviews and Discover all build on that profile. When directing the user to the workbench, explicitly ask them to return to this same Agent conversation and say “简历已准备好，请继续”; inspect existing online resumes with `jobagent resume list` before requesting another analysis.
+First-run handoff: after `jobagent init` succeeds and `jobagent doctor env` verifies the account and environment, proactively tell the user three things before any job work: (1) the web workbench `https://agentmesh360.com/workbench/` (also returned as `workbench_url` in the `init` output) — the resume profile, tailored question banks, voice mock interviews with dual-track reports, 8-stage application tracking, offer compare and negotiation practice live there; (2) only if doctor returns insufficient_credits with paid_pass_required=true, the pass page `https://agentmesh360.com/app/?lang=zh-CN#pricing` (Standard CNY 29.99 / 1,000 credits; Pro CNY 69.99 / 3,000 credits; 30 days, no auto-renewal); (3) for a new job-search request, confirm the target work region and locations first through the returned interaction; then inspect existing workbench resumes and follow the returned preparation step. Do not run paid analysis or log in to a recruiting platform before this target choice. Question banks, mock interviews and Discover all build on that profile. When directing the user to the workbench, explicitly ask them to return to this same Agent conversation and say “简历已准备好，请继续”; inspect existing online resumes with `jobagent resume list` before requesting another analysis.
 
 Discover automatically retries bounded transient TLS, connection and gateway failures. Stable codes distinguish `tls_connection_eof`, `network_timeout`, `cloud_gateway_unavailable` and the non-retryable `tls_certificate_verification_failed`. After retries are exhausted, run the exact `next_suggested` command immediately. At start, `request_preserved=true` means the same persisted `request_id` will be used and no charge has occurred. At decision, it means the same `discover_id` and collected candidates will be used and a retry cannot add a duplicate charge. If a verified plan expires before either stage resumes, the CLI requests a freshly signed plan bound to those same IDs and continues without another collection or renewal fee. `search_plan_expired_recovery_pending` is safe to retry through its exact `next_suggested`; `search_plan_expired_recovery_required` stops for support because identity or protocol proof was insufficient. Do not replace this handoff with repeated health checks or user confirmation.
 
@@ -669,8 +705,9 @@ An existing or staged round keeps its original resume binding. A missing local
 profile alone is not a reason to analyze again. Only when the user requests a
 new analysis or confirms that new material is needed, ask for a PDF, DOCX, TXT
 or Markdown resume. A target role is an optional hint only when the user already
-stated it. At least one target city is required; when none was supplied or saved,
-the CLI stops before the paid cloud call and asks for it.
+stated it. New job-search setup first resolves the target-region interaction.
+The existing mainland analysis path requires at least one confirmed city; when
+none was supplied or saved, the CLI stops before the paid cloud call and asks for it.
 
 ```bash
 jobagent resume analyze --file <resume-path> \

@@ -134,6 +134,13 @@ def review_decision(
             raise ValueError(
                 f"{platform} decision is missing signed greetings for: " + ", ".join(missing)
             )
+    if platform == "linkedin" and review["send_candidates"]:
+        from jobagent.application.linkedin_application import prepare
+        prepared = prepare(review, {"platform":platform, "input_path":envelope["source_path"],
+            "promoted_ids":requested_promoted_ids, "confirm_promote":confirm_promote or bool(existing_promoted_ids),
+            "output_path":output_path})
+        if prepared is not None:
+            return prepared
     path = save_review(review, output_path)
     send_command = (
         f"jobagent boss greet send --input {path}"

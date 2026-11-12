@@ -60,7 +60,11 @@ def collection_reader(platform: str):
         # Check again after obtaining the process lock; native commands share
         # the CLI command lock and a durable unfinished ledger blocks takeover.
         assert_collection_available(platform)
-        reader = CollectionReader(platform=platform)
+        if platform == "linkedin":
+            from jobagent.platforms.linkedin.collect import LinkedInCollectionReader
+            reader = LinkedInCollectionReader()
+        else:
+            reader = CollectionReader(platform=platform)
         try:
             active = rounds.ensure_current_round()
             session = {"profile_directory": str(reader.manager.user_data_dir.resolve()),
@@ -83,6 +87,9 @@ def login(platform, args):
     if active.get("platforms", {}).get(platform, {}).get("status") in {"discovered", "reviewed", "awaiting_delivery_confirmation"}:
         return {"ok": True, "request_preserved": True, "workflow": rounds.round_status(),
                 "next_suggested": rounds.round_status()["next_suggested"]}
+    if platform == "linkedin":
+        from jobagent.infra.cloud_client import require_linkedin_capability
+        require_linkedin_capability()
     with collection_reader(platform) as reader:
         result = cli._login(platform, args, driver=reader)
     return {**result, "collection_executor": "cdp_readonly", "delivery_executor": rounds.ensure_current_round().get("delivery_executor", "codex_native")}

@@ -32,6 +32,12 @@ def upload_candidates(plan, jobs, *, final=False):
     discover_id = plan["discover_id"]
     path = _checkpoint_path(discover_id)
     saved = state.load_json(path) or {"discover_id": discover_id, "uploads": {}, "details": {}}
+    scope = {}
+    if plan.get("platform") == "linkedin":
+        from jobagent.application.linkedin_radius import scope_digest
+        scope = {"search_scope_digest": scope_digest(plan)}
+        if saved.get("search_scope_digest") != scope["search_scope_digest"]:
+            saved = {"discover_id": discover_id, "uploads": {}, "details": {}, **scope}
     repaired = saved.get("collection_repair_receipt")
     if repaired is not None:
         if (repaired.get("candidate_digest") != candidate_digest(jobs)
@@ -48,7 +54,7 @@ def upload_candidates(plan, jobs, *, final=False):
         if previous is not None and previous != digest:
             raise ProtocolError("preserved upload prefix changed")
         if previous is None:
-            receipt = request("PUT", discover_id, f"batches/{batch_id}", {"jobs": batch, "digest": digest})
+            receipt = request("PUT", discover_id, f"batches/{batch_id}", {"jobs": batch, "digest": digest, **scope})
             if receipt.get("digest") != digest or receipt.get("batch_id") != batch_id:
                 raise ProtocolError("upload acknowledgement mismatch")
             saved["uploads"][batch_id] = digest
@@ -148,8 +154,10 @@ def _enrich(platform, plan, jobs):
 def complete_decision(platform, plan, jobs, *, timeout_seconds=900, poll_seconds=2):
     discover_id = plan["discover_id"]
     ids = upload_candidates(plan, jobs, final=True)
+    from jobagent.application.linkedin_radius import scope_digest
     status = request("POST", discover_id, "finalize", {
         "batch_ids": ids, "candidate_digest": candidate_digest(jobs), "candidate_count": len(jobs),
+        **({"search_scope_digest": scope_digest(plan)} if platform == "linkedin" else {}),
         "client_version": __version__, "protocol_version": PROTOCOL_VERSION})
     deadline = time.monotonic() + timeout_seconds
     previous = None

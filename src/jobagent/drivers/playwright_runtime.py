@@ -178,6 +178,9 @@ class PlaywrightRuntime:
                 "observation": "JobAgent observed the dedicated Chrome page through its built-in Playwright runtime."}
 
     def adapter(self, work):
+        if work["binding"]["platform"] == "linkedin":
+            from jobagent.platforms.linkedin.playwright_delivery import LinkedInDelivery
+            return LinkedInDelivery(self)
         if work["binding"]["platform"] == "boss":
             from jobagent.platforms.boss.playwright_delivery import BossDelivery
             return BossDelivery(self)

@@ -98,7 +98,14 @@ def test_existing_temporary_dependency_is_repaired_before_it_disappears(tmp_path
     install_dir.mkdir()
     subprocess.run([str(entry), '-m', 'venv', str(install_dir / '.venv')],
                    check=True, capture_output=True, timeout=90)
-    assert str(entry_dir) in (install_dir / '.venv/pyvenv.cfg').read_text()
+    # Framework Python resolves the launch symlink when creating a venv.
+    # Model the legacy temporary home explicitly on every supported runtime.
+    config = install_dir / '.venv/pyvenv.cfg'
+    config.write_text('\n'.join(
+        f'home = {entry_dir}' if line.startswith('home = ') else line
+        for line in config.read_text().splitlines()
+    ) + '\n')
+    assert _probe(install_dir / '.venv').returncode == 0
 
     result = installer_runtime.prepare_runtime(install_dir)
     shutil.rmtree(entry_dir)

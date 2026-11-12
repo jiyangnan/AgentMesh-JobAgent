@@ -43,3 +43,19 @@ def pytest_unconfigure() -> None:
     else:
         os.environ["USERPROFILE"] = _ORIGINAL_USERPROFILE
     shutil.rmtree(_TEST_HOME, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def existing_account_content_language(monkeypatch):
+    """Existing business fixtures start after language onboarding.
+
+    Dedicated content-language tests override this with first-use / account-change
+    responses. Never make an extra real network request from unrelated fixtures.
+    """
+    from jobagent.application import targeting
+    from jobagent.infra import cloud_client
+
+    def confirmed(*_):
+        language = targeting.request().get('interaction_language', 'en')
+        return {'content_locale': 'zh' if language == 'zh-CN' else language, 'confirmed': True}
+    monkeypatch.setattr(cloud_client, 'content_language', confirmed)

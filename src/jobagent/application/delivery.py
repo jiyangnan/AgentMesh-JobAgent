@@ -121,6 +121,18 @@ def _load_reviewed(
         ) from exc
     from jobagent.application.workflow_delivery import assert_authorized
     assert_authorized(envelope)
+    if platform == "linkedin":
+        from jobagent.application.linkedin_application import _context
+        active = rounds.ensure_current_round()
+        expected = _context(envelope, active)
+        jobs = (active.get("linkedin_preparation") or {}).get("jobs", {})
+        if active.get("linkedin_recovery") or any(
+            job.get("application", {}).get("context") != expected
+            or jobs.get(job["id"], {}).get("status") != "ready"
+            or job.get("application") != jobs.get(job["id"], {}).get("application")
+            for job in send_candidates
+        ):
+            raise DeliveryPreviewError(preview_required_payload(platform, input_path))
     return envelope
 
 

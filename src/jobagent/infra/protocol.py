@@ -33,6 +33,7 @@ _CANDIDATE_FIELDS = {
     "url",
     "security_id",
     "jd",
+    "linkedin",
 }
 
 
@@ -64,7 +65,8 @@ def digest_payload(payload: Any) -> str:
 def canonical_candidates(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
-            key: value
+            key: ({name: item for name, item in value.items() if item is not None}
+                  if key == "linkedin" and isinstance(value, dict) else value)
             for key, value in job.items()
             if key in _CANDIDATE_FIELDS and value is not None
         }
@@ -150,6 +152,38 @@ def _validate_search_queries(value: Any, *, page_ceiling: int = 5) -> None:
             raise ProtocolError("search plan page limit is invalid")
 
 
+def _validate_linkedin_queries(queries: Any, intent: dict | None) -> None:
+    from jobagent.domain.targeting import normalize_targets
+
+    if not isinstance(intent, dict) or intent.get("status") != "confirmed" or not intent.get("targeting"):
+        raise ProtocolError("LinkedIn requires confirmed work locations")
+    try:
+        targets = normalize_targets(intent["targeting"])
+    except ValueError as exc:
+        raise ProtocolError("LinkedIn target locations are invalid") from exc
+    locations = {digest_payload(item): item for item in targets["locations"] if item["market"] == "outside_mainland_china"}
+    roles = intent.get("target_roles") or []
+    if (not locations or not isinstance(roles, list) or not 1 <= len(roles) <= 4
+            or any(not isinstance(role, str) or not role.strip() for role in roles)
+            or len(set(roles)) != len(roles)
+            or not isinstance(queries, list) or not 1 <= len(queries) <= 24):
+        raise ProtocolError("LinkedIn query scope is incomplete")
+    expected = {(role, key) for role in roles for key in locations}
+    seen = set()
+    for query in queries:
+        if not isinstance(query, dict) or set(query) != {"keyword", "location", "target_key", "easy_apply_only", "workplace_types", "page_limit"}:
+            raise ProtocolError("LinkedIn query shape is invalid")
+        pair = (query.get("keyword"), query.get("target_key"))
+        if (not all(isinstance(value, str) for value in pair) or pair not in expected or pair in seen
+                or query["location"] != locations[pair[1]] or query["easy_apply_only"] is not True
+                or query["workplace_types"] != targets["workplace_types"]
+                or type(query["page_limit"]) is not int or not 1 <= query["page_limit"] <= 200):
+            raise ProtocolError("LinkedIn query does not match the confirmed target scope")
+        seen.add(pair)
+    if seen != expected:
+        raise ProtocolError("LinkedIn plan omitted a confirmed target")
+
+
 def verify_search_plan(
     plan: dict[str, Any],
     *,
@@ -206,7 +240,23 @@ def verify_search_plan(
         raise ProtocolError("search plan request binding is missing")
     if request_id is not None and signed_request_id not in {None, request_id}:
         raise ProtocolError("search plan request binding mismatch")
-    _validate_search_queries(signed.get("queries"), page_ceiling=200 if bulk else 5)
+    if platform == "linkedin":
+        if not bulk:
+            raise ProtocolError("LinkedIn requires full-description discovery")
+        _validate_linkedin_queries(signed.get("queries"), round_intent)
+        resolutions = signed.get("radius_resolutions", {})
+        targets = {q["target_key"]: q["location"] for q in signed["queries"]}
+        if not isinstance(resolutions, dict) or set(resolutions) - targets.keys():
+            raise ProtocolError("Invalid LinkedIn radius targets")
+        for key, resolution in resolutions.items():
+            import math
+            if (targets[key].get("radius_km") is None or not isinstance(resolution, dict)
+                    or set(resolution) != {"radius_km", "native_range", "native_value"}
+                    or type(resolution["radius_km"]) not in {int, float}
+                    or not math.isfinite(resolution["radius_km"]) or not 0 <= resolution["radius_km"] <= 500):
+                raise ProtocolError("Invalid LinkedIn radius resolution")
+    else:
+        _validate_search_queries(signed.get("queries"), page_ceiling=200 if bulk else 5)
     if _is_expired(str(signed.get("expires_at", ""))):
         raise SearchPlanExpiredError(signed)
     return signed

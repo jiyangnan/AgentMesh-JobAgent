@@ -596,10 +596,17 @@ def build_zhilian_keyword_search_script(
           const searchRoute = segments[0] === 'sou';
           const hasCityToken = segments.some((segment) => /^jl\\d+$/i.test(segment));
           const hasOpaqueKeywordToken = segments.some((segment) => /^kw[0-9A-V]+$/i.test(segment));
+          const queryRoute = segments.length === 1 && segments[0] === 'jobs';
+          const cities = target.searchParams.getAll('jl');
+          const keywords = target.searchParams.getAll('kw');
+          const readableQueryReady = queryRoute && cities.length === 1
+            && /^\\d+$/.test(cities[0]) && keywords.length === 1
+            && !!clean(keywords[0]) && clean(keywords[0]) === clean(keyword);
           return {{
-            ready: officialHost && searchRoute && hasCityToken && hasOpaqueKeywordToken,
-            kind: !officialHost || !searchRoute
+            ready: officialHost && ((searchRoute && hasCityToken && hasOpaqueKeywordToken) || readableQueryReady),
+            kind: !officialHost || !(searchRoute || queryRoute)
               ? 'not_official_search'
+              : queryRoute ? (readableQueryReady ? 'official_search_with_readable_keyword' : 'official_search_without_keyword')
               : (hasOpaqueKeywordToken
                   ? 'official_search_with_opaque_keyword'
                   : 'official_search_without_keyword'),
@@ -825,10 +832,17 @@ def build_zhilian_search_control_activation_script(
           const searchRoute = segments[0] === 'sou';
           const hasCityToken = segments.some((segment) => /^jl\\d+$/i.test(segment));
           const hasOpaqueKeywordToken = segments.some((segment) => /^kw[0-9A-V]+$/i.test(segment));
+          const queryRoute = segments.length === 1 && segments[0] === 'jobs';
+          const cities = target.searchParams.getAll('jl');
+          const keywords = target.searchParams.getAll('kw');
+          const readableQueryReady = queryRoute && cities.length === 1
+            && /^\\d+$/.test(cities[0]) && keywords.length === 1
+            && !!clean(keywords[0]) && clean(keywords[0]) === clean(expectedKeyword);
           return {{
-            ready: officialHost && searchRoute && hasCityToken && hasOpaqueKeywordToken,
-            kind: !officialHost || !searchRoute
+            ready: officialHost && ((searchRoute && hasCityToken && hasOpaqueKeywordToken) || readableQueryReady),
+            kind: !officialHost || !(searchRoute || queryRoute)
               ? 'not_official_search'
+              : queryRoute ? (readableQueryReady ? 'official_search_with_readable_keyword' : 'official_search_without_keyword')
               : (hasOpaqueKeywordToken
                   ? 'official_search_with_opaque_keyword'
                   : 'official_search_without_keyword'),
@@ -1065,10 +1079,17 @@ def build_zhilian_search_transition_script(keyword: str, city: str = "") -> str:
           const searchRoute = segments[0] === 'sou';
           const hasCityToken = segments.some((segment) => /^jl\\d+$/i.test(segment));
           const hasOpaqueKeywordToken = segments.some((segment) => /^kw[0-9A-V]+$/i.test(segment));
+          const queryRoute = segments.length === 1 && segments[0] === 'jobs';
+          const cities = target.searchParams.getAll('jl');
+          const keywords = target.searchParams.getAll('kw');
+          const readableQueryReady = queryRoute && cities.length === 1
+            && /^\\d+$/.test(cities[0]) && keywords.length === 1
+            && !!clean(keywords[0]) && clean(keywords[0]) === clean(expectedKeyword);
           return {{
-            ready: officialHost && searchRoute && hasCityToken && hasOpaqueKeywordToken,
-            kind: !officialHost || !searchRoute
+            ready: officialHost && ((searchRoute && hasCityToken && hasOpaqueKeywordToken) || readableQueryReady),
+            kind: !officialHost || !(searchRoute || queryRoute)
               ? 'not_official_search'
+              : queryRoute ? (readableQueryReady ? 'official_search_with_readable_keyword' : 'official_search_without_keyword')
               : (hasOpaqueKeywordToken
                   ? 'official_search_with_opaque_keyword'
                   : 'official_search_without_keyword')

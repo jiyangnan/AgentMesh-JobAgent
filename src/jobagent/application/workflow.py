@@ -79,7 +79,9 @@ def _record_result(value, args, result):
     value["last_result"] = result
     value["snapshot"] = _snapshot()
     if args.command == "doctor":
-        value["doctor"] = {"checked": True, "ready": (result.get("workflow") or {}).get("ready", False)}
+        value["doctor"] = {"checked": True, "ready": (result.get("workflow") or {}).get("ready", False),
+                           "setup_healthy": bool(result.get("environment_healthy") and result.get("api_key_valid")
+                                                 and (result.get("local_state") or {}).get("ready"))}
     for operation in value["operations"].values():
         if operation["status"] == "ready":
             operation["status"] = "superseded"
@@ -142,6 +144,16 @@ def _source(value):
     pending = after_cancel()
     if pending:
         return pending
+    starting_new = not active.get("round_id") or value.get("new_round_requested_after") == active.get("round_id")
+    if (starting_new and active.get("status") != "active" and value.get("intent") is not None
+            and (value.get("doctor", {}).get("setup_healthy") or value.get("doctor", {}).get("ready"))):
+        from jobagent.application import targeting
+        target_setup = targeting.ensure()
+        if target_setup:
+            return target_setup
+        continuation = targeting.analysis_continuation()
+        if continuation:
+            return {"ok": True, "request_preserved": True, "next_suggested": continuation}
     pending = load_pending_interaction()
     if pending and pending.get("stage") != "delivery_authorized":
         interaction = {"product_id": "job_agent", **pending["interaction"]}
@@ -205,6 +217,9 @@ def next_action():
                                "recovery_argv": recovery},
                     "next_suggested": shlex.join(recovery)}
     result = with_contract(_source(value))
+    # Target setup can synchronize the existing cloud intent. Keep the new
+    # revision when journaling its next continuation.
+    value = _load()
     action = result["action"]
     if action["type"] == "run":
         argv = action["argv"]
@@ -302,12 +317,18 @@ def submit(path):
         return {**original["result"], "replayed": True}
     cloud = value.get("cloud_workflow") or {}
     payload = {**body, "expected_revision": cloud.get("revision", 0)}
+    from jobagent.domain.targeting import normalize_targets
+    criteria = dict(body["criteria"])
+    criteria["targeting"] = normalize_targets(criteria.get("targeting") or {})
+    payload["criteria"] = criteria
     if cloud:
         payload["session_id"] = cloud["session_id"]
     result = cloud_client.workflow_submit(payload)
     if not result.get("ok"):
         return result
     workflow = result["workflow"]
+    if workflow["criteria"].get("targeting") != criteria["targeting"]:
+        raise ValueError("The server did not preserve the confirmed target geography")
     value.update(intent=workflow["criteria"], cloud_workflow=workflow, last_result=None,
                  revision=value["revision"] + 1)
     if active.get("status") == "completed":
@@ -315,12 +336,18 @@ def submit(path):
     value["intent_request"] = {"request_id": body["request_id"], "body": body, "result": result}
     _save(value)
     remember(roles=value["intent"].get("target_roles"), cities=value["intent"].get("target_cities"))
+    from jobagent.application.targeting import set_targets
+    set_targets(value["intent"].get("targeting") or {})
     return {**result, "next_suggested": "jobagent workflow next"}
 
 
 def dispatch(args):
     if args.workflow_command == "submit":
-        return submit(args.input)
+        result = submit(args.input)
+        if result.get("ok") and getattr(args, "language", None):
+            from jobagent.application import targeting
+            targeting.set_targets(targeting.request().get("targeting") or {}, language=args.language)
+        return result
     if args.workflow_command == "next":
         return next_action()
     if args.workflow_command == "advance":

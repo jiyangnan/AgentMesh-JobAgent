@@ -76,7 +76,7 @@ def profile_compatibility_issues(profile: dict[str, Any]) -> list[str]:
         issues.append("qualitySignals must be an object")
     elif isinstance(quality, dict):
         language = quality.get("language")
-        if language is not None and language not in {"zh", "en", "mixed"}:
+        if language is not None and language not in {"zh", "en", "ja", "ko", "fr", "mixed"}:
             issues.append("qualitySignals.language is not supported")
         structure = quality.get("structureScore")
         if structure is not None and structure not in {"well_structured", "moderate", "poor"}:

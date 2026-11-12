@@ -21,12 +21,12 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr("jobagent.drivers.boss.create_driver", lambda *a, **k: pytest.fail("CDP driver invoked"))
     source = tmp_path / "decision.review.json"
     active = {"schema_version": rounds.ROUND_SCHEMA_VERSION, "round_id": "round-test", "status": "active",
-        "platform_order": list(native.PLATFORMS), "intent": {"target_cities": ["郑州"], "target_roles": ["数据分析师"]},
+        "platform_order": list(rounds.DEFAULT_PLATFORM_ORDER), "intent": {"target_cities": ["郑州"], "target_roles": ["数据分析师"]},
         "browser_executor": "codex_native", "browser_session_id": "native-test",
         "native_session": {"id": "native-test", "account_ref": "account-test", "round_id": "round-test",
             "window_reference": "chrome-window-1", "profile_label": "Test profile", "group_reference": "Job Agent",
-            "accounts": {p: "Synthetic user" for p in native.PLATFORMS}},
-        "platforms": {p: {"status": "pending"} for p in native.PLATFORMS}}
+            "accounts": {p: "Synthetic user" for p in rounds.DEFAULT_PLATFORM_ORDER}},
+        "platforms": {p: {"status": "pending"} for p in rounds.DEFAULT_PLATFORM_ORDER}}
     jobs = []
     reviewed = {"source_path": str(source), "discover_id": "discover-test", "send_candidates": jobs}
     loads = []
@@ -37,8 +37,8 @@ def env(tmp_path, monkeypatch):
         return copy.deepcopy(reviewed)
     monkeypatch.setattr(delivery, "_load_reviewed", load)
     def choose(platform, count=1, session=True):
-        index = native.PLATFORMS.index(platform)
-        for i, p in enumerate(native.PLATFORMS):
+        index = rounds.DEFAULT_PLATFORM_ORDER.index(platform)
+        for i, p in enumerate(rounds.DEFAULT_PLATFORM_ORDER):
             active["platforms"][p]["status"] = "skipped_this_round" if i < index else "reviewed" if i == index else "pending"
         if not session:
             active["native_session"] = None

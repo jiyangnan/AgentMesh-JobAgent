@@ -706,6 +706,11 @@ def run_discover(
                        completed_page_count=len(collection["progress"].get("completed_pages", [])),
                        candidate_count=len(collection["progress"].get("candidates", [])))
     try:
+        if platform == "linkedin":
+            from jobagent.application.linkedin_search import pending as pending_location
+            waiting = pending_location(verified_plan)
+            if waiting is not None:
+                return waiting
         with progress_heartbeat("browser_collection_in_progress", platform=platform):
             with active_command(f"jobagent {platform} discover"):
                 with ExitStack() as stack:
@@ -723,6 +728,12 @@ def run_discover(
                         **({"driver": reader} if reader is not None else {}),
                     )
     except CollectionError as exc:
+        if platform == "linkedin" and exc.code == "linkedin_radius_selection_required":
+            from jobagent.application.linkedin_radius import request as request_radius
+            return request_radius(verified_plan, exc.details)
+        if platform == "linkedin" and exc.code == "linkedin_location_selection_required":
+            from jobagent.application.linkedin_search import request as request_location
+            return request_location(verified_plan, exc.details)
         details = dict(exc.details or {})
         details.update(
             {

@@ -35,9 +35,11 @@ def contract(parser: argparse.ArgumentParser) -> dict:
         "ok": True, "protocol": PROTOCOL, "protocol_version": VERSION,
         "entry_command": "jobagent onboarding", "resume_command": "jobagent workflow next",
         "commands": command_catalog(parser),
-        "setup": ["api_key", "environment_and_account", "resume_preparation",
-                  "resume_selection", "target_cities", "target_roles", "round_created"],
+        "setup": ["api_key", "environment_and_account", "explicit_job_search_intent",
+                  "target_region", "target_locations", "content_language", "resume_preparation",
+                  "resume_selection", "target_roles", "round_created"],
         "platform_order": PLATFORMS,
+        "platform_routing": "New confirmed geography uses the server-signed target plan; platform_order above is the legacy mainland queue, never a default for missing targets.",
         "per_platform": ["login", "resume_sync", "credits_check", "discover", "signed_review", "delivery_preview",
                          "delivery_confirmation", "send", "audit"],
         "action_types": ["run", "ask", "native_work", "handoff", "wait", "blocked", "done"],
@@ -47,12 +49,16 @@ def contract(parser: argparse.ArgumentParser) -> dict:
             "workflow_submit": {"required": ["request_id", "criteria"],
                 "request_id": "8–120 ASCII letters/digits/underscore/hyphen; reuse unchanged after interruption",
                 "criteria": {"target_roles": "0–4 distinct user-stated role names", "target_cities": "0–3 distinct user-confirmed city names",
+                    "targeting": {"version": 1, "scope": ["mainland_china", "outside_mainland_china", "mixed"],
+                        "locations": "0–6 explicit targets: label, market, kind (country/subdivision/city/metro/global/unspecified), optional country_code/subdivision/locality/radius_km",
+                        "workplace_types": ["onsite", "hybrid", "remote"],
+                        "rules": "Use only user-stated work locations, never nationality, residence, language or IP. Preserve explicit targets; an empty object requests a card before resume analysis or platform login."},
                     "salary": {"monthly_min_cny": "nonnegative integer", "monthly_max_cny": "nonnegative integer", "unknown_evidence": ["exclude", "show_for_review"]},
                     "company": {"large_company": "boolean", "employee_min": "nonnegative integer", "employee_max": "nonnegative integer",
                         "fortune_global_500": "boolean", "fortune_year": "integer 2000–2100, required with fortune_global_500", "unknown_evidence": ["exclude", "show_for_review"]}}},
             "round_update": {"required": ["request_id", "patch"], "patch": "criteria fields; omissions preserve current values; clear accepts salary/company; role changes require explicit old-round finish",
                 "revision": "criteria_revision from round status; zero before the first update"},
-            "interaction_answer": {"fields": ["choice", "resume_id", "attachment_id", "target_roles", "target_cities", "exclude_indices"],
+            "interaction_answer": {"fields": ["choice", "resume_id", "attachment_id", "target_roles", "target_cities", "target_locations", "exclude_indices"],
                 "rules": "Only the current interaction's answer fields; no mixed answer-file and answer flags"},
         },
         "rules": {
@@ -106,8 +112,11 @@ def with_contract(payload: Any) -> Any:
             action["response_arguments"] = {
                 "command": ["jobagent", "interaction", "respond", "--interaction-id", interaction.get("interaction_id")],
                 "answer_flag": "--resume-id" if kind == "resume_selection" else (
+                    "--radius-id" if kind == "linkedin_radius" else
+                    "--location-id" if kind == "linkedin_location" else
                     "--attachment-id" if kind == "platform_resume_choice" else
                     "--target-city" if kind == "target_city_input" else
+                    "--target-location" if kind == "target_locations" else
                     "--exclude-index" if kind == "delivery_exclusions" else
                     "--target-role" if kind == "target_role_input" else "--choice"),
                 "source": "explicit_user_answer",

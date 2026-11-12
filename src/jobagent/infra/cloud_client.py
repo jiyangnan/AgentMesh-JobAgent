@@ -339,6 +339,11 @@ def workflow_submit(payload: dict[str, Any]) -> dict[str, Any]:
                     operation="workflow_submit")
 
 
+def target_region_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    return _workflow_request("POST", "/v1/workflow/targets/plan", payload, timeout=20,
+                             operation="target_region_plan")
+
+
 def workflow_status(session_id: str) -> dict[str, Any]:
     from urllib.parse import quote
     return _workflow_request("GET", f"/v1/workflow/sessions/{quote(session_id, safe='')}",
@@ -354,6 +359,11 @@ def round_criteria_update(round_id: str, body: dict) -> dict:
 def workflow_delivery_preview(body: dict) -> dict:
     return _workflow_request("POST", "/v1/workflow/delivery/previews", body, timeout=30,
                     operation="workflow_delivery_preview", max_attempts=3)
+
+
+def linkedin_application_plan(body: dict) -> dict:
+    return _workflow_request("POST", "/v1/workflow/linkedin/application-plan", body, timeout=30,
+                             operation="linkedin_application_plan", max_attempts=3)
 
 
 def workflow_delivery_answer(preview_id: str, choice: str) -> dict:
@@ -561,6 +571,8 @@ def discovery_start(
 ) -> dict[str, Any]:
     from jobagent.infra.protocol import digest_payload
 
+    if platform == "linkedin":
+        require_linkedin_capability()
     body: dict[str, Any] = {
         "platform": platform,
         "profile": profile,
@@ -577,6 +589,8 @@ def discovery_start(
                     recommendation_limit=recommendation_limit)
         if candidate_limit is not None:
             body["candidate_limit"] = candidate_limit
+    if platform == "linkedin":
+        body["linkedin_contract_version"] = 1
     if delivery_executor is not None:
         if discovery_contract_version != 2 or delivery_executor not in {"codex_native", "playwright"}:
             raise ValueError("Delivery executor negotiation requires a supported v2 executor")
@@ -607,7 +621,18 @@ def discovery_start(
     if delivery_executor is not None and plan.get("delivery_executor") != delivery_executor:
         raise CloudError("The server did not retain the requested delivery executor", code="delivery_executor_unavailable",
                          retryable=False, details={"request_preserved": True, "no_charge": True})
+    if platform == "linkedin" and plan.get("linkedin_contract_version") != 1:
+        raise CloudError("LinkedIn search requires the supported server contract", code="linkedin_contract_required",
+                         retryable=False, details={"request_preserved": True, "no_charge": True})
     return plan
+
+
+def require_linkedin_capability():
+    capability = (me().get("server", {}).get("capabilities") or {}).get("linkedin_easy_apply_version")
+    if type(capability) is not int or capability != 1:
+        raise CloudError("LinkedIn is not enabled on the connected service yet", code="linkedin_unavailable",
+                         retryable=False, details={"request_preserved": True, "no_charge": True,
+                         "message": "LinkedIn 尚未在当前服务开放；已保留你的求职地区和任务，请稍后继续。"})
 
 
 def discovery_renew(
@@ -689,3 +714,9 @@ def discovery_greetings_refresh(*, discover_id: str, expected_manifest_id: str, 
         {"client_version": __version__, "protocol_version": PROTOCOL_VERSION,
          "expected_manifest_id": expected_manifest_id, "expected_candidate_digest": expected_candidate_digest},
         timeout=600, max_attempts=3, operation="discovery_greetings_refresh", request_id=discover_id)
+
+
+def content_language(locale: str | None = None) -> dict[str, Any]:
+    return _request("PUT" if locale else "GET", "/v1/content-language",
+        {"content_locale": locale, "expected_locale": None, "confirmed": True} if locale else None,
+        timeout=20, operation="content_language")

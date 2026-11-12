@@ -21,12 +21,14 @@ _PLATFORM_LABELS = {
     "liepin": "猎聘",
     "zhilian": "智联招聘",
     "51job": "51Job / 前程无忧",
+    "linkedin": "LinkedIn",
 }
 _DELIVERY_ACTIONS = {
     "boss": ["personalized_greeting"],
     "liepin": ["resume", "personalized_greeting"],
     "zhilian": ["resume"],
     "51job": ["resume"],
+    "linkedin": ["native_easy_apply"],
 }
 _CRITERIA_LABELS = {"city": "城市", "salary": "薪资", "employee_count": "员工人数",
                     "large_company": "大厂规模", "fortune_global_500": "指定年份世界500强"}
@@ -43,6 +45,15 @@ def _clean(value: Any) -> str:
 
 
 def _preview_item(platform: str, item: dict[str, Any], index: int, *, content_bound: bool = True) -> dict[str, Any]:
+    application = {}
+    if platform == "linkedin":
+        from jobagent.infra.linkedin_application import (
+            application_text,
+            validate_application,
+        )
+        full_application = validate_application(item)
+        application = {"application": full_application, "application_text": application_text(full_application),
+                       "application_digest": item["application_digest"]}
     return {
         "index": index,
         "job_id": _clean(item.get("job_id") or item.get("id") or item.get("jobId")),
@@ -55,6 +66,7 @@ def _preview_item(platform: str, item: dict[str, Any], index: int, *, content_bo
         "reason": _clean(item.get("reason")),
         "risk": _clean(item.get("risk")),
         "delivery_actions": list(_DELIVERY_ACTIONS[platform]),
+        **application,
         **({"greeting": item.get("cloud_greeting") or ""}
            if content_bound and platform in {"boss", "liepin"} else {}),
         **({"criteria_revision": item["criteria_revision"],
@@ -77,7 +89,7 @@ def _preview_id(
                     "job_id": item["job_id"],
                     "url": item["url"],
                     "delivery_actions": item["delivery_actions"],
-                    **({"displayed_content": item} if "greeting" in item else {}),
+                    **({"displayed_content": item} if "greeting" in item or "application" in item else {}),
                     **({"criteria_revision": item["criteria_revision"],
                         "criteria_unknown_fields": item.get("criteria_unknown_fields", [])}
                        if "criteria_revision" in item else {}),
@@ -108,6 +120,9 @@ def _fallback_text(
                 + ("｜筛选信息未知：" + "、".join(_CRITERIA_LABELS.get(key, key) for key in item["criteria_unknown_fields"])
                    if item.get("criteria_unknown_fields") else "")
                 + ("\n   招呼：" + item["greeting"] if item.get("greeting") else "")
+                + ("\n   申请完整预览：\n" + item["application_text"]
+                   + "\n   本次使用你确认的 LinkedIn 已有简历。"
+                   if item.get("application") else "")
             )
             for item in items
         )
@@ -236,7 +251,7 @@ def build_delivery_preview(
         "event": "delivery_preview",
         "protocol": DELIVERY_PREVIEW_PROTOCOL,
         "protocol_version": DELIVERY_PREVIEW_PROTOCOL_VERSION,
-        **({"content_bound": True} if platform in {"boss", "liepin"} else {}),
+        **({"content_bound": True} if platform in {"boss", "liepin", "linkedin"} else {}),
         "preview_id": preview_id,
         "product_id": "job-agent",
         "platform": platform,
@@ -265,6 +280,7 @@ def build_delivery_preview(
             {"field": "area", "label": "地点"},
             {"field": "salary", "label": "薪资"},
             *([{"field": "greeting", "label": "招呼原文"}] if platform in {"boss", "liepin"} else []),
+            *([{"field": "application_text", "label": "完整申请资料与声明"}] if platform == "linkedin" else []),
         ],
         "summary": {
             "selected": selected_count,
