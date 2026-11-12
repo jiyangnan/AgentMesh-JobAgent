@@ -2,10 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
-## [0.6.30] - 2026-11-10
+## [0.6.30] - 2026-11-12
 
 ### Added
 
+- Choose one account content/interview language shared by CLI and Workbench: English, Chinese, Japanese, Korean or French. Page-language changes preserve that preference and existing results.
+- Add French Workbench pages and French content across resume analysis, interview preparation, voice interviews, reports, offer comparison and salary practice.
 - Confirm target work locations before starting a new search. Mainland China targets use the existing four platforms; other targets use LinkedIn Easy Apply when the service enables that capability.
 - Support LinkedIn job collection, existing-resume verification, supported application forms and complete previews in English, Simplified Chinese, Japanese and Korean.
 - Combine missing application facts into resumable questions and require explicit approval of the complete application before submission.
