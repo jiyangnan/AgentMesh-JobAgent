@@ -20,6 +20,13 @@ After connecting your account, choose the **target work location** before resume
 
 Nationality, residence, account billing region and interface language do not select the recruiting platform. Countries, states, cities and metropolitan areas are supported; ambiguous locations or unsupported search distances require your choice.
 
+
+Choose your **content and interview language** once before first use: English,
+Chinese, Japanese, Korean or French. CLI and Workbench share this account
+preference; change it explicitly in Job Agent Settings. The page-language
+switcher changes menus and controls only. Existing interviews, confirmed paid
+requests and saved results keep their original language.
+
 Each platform is isolated from the others. A page change on one platform does not disable the remaining workflows.
 
 ## Product Flow

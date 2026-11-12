@@ -36,7 +36,7 @@ def contract(parser: argparse.ArgumentParser) -> dict:
         "entry_command": "jobagent onboarding", "resume_command": "jobagent workflow next",
         "commands": command_catalog(parser),
         "setup": ["api_key", "environment_and_account", "explicit_job_search_intent",
-                  "target_region", "target_locations", "resume_preparation",
+                  "target_region", "target_locations", "content_language", "resume_preparation",
                   "resume_selection", "target_roles", "round_created"],
         "platform_order": PLATFORMS,
         "platform_routing": "New confirmed geography uses the server-signed target plan; platform_order above is the legacy mainland queue, never a default for missing targets.",

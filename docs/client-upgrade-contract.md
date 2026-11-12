@@ -6,6 +6,13 @@
 
 ## 工作流协议的兼容性
 
+内容语言扩展增加可选 `round_request.content_locale` 和 `content_language` 首次确认卡，
+真实偏好来自服务端 Job Agent 账户存储。页面语言不迁移为内容语言，不以 `--language`
+或地区推断同意。CLI/Workbench 任一入口明确保存后，另一入口只读复用；旧进行中轮次、
+未决操作和已出现的旧设置卡不插入新步骤。保存成功但响应丢失可幂等重试；保留账户、
+Chrome、材料、授权、回执和升级前语言。没有新增本地 schema 或清空/归档操作。
+
+
 目标地区扩展沿用 `pending_round_binding.json.round_request`，增加 `targeting`、
 签名 `target_plan`、交互语言和地区答案回执。新轮次的 `intent.targeting`、
 `target_plan` 与答案回执保存同一份已确认目标，平台顺序取自服务端签名计划。

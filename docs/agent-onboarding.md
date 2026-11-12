@@ -226,8 +226,15 @@ answers are arrays of these location objects, not invented browser identifiers.
 
 Target work location is independent of nationality, residence, account/billing
 region and interface language. Country/state/city targets do not require a
-three-level form. Use `--language en|zh-CN|ja|ko` on workflow submission or round
-setup for an explicit language preference; English is the default. Mainland
+three-level form. Before a new user's first feature, relay the `content_language`
+card and submit their actual choice (`en|zh|ja|ko|fr`) with its exact interaction ID.
+CLI and Workbench share this explicit account preference. Use returned
+`content_locale` for host explanations and generated content. A page switch or
+`--language` hint must never confirm or overwrite it. Later changes belong in
+Job Agent Settings. Existing sessions, paid requests and historical results keep
+their original language; do not regenerate or recharge when page language changes.
+Existing active rounds and pending pre-upgrade cards retain their continuation.
+Mainland
 targets use the existing four-platform queue; outside-mainland targets map to
 LinkedIn. The signed target plan describes routing only and grants no search,
 payment or delivery permission. LinkedIn requires the connected service to

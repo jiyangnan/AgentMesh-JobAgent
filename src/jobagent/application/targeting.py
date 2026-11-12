@@ -20,6 +20,9 @@ from jobagent.infra.interaction_state import clear_pending_interaction, load_pen
 
 STAGES = {"target_region", "target_locations"}
 COPY = {
+    "fr": ("Lieu de travail souhaité", "Où souhaitez-vous travailler cette fois-ci ?", "Chine continentale",
+           "Hors de Chine continentale", "Indiquez le pays, l’État ou la région, la ville ou l’agglomération souhaitée.",
+           "Vous pouvez aussi nommer le lieu directement ou inclure les deux zones.", "Lieux souhaités"),
     "en": ("Target work location", "Where would you like to work this time?", "Mainland China",
            "Outside mainland China", "Choose a country, state/province, city or metro area.",
            "You can also name the location directly, or include both regions.", "Target locations"),
@@ -46,7 +49,7 @@ def set_targets(targets, *, language=None):
     value = request()
     if language is not None:
         if language not in COPY:
-            raise ValueError("Supported interaction languages: en, zh-CN, ja, ko")
+            raise ValueError("Supported interaction languages: en, zh-CN, ja, ko, fr")
         value["interaction_language"] = language
     previous = value.get("targeting") or {}
     if previous != normalized:
@@ -210,6 +213,10 @@ def ensure(*, continuation="jobagent round start"):
     if (waiting and waiting.get("stage") in {"resume_binding", "cities", "choice", "roles"}
             and "targeting" not in value):
         return None
+    from jobagent.application.content_language import ensure as ensure_language
+    language_setup = ensure_language(continuation)
+    if language_setup:
+        return language_setup
     targets = normalize_targets(value.get("targeting") or {})
     if not targets.get("scope") and not targets["locations"]:
         return _ask("target_region", targets, continuation)

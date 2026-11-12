@@ -73,7 +73,7 @@ def _add_target_flags(parser):
     parser.add_argument("--target-location", action="append", default=[],
                         help="Confirmed country, state, city or metro; repeat for multiple targets")
     parser.add_argument("--targeting-file", help="Structured target geography JSON for mixed regions or detailed scopes")
-    parser.add_argument("--language", choices=["en", "zh-CN", "ja", "ko"],
+    parser.add_argument("--language", choices=["en", "zh-CN", "ja", "ko", "fr"],
                         help="User-selected interaction language; independent of job location")
 
 
@@ -89,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         workflow_sub.add_parser(name)
     workflow_submit = workflow_sub.add_parser("submit")
     workflow_submit.add_argument("--input", required=True, help="User intent JSON; never a command or receipt")
-    workflow_submit.add_argument("--language", choices=["en", "zh-CN", "ja", "ko"])
+    workflow_submit.add_argument("--language", choices=["en", "zh-CN", "ja", "ko", "fr"])
     workflow_advance = workflow_sub.add_parser("advance")
     workflow_advance.add_argument("--action-id", required=True)
     workflow_advance.add_argument("--expected-revision", type=int, required=True)
@@ -194,6 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_respond.add_argument(
         "--choice",
         choices=[
+            "en", "zh", "ja", "ko", "fr",
             "accept_suggested",
             "append_roles",
             "replace_roles",
@@ -1054,6 +1055,10 @@ def _interaction_respond(args: argparse.Namespace) -> dict[str, Any]:
         return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current distance card."}
     if getattr(args, "location_id", None) and (not interaction_id.startswith("linkedin-location:") or getattr(args, "choice", None)):
         return {"ok": False, "error": "invalid_interaction_response", "message": "Answer only the current location card."}
+    from jobagent.application.content_language import respond as respond_language
+    language_answer = respond_language(args)
+    if language_answer is not None:
+        return language_answer
     from jobagent.application import targeting
     target_answer = targeting.respond(args)
     if target_answer is not None:
@@ -2391,6 +2396,12 @@ def main() -> None:
             result,
             account_verified=account_verification is not None,
         )
+        if account_verification and not account_verification.get("offline"):
+            from jobagent.application.targeting import request
+            content_locale = request().get("content_locale")
+            if content_locale:
+                result["content_locale"] = content_locale
+                result["host_language_instruction"] = "Use the confirmed content language for user-facing explanations. Page language and job geography do not change it."
         _print(result)
         _schedule_analytics_flush_safely()
         if result.get("ok") is False:

@@ -714,3 +714,9 @@ def discovery_greetings_refresh(*, discover_id: str, expected_manifest_id: str, 
         {"client_version": __version__, "protocol_version": PROTOCOL_VERSION,
          "expected_manifest_id": expected_manifest_id, "expected_candidate_digest": expected_candidate_digest},
         timeout=600, max_attempts=3, operation="discovery_greetings_refresh", request_id=discover_id)
+
+
+def content_language(locale: str | None = None) -> dict[str, Any]:
+    return _request("PUT" if locale else "GET", "/v1/content-language",
+        {"content_locale": locale, "expected_locale": None, "confirmed": True} if locale else None,
+        timeout=20, operation="content_language")
