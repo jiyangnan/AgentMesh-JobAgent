@@ -148,14 +148,15 @@ def test_native_workflow_is_reusable_and_covers_both_supported_ci_hosts():
     assert any("native_package_gate.py --wheel-dir dist" in step.get("run", "") for step in steps)
 
 
-def test_release_cannot_bypass_same_sha_native_gate_and_retains_legacy_gate():
+def test_candidate_requires_same_sha_native_and_legacy_gates_without_release_permission():
     workflow = _workflow("publish-release.yml")
     gate_job = workflow["jobs"]["native-gate"]
     assert gate_job["uses"] == "./.github/workflows/native-client.yml"
-    publish = workflow["jobs"]["publish"]
+    publish = workflow["jobs"]["candidate"]
     assert publish["needs"] == "native-gate"
     scripts = "\n".join(step.get("run", "") for step in publish["steps"])
     assert "liepin_collection_recovery_gate.py" in scripts
     assert "native_package_gate.py --wheel-dir dist" in scripts
-    assert 'gh release view "$TAG"' in scripts
-    assert '--target "$GITHUB_SHA"' in scripts
+    assert workflow["permissions"]["contents"] == "read"
+    assert "gh release create" not in scripts
+    assert any(step.get("uses", "").startswith("actions/upload-artifact@") for step in publish["steps"])

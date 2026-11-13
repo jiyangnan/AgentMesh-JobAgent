@@ -99,7 +99,7 @@ After the installation/account handoff, use this loop:
    - `ask`: display the product's complete card and all delivery-preview rows,
      including unknown filtering evidence and coverage notices. Wait for an
      actual answer, then use the exact interaction ID. An answer JSON file may
-     contain only `choice`, `resume_id`, `attachment_id`, `target_roles`, `target_cities` and/or
+     contain only `choice`, `resume_id`, `attachment_id`, `target_roles`, `target_cities`, `target_locations` and/or
      `exclude_indices`, as allowed by this card. Defaults are recommendations.
      If cards are unavailable in the current surface, relay the exact fallback.
    - `handoff`: explain the returned URL, user task, how to return to this same
@@ -113,7 +113,7 @@ After the installation/account handoff, use this loop:
    - `wait`: wait for the returned interval and query that same operation.
    - `blocked`: relay the typed cause and exact recovery. Unknown results remain
      unresolved; never guess success, rewrite state or create a replacement task.
-   - `done`: report its scope. Only `scope=round` means the four-platform round
+   - `done`: report its scope. Only `scope=round` means the confirmed platform queue
      is complete; a setup or command result is not the end of a requested round.
 
 After a delivery batch, report the verified counts and display the complete
@@ -209,13 +209,35 @@ offers the missing step; it does not itself permit a browser action. Preserve an
 replay an identical receipt after a lost response. Never reset the old nonce or
 observation count, cancel delivery, or start a replacement round to unblock it.
 
+New job-search setup records target work geography after account verification,
+before directional resume preparation or platform login. If the user already
+named a country, state/province, city or metro area, include that explicit target
+in `criteria.targeting.locations`; do not ask a duplicate region question.
+Each location has a readable `label`, explicit `market` (`mainland_china` or
+`outside_mainland_china`) and `kind`; use the installed contract for optional
+country/territory code and range fields. Missing targets return a `target_region`
+card, followed by `target_locations` only if still needed. Preserve the exact
+interaction ID, actual answer and continuation. Structured `target_locations`
+answers are arrays of these location objects, not invented browser identifiers.
+
+Target work location is independent of nationality, residence, account/billing
+region and interface language. Country/state/city targets do not require a
+three-level form. Use `--language en|zh-CN|ja|ko` on workflow submission or round
+setup for an explicit language preference; English is the default. Mainland
+targets use the existing four-platform queue; outside-mainland targets map to
+LinkedIn. The signed target plan describes routing only and grants no search,
+payment or delivery permission. Follow the returned availability result: a
+planned LinkedIn entry is not executable, and must not fall back to Boss or
+host browsing. Existing active rounds and pre-upgrade setup cards retain their
+original continuation; do not insert a new region card into an unresolved send.
+
 The input shape for a new request is `{"request_id":"...","criteria":{...}}`.
-Criteria can contain explicitly stated `target_roles`, `target_cities`, `salary`
+Criteria can contain explicitly stated `target_roles`, `target_cities`, `targeting`, `salary`
 and `company`. Read the installed contract for supported fields; never add
 arbitrary commands or success receipts. Only `round start` creates a round.
 Installation alone authorizes setup checks, not a paid analysis or new round.
 
-All hosts follow Boss -> Liepin -> Zhilian -> 51Job as complete vertical chains:
+Mainland rounds follow Boss -> Liepin -> Zhilian -> 51Job as complete vertical chains:
 login -> resume-sync confirmation -> credit check -> discover -> signed review ->
 complete preview -> separate platform confirmation -> send -> audit.
 
