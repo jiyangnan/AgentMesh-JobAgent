@@ -29,6 +29,16 @@ requests and saved results keep their original language.
 
 Each platform is isolated from the others. A page change on one platform does not disable the remaining workflows.
 
+## LinkedIn account notice
+
+LinkedIn prohibits third-party software that automates activity on its website.
+Using these tools can result in account restrictions or closure. Job Agent is
+not endorsed by LinkedIn and cannot guarantee that an account will remain
+unrestricted. Review [LinkedIn's software and automation rules](https://www.linkedin.com/help/linkedin/answer/a1341387/prohibited-software-and-extensions?lang=en)
+before use. If LinkedIn requests verification or restricts access, stop the
+current task and use LinkedIn's official recovery process; do not retry to get
+around the restriction.
+
 ## Product Flow
 
 Hosts enter the standard loop with `jobagent workflow contract` and

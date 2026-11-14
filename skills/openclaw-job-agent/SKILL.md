@@ -19,6 +19,18 @@ metadata:
 
 Drive the official Job Agent CLI while keeping the user in control of credentials, login and review overrides.
 
+## LinkedIn account notice
+
+Before the user's first LinkedIn task, tell them in their chosen language:
+“LinkedIn prohibits third-party automation. Using Job Agent on LinkedIn can
+result in account restrictions or closure; Job Agent cannot guarantee that
+your account will remain unrestricted.” Include the
+[official LinkedIn rules](https://www.linkedin.com/help/linkedin/answer/a1341387/prohibited-software-and-extensions?lang=en).
+Do not turn the notice into a claim of platform permission. On verification or
+restricted access, stop and preserve the task; follow the official recovery
+process without retries or attempts to get around the restriction. Existing
+application preview and explicit submission confirmation remain required.
+
 ## Host-independent workflow contract
 
 New and explicitly migrated rounds use Job Agent's built-in Playwright-compatible
