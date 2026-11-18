@@ -162,6 +162,11 @@ def _request(
         "X-JobAgent-Client-Version": __version__,
         "X-JobAgent-Protocol-Version": str(PROTOCOL_VERSION),
     }
+    from jobagent.infra.agent_host import agent_host_header
+
+    agent_host = agent_host_header()
+    if agent_host:
+        headers["X-JobAgent-Agent-Host"] = agent_host
     if require_auth:
         key = api_key or load_api_key()
         if not key:
