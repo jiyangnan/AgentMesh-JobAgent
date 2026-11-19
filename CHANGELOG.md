@@ -6,7 +6,7 @@ All notable public Job Agent client changes are documented here.
 
 ### Added
 
-- Authenticated requests carry a coarse agent-tool label (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, OpenCode, an interactive terminal, or another agent/script) detected only from well-known environment markers, so the account's operator view can show which client is in use. No other environment data is read or sent; `JOBAGENT_ANALYTICS_DISABLED=1` or `DO_NOT_TRACK=1` suppresses the label.
+- Authenticated requests carry a coarse agent-tool label (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, OpenCode, an interactive terminal, or another agent/script) detected only from well-known environment markers (when none is present, only whether the CLI runs in an interactive terminal decides between `terminal` and `other_agent`), so the account's operator view can show which client is in use. No other environment data is read or sent; `JOBAGENT_ANALYTICS_DISABLED=1` or `DO_NOT_TRACK=1` suppresses the label.
 
 ## [0.6.31] - 2026-11-12
 
