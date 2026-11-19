@@ -162,11 +162,6 @@ def _request(
         "X-JobAgent-Client-Version": __version__,
         "X-JobAgent-Protocol-Version": str(PROTOCOL_VERSION),
     }
-    from jobagent.infra.agent_host import agent_host_header
-
-    agent_host = agent_host_header()
-    if agent_host:
-        headers["X-JobAgent-Agent-Host"] = agent_host
     if require_auth:
         key = api_key or load_api_key()
         if not key:
@@ -174,6 +169,12 @@ def _request(
                 "AgentMesh API Key is required. Run `jobagent init --key <your_api_key>`."
             )
         headers["Authorization"] = f"Bearer {key}"
+        # The agent-tool label accompanies authenticated requests only.
+        from jobagent.infra.agent_host import agent_host_header
+
+        agent_host = agent_host_header()
+        if agent_host:
+            headers["X-JobAgent-Agent-Host"] = agent_host
     encoded_body = (
         json.dumps(body, ensure_ascii=False).encode("utf-8")
         if body is not None

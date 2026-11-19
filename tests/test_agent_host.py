@@ -56,6 +56,11 @@ def test_cloud_requests_carry_the_agent_host_header(monkeypatch):
     for name in ("DO_NOT_TRACK", "JOBAGENT_ANALYTICS_DISABLED", "JOBAGENT_ANALYTICS_KILL_SWITCH",
                  "JOBAGENT_AGENT_HOST"):
         monkeypatch.delenv(name, raising=False)
-    cloud_client._request("GET", "/v1/health", require_auth=False)
+    cloud_client._request("GET", "/v1/me", require_auth=True, api_key="ja_test_key")
     assert seen["x-jobagent-agent-host"] == "claude_code"
+    assert seen["x-jobagent-client-version"]
+    # Unauthenticated requests (health checks before setup) never carry the label.
+    seen.clear()
+    cloud_client._request("GET", "/v1/health", require_auth=False)
+    assert "x-jobagent-agent-host" not in seen
     assert seen["x-jobagent-client-version"]
