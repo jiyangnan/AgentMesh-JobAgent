@@ -1,7 +1,7 @@
 ---
 name: job-agent
 description: Use AgentMesh Job Agent for resume-driven job discovery, signed review, user-confirmed delivery and audit on mainland platforms (Boss直聘, 猎聘, 智联招聘 and 51Job) or LinkedIn Easy Apply for jobs outside mainland China.
-version: 0.6.31
+version: 0.6.32
 metadata:
   openclaw:
     emoji: "💼"
