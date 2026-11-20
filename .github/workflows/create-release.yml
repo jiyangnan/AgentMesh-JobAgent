@@ -1,0 +1,66 @@
+# Creates the immutable public tag and GitHub Release for an already validated candidate.
+# Manual dispatch only. It refuses unless: the commit is on main, its versions match the tag,
+# the tag does not exist yet, and "Validate versioned release candidate" succeeded on that
+# exact commit. It never moves, overwrites or deletes a tag or Release.
+name: Create release from validated candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Exact 40-character main commit that passed candidate validation"
+        required: true
+      tag:
+        description: "Release tag, e.g. v0.6.32"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-versioned-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      COMMIT: ${{ inputs.commit }}
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be 40 hex"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad tag"; exit 1; }
+          git merge-base --is-ancestor "$COMMIT" origin/main || { echo "::error::commit not on main"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag already exists; never retag"; exit 1
+          fi
+          version="${TAG#v}"
+          git show "$COMMIT:pyproject.toml" | grep -qx "version = \"$version\"" || { echo "::error::pyproject version differs"; exit 1; }
+          git show "$COMMIT:src/jobagent/__init__.py" | grep -q "__version__ = \"$version\"" || { echo "::error::package version differs"; exit 1; }
+          ok="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-release.yml/runs?head_sha=$COMMIT&per_page=20" \
+            --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')"
+          [ "$ok" -ge 1 ] || { echo "::error::no successful candidate validation on this commit"; exit 1; }
+          git show "$COMMIT:CHANGELOG.md" | awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" {p=1} p && /^## \[/ && $0 !~ "^## \\[" v "\\]" {exit} p {print}' > notes.md
+          test -s notes.md || { echo "::error::CHANGELOG section missing"; exit 1; }
+          cat notes.md
+
+      - name: Create the tag and Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$COMMIT" \
+            --title "Job Agent $TAG" --notes-file notes.md
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)" = "$COMMIT"
+          echo "Released $TAG at $COMMIT"
