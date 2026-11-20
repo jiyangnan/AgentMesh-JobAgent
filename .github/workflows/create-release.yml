@@ -46,13 +46,16 @@ jobs:
             echo "::error::tag already exists; never retag"; exit 1
           fi
           version="${TAG#v}"
-          git show "$COMMIT:pyproject.toml" | grep -qx "version = \"$version\"" || { echo "::error::pyproject version differs"; exit 1; }
-          git show "$COMMIT:src/jobagent/__init__.py" | grep -q "__version__ = \"$version\"" || { echo "::error::package version differs"; exit 1; }
+          pyproject="$(git show "$COMMIT:pyproject.toml")"
+          package="$(git show "$COMMIT:src/jobagent/__init__.py")"
+          grep -qx "version = \"$version\"" <<<"$pyproject" || { echo "::error::pyproject version differs"; exit 1; }
+          grep -q "__version__ = \"$version\"" <<<"$package" || { echo "::error::package version differs"; exit 1; }
           ok="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-release.yml/runs?head_sha=$COMMIT&per_page=20" \
             --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')"
           [ "$ok" -ge 1 ] || { echo "::error::no successful candidate validation on this commit"; exit 1; }
-          git show "$COMMIT:CHANGELOG.md" | awk -v v="$version" '
-            $0 ~ "^## \\[" v "\\]" {p=1} p && /^## \[/ && $0 !~ "^## \\[" v "\\]" {exit} p {print}' > notes.md
+          changelog="$(git show "$COMMIT:CHANGELOG.md")"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" {p=1} p && /^## \[/ && $0 !~ "^## \\[" v "\\]" {exit} p {print}' <<<"$changelog" > notes.md
           test -s notes.md || { echo "::error::CHANGELOG section missing"; exit 1; }
           cat notes.md
 
