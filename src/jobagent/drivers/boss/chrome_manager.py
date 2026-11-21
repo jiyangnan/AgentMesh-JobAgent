@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import os
 import socket
 import subprocess
@@ -57,6 +58,13 @@ def is_chrome_available() -> bool:
 
 # ── CDP port utilities ────────────────────────────────────
 
+# Chromium's PROFILE_IN_USE and PROCESS_NOTIFIED result codes.
+_PROFILE_HANDOFF_EXIT_CODES = (21, 24)
+# A clean launcher exit, DOWNGRADE_AND_RELAUNCH, or NORMAL_EXIT_AUTO_DE_ELEVATED.
+_RELAUNCH_EXIT_CODES = (0, 33, 38)
+_PROFILE_HANDOFF_GRACE_SECONDS = 3
+
+
 def _is_port_open(port: int) -> bool:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -68,45 +76,62 @@ def _is_port_open(port: int) -> bool:
         sock.close()
 
 
-def _wait_for_cdp_port(port: int, max_wait: float = 10.0) -> bool:
-    """Poll until CDP HTTP endpoint responds."""
-    start = time.time()
-    while time.time() - start < max_wait:
-        if _is_port_open(port):
-            # Also verify it's actually a CDP endpoint
-            try:
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-                conn.request("GET", "/json")
-                resp = conn.getresponse()
-                if resp.status == 200:
-                    conn.close()
-                    return True
-                conn.close()
-            except Exception:
-                pass
-        time.sleep(0.5)
-    return False
-
-
-def _get_first_page_ws_url(port: int) -> str | None:
+def _get_first_page_ws_url(port: int, *, timeout: float = 5.0) -> str | None:
     """GET /json and return the first 'page' tab's webSocketDebuggerUrl."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("GET", "/json")
         resp = conn.getresponse()
-        data = resp.read().decode("utf-8")
-        conn.close()
-        import json
-        targets = json.loads(data)
+        if resp.status != 200:
+            return None
+        targets = json.loads(resp.read())
+        if not isinstance(targets, list):
+            return None
         for t in targets:
-            if t.get("type") == "page":
-                return t.get("webSocketDebuggerUrl")
-        return None
-    except Exception:
-        return None
+            if isinstance(t, dict) and t.get("type") == "page":
+                ws_url = t.get("webSocketDebuggerUrl")
+                if isinstance(ws_url, str) and ws_url:
+                    return ws_url
+    except (OSError, http.client.HTTPException, ValueError):
+        pass
+    finally:
+        conn.close()
+    return None
+
+
+def _wait_for_cdp_page(port: int, process: subprocess.Popen, *, max_wait: float) -> str | None:
+    """Wait for a usable page or a failed launch, using a monotonic deadline."""
+    deadline = time.monotonic() + max_wait
+    profile_handoff_observed = False
+    while (remaining := deadline - time.monotonic()) > 0:
+        ws_url = _get_first_page_ws_url(port, timeout=min(remaining, 2.0))
+        if ws_url:
+            return ws_url
+        exit_code = process.poll()
+        if exit_code in _PROFILE_HANDOFF_EXIT_CODES:
+            if not profile_handoff_observed:
+                # An existing Chrome for this profile may still be starting.
+                deadline = min(deadline, time.monotonic() + _PROFILE_HANDOFF_GRACE_SECONDS)
+                profile_handoff_observed = True
+        elif exit_code is not None and exit_code not in _RELAUNCH_EXIT_CODES:
+            break
+        time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+    return None
 
 
 # ── Chrome instance manager ───────────────────────────────
+
+class ChromeStartupError(RuntimeError):
+    def __init__(self, code: str, message: str, *, port: int, exit_code: int | None):
+        super().__init__(message)
+        self.payload = {
+            "ok": False,
+            "error": code,
+            "message": message,
+            "cdp_port": port,
+            "chrome_exit_code": exit_code,
+        }
+
 
 class ChromeInstanceManager:
     """Manages a dedicated Chrome instance for Job Agent.
@@ -119,6 +144,7 @@ class ChromeInstanceManager:
 
     DEFAULT_PORT = 19222
     DEFAULT_WINDOW_SIZE = (1200, 800)
+    STARTUP_TIMEOUT_SECONDS = 30
 
     def __init__(
         self,
@@ -213,18 +239,27 @@ class ChromeInstanceManager:
         except Exception as e:
             raise RuntimeError(f"启动 Chrome 失败: {e}")
 
-        # Wait for CDP port
-        if not _wait_for_cdp_port(self.port, max_wait=15.0):
-            self.stop()
-            raise RuntimeError("Chrome 启动超时，请重试")
+        ws_url = _wait_for_cdp_page(self.port, self._process, max_wait=self.STARTUP_TIMEOUT_SECONDS)
+        if ws_url:
+            if self._process.poll() is not None:
+                self._process = None
+            return ws_url
 
-        # Get WebSocket URL
-        ws_url = _get_first_page_ws_url(self.port)
-        if not ws_url:
-            self.stop()
-            raise RuntimeError("无法获取 Chrome CDP 连接")
-
-        return ws_url
+        exit_code = self._process.poll()
+        self.stop()
+        if exit_code in _PROFILE_HANDOFF_EXIT_CODES:
+            code = "chrome_profile_in_use"
+            message = (
+                "Chrome 无法使用 Job Agent 的专用资料目录。"
+                "如果该专用 Chrome 已打开，请正常退出这个实例后重试。请保留现有资料目录。"
+            )
+        elif exit_code is not None:
+            code = "chrome_exited_before_cdp"
+            message = f"Chrome 在本地调试页面就绪前已退出（退出码 {exit_code}）。"
+        else:
+            code = "chrome_cdp_startup_timeout"
+            message = f"Chrome 在 {self.STARTUP_TIMEOUT_SECONDS} 秒内未提供可连接的本地调试页面。"
+        raise ChromeStartupError(code, message, port=self.port, exit_code=exit_code)
 
     def stop(self) -> None:
         """Terminate the Chrome process."""
@@ -241,7 +276,7 @@ class ChromeInstanceManager:
 
     def is_running(self) -> bool:
         """Check if our Chrome instance is still alive."""
-        if self._process is None:
-            # Might have been started externally or before our process tracking
-            return _is_port_open(self.port)
-        return self._process.poll() is None
+        if self._process is not None and self._process.poll() is None:
+            return True
+        # The browser may have been started externally or by a launcher.
+        return _is_port_open(self.port)
