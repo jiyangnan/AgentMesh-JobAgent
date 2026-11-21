@@ -5,7 +5,7 @@ import socket
 import subprocess
 from pathlib import Path
 import pytest
-from jobagent.drivers.boss.chrome_manager import find_chrome, _wait_for_cdp_port
+from jobagent.drivers.boss.chrome_manager import find_chrome, _wait_for_cdp_page
 from jobagent.drivers.playwright_runtime import PlaywrightRuntime
 from jobagent.infra.browser_work import BrowserWorkError
 
@@ -64,7 +64,7 @@ def chrome(tmp_path):
         process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, env=browser_env)
     try:
         # A cold Chrome process can take more than 10 seconds under CI load.
-        assert _wait_for_cdp_port(port, max_wait=30.0), (
+        assert _wait_for_cdp_page(port, process, max_wait=30.0), (
             f"Isolated Chrome did not open CDP: executable={executable!r}, exit={process.poll()}; "
             + log.read_text(encoding="utf-8", errors="replace")[-8000:]
         )

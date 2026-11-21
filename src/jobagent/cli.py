@@ -2411,6 +2411,7 @@ def main() -> None:
         _print({"ok": False, "error": "interrupted"}, stream=sys.stderr)
         raise SystemExit(130) from None
     except Exception as exc:
+        from jobagent.drivers.boss.chrome_manager import ChromeStartupError
         from jobagent.infra.cloud_client import CloudError
         from jobagent.infra.account_state import AccountStateError
         from jobagent.infra.client_upgrade import UpgradeCompatibilityError
@@ -2430,7 +2431,7 @@ def main() -> None:
             UserInterventionRequired = ()  # type: ignore[assignment,misc]
             DeliveryPreviewError = ()  # type: ignore[assignment,misc]
             DeliveryAuthorizationError = ()  # type: ignore[assignment,misc]
-        if isinstance(exc, BrowserWorkError):
+        if isinstance(exc, (BrowserWorkError, ChromeStartupError)):
             payload = exc.payload
         elif isinstance(exc, AccountStateError):
             payload = exc.payload

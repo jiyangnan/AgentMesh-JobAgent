@@ -2,6 +2,12 @@
 
 All notable public Job Agent client changes are documented here.
 
+## [0.6.33] - 2026-11-22
+
+### Fixed
+
+- BOSS login now waits up to 30 seconds for the dedicated Chrome window to become ready. If another Chrome instance is using the Job Agent profile, the CLI explains how to close that instance and retry with the same saved login. If Chrome exits during startup, the CLI reports its exit code.
+
 ## [0.6.32] - 2026-11-19
 
 ### Added
